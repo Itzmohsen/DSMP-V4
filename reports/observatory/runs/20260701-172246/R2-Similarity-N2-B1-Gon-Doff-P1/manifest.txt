@@ -1,0 +1,12 @@
+run=R2-Similarity-N2-B1-Gon-Doff-P1
+status=COMPLETE
+message=Run archived successfully.
+algorithm=Similarity
+nodes=2
+batchUsers=1
+policy=DSMP default
+graphEnabled=true
+simulateTweetDelay=false
+elapsedMs=1800
+dataset=Retail50K.txt
+datasetPath=/Users/mohsen11/Downloads/Retail50K.txt

@@ -1,0 +1,81 @@
+618 at 2026-07-01T17:23:54.761964
+[StageTimer] STARTER setup DF discovery and agent list collection: 5 ms
+Starter Agent using controller-provided user-agent roster: 618 of 618 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 5 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 8 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+RobertBlake to Reducer3: 331 ms
+RobertBlake to Reducer2: 331 ms
+RobertBlake to Reducer8: 331 ms
+RobertBlake to Reducer1: 331 ms
+RobertBlake to Reducer5: 331 ms
+RobertBlake to Reducer7: 331 ms
+RobertBlake to Reducer6: 331 ms
+RobertBlake to Reducer4: 331 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 334 ms
+Recommender-ServiceAgent3completionTimeTextProcessing: 253 ms
+Recommender-ServiceAgent6completionTimeTextProcessing: 250 ms
+Recommender-ServiceAgent8completionTimeTextProcessing: 255 ms
+Recommender-ServiceAgent3After processing, tweets: 11889
+Recommender-ServiceAgent1completionTimeTextProcessing: 229 ms
+Recommender-ServiceAgent7completionTimeTextProcessing: 243 ms
+Recommender-ServiceAgent2completionTimeTextProcessing: 252 ms
+Recommender-ServiceAgent6After processing, tweets: 10369
+RecomRecommender-ServiceAgent5completionTimeTextProcessing: 242 ms
+Recommender-ServiceAgent4After processing, tweeRecommender-ServiceAgent8After processing, tweets: 11742
+ts: 1Recommender-ServiceAgent2After processing, tweets: 11258
+1170
+mender-ServiceAgent4completionTimeTextProcessing: 257 ms
+Recommender-ServiceAgent7After processing, tweets: 10792
+Recommender-ServiceAgent5After processing, tweets: 10740
+Recommender-ServiceAgent1After processing, tweets: 10607
+Message Passing: 336 ms
+Message Passing: 336 ms
+Message Passing: 336 ms
+Message Passing: 336 ms
+Message Passing: 336 ms
+Message Passing: 336 ms
+Message Passing: 335 ms
+Message Passing: 337 ms
+MAX Message Passing: 337 ms
+Messages Cost: 1497208 bytes
+Messages Cost: 1553588 bytes
+Messages Cost: 1624720 bytes
+Messages Cost: 1532644 bytes
+Messages Cost: 1489640 bytes
+Messages Cost: 1450208 bytes
+Messages Cost: 1493276 bytes
+Messages Cost: 1624764 bytes
+TOTAL Messages Cost: 12266048 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 15 ms
+[StageTimer] START Recommend Algorithms broadcast: 1 ms
+Recommender-ServiceAgent4 completionTimeTFIDF: 24 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 24 ms
+Recommender-ServiceAgent4
+Total Tweets Processed: 11744 TP: 257 ms TFIDF: 24 ms CosSim: 0 ms Total: 282 ms
+Recommender-ServiceAgent1
+Total Tweets Processed: 11185 TP: 229 ms TFIDF: 24 ms CosSim: 0 ms Total: 254 ms
+Recommender-ServiceAgent8 completionTimeTFIDF: 26 ms
+Recommender-ServiceAgent2 completionTimeTFIDF: 27 ms
+Recommender-ServiceAgent5 completionTimeTFIDF: 27 ms
+Recommender-ServiceAgent8
+Total Tweets Processed: 12423 TP: 255 ms TFIDF: 26 ms CosSim: 0 ms Total: 282 ms
+Recommender-ServiceAgent7 completionTimeTFIDF: 28 ms
+Recommender-ServiceAgent3 completionTimeTFIDF: 27 ms
+Recommender-ServiceAgent2
+Total Tweets Processed: 11828 TP: 252 ms TFIDF: 27 ms CosSim: 0 ms Total: 280 ms
+Recommender-ServiceAgent6 completionTimeTFIDF: 28 ms
+Recommender-ServiceAgent7
+Total Tweets Processed: 11426 TP: 243 ms TFIDF: 28 ms CosSim: 0 ms Total: 272 ms
+Recommender-ServiceAgent3
+Total Tweets Processed: 12519 TP: 253 ms TFIDF: 27 ms CosSim: 0 ms Total: 280 ms
+Recommender-ServiceAgent5
+Total Tweets Processed: 11305 TP: 242 ms TFIDF: 27 ms CosSim: 0 ms Total: 271 ms
+Recommender-ServiceAgent6
+Total Tweets Processed: 10952 TP: 250 ms TFIDF: 28 ms CosSim: 0 ms Total: 279 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 35 ms
+[StageTimer] WAIT merge completed after algorithm start: 47 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 12 ms
+Merge Message Time: 11 ms
+Merge Message Time: 11805750 ns
+

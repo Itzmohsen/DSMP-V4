@@ -1,0 +1,12 @@
+run=R9-SVM-N1-B1-Goff-Doff-P1
+status=COMPLETE
+message=Run archived successfully.
+algorithm=SVM
+nodes=1
+batchUsers=1
+policy=DSMP default
+graphEnabled=false
+simulateTweetDelay=false
+elapsedMs=4022
+dataset=Retail50K.txt
+datasetPath=/Users/mohsen11/Downloads/Retail50K.txt

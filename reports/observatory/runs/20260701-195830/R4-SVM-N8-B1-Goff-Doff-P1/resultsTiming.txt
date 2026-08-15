@@ -1,0 +1,89 @@
+2 at 2026-07-01T20:11:36.745226
+[StageTimer] STARTER setup DF discovery and agent list collection: 3 ms
+Starter Agent using controller-provided user-agent roster: 2 of 2 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 3 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 0 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+ExtremeAuthorC15M29 to Reducer8: 1162 ms
+ExtremeAuthorC15M29 to Reducer7: 1162 ms
+ExtremeAuthorC15M29 to Reducer2: 1162 ms
+ExtremeAuthorC15M29 to Reducer4: 1162 ms
+ExtremeAuthorC15M29 to Reducer5: 1163 ms
+ExtremeAuthorC15M29 to Reducer6: 1163 ms
+ExtremeAuthorC15M29 to Reducer1: 1163 ms
+ExtremeAuthorC15M29 to Reducer3: 1275 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 227091 ms
+Recommender-ServiceAgent2completionTimeTextProcessing: 28604 ms
+Recommender-ServiceAgent2After processing, tweets: 31232
+Recommender-ServiceAgent7completionTimeTextProcessing: 28808 ms
+Recommender-ServiceAgent7After processing, tweets: 31232
+Recommender-ServiceAgent5completionTimeTextProcessing: 28808 ms
+Recommender-ServiceAgent5After processing, tweets: 31232
+Recommender-ServiceAgent6completionTimeTextProcessing: 28855 ms
+Recommender-ServiceAgent6After processing, tweets: 31232
+Recommender-ServiceAgent8completionTimeTextProcessing: 28762 ms
+Recommender-ServiceAgent8After processing, tweets: 31232
+Recommender-ServiceAgent4completionTimeTextProcessing: 28511 ms
+Recommender-ServiceAgent4After processing, tweets: 31232
+Recommender-ServiceAgent1completionTimeTextProcessing: 28031 ms
+Recommender-ServiceAgent1After processing, tweets: 30720
+Recommender-ServiceAgent3completionTimeTextProcessing: 28476 ms
+Recommender-ServiceAgent3After processing, tweets: 31232
+Message Passing: 227088 ms
+Message Passing: 227088 ms
+Message Passing: 227088 ms
+Message Passing: 227088 ms
+Message Passing: 227088 ms
+Message Passing: 227088 ms
+Message Passing: 227088 ms
+Message Passing: 227088 ms
+MAX Message Passing: 227088 ms
+Messages Cost: 208966344 bytes
+Messages Cost: 212389948 bytes
+Messages Cost: 212389948 bytes
+Messages Cost: 212398492 bytes
+Messages Cost: 212387260 bytes
+Messages Cost: 212387260 bytes
+Messages Cost: 212387260 bytes
+Messages Cost: 212387260 bytes
+TOTAL Messages Cost: 1695693772 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 13 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 19662 ms
+Recommender-ServiceAgent6 completionTimeTFIDF: 20248 ms
+Recommender-ServiceAgent8 completionTimeTFIDF: 20439 ms
+Recommender-ServiceAgent3 completionTimeTFIDF: 20445 ms
+Recommender-ServiceAgent5 completionTimeTFIDF: 20533 ms
+Recommender-ServiceAgent4 completionTimeTFIDF: 20547 ms
+Recommender-ServiceAgent2 completionTimeTFIDF: 20597 ms
+Recommender-ServiceAgent7 completionTimeTFIDF: 20604 ms
+Recommender-ServiceAgent1 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper1- Total Tweets Processed: 30720 TP: 28031 ms TFIDF: 19662 ms Reducer1 SVM: 2674 ms Total: 50368 ms
+Recommender-ServiceAgent6 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper6- Total Tweets Processed: 31232 TP: 28855 ms TFIDF: 20248 ms Reducer6 SVM: 2883 ms Total: 51988 ms
+Recommender-ServiceAgent8 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper8- Total Tweets Processed: 31232 TP: 28762 ms TFIDF: 20439 ms Reducer8 SVM: 2905 ms Total: 52106 ms
+Recommender-ServiceAgent3 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper3- Total Tweets Processed: 31232 TP: 28476 ms TFIDF: 20445 ms Reducer3 SVM: 2969 ms Total: 51892 ms
+Recommender-ServiceAgent4 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper4- Total Tweets Processed: 31232 TP: 28511 ms TFIDF: 20547 ms Reducer4 SVM: 2822 ms Total: 51881 ms
+Recommender-ServiceAgent2 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper2- Total Tweets Processed: 31232 TP: 28604 ms TFIDF: 20597 ms Reducer2 SVM: 2813 ms Total: 52015 ms
+Recommender-ServiceAgent5 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper5- Total Tweets Processed: 31232 TP: 28808 ms TFIDF: 20533 ms Reducer5 SVM: 2870 ms Total: 52213 ms
+Recommender-ServiceAgent7 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper7- Total Tweets Processed: 31232 TP: 28808 ms TFIDF: 20604 ms Reducer7 SVM: 2803 ms Total: 52216 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 24712 ms
+[StageTimer] WAIT merge completed after algorithm start: 24712 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 0 ms
+Merge Message Time: 1314 ms
+Merge Message Time: 1314772500 ns
+

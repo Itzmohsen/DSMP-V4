@@ -1,0 +1,16 @@
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent8	4865	202623642	140119375	640557625	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent5	4865	200566480	140308208	666270750	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent3	4876	203416280	140227000	703182208	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent2	4849	224507993	140228417	669329625	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent7	4869	205201569	114328125	659487250	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent4	4873	199269787	116388000	709296792	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent6	4862	199981399	140241375	629844333	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent1	4823	192846506	134189833	618852042	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent3	4876	202256110	129112584	706021958	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent2	4849	207118707	129024000	723068167	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent6	4862	201643759	135676250	689959208	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent8	4865	195702944	128817625	703873709	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent4	4873	197228389	135755125	663570125	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent5	4865	207695800	135747417	753339833	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent7	4869	206054146	135573292	616614334	
+Scalable Linear SVM=TP+TFIDF+Scalable Linear SVM	Recommender-ServiceAgent1	4823	200926407	123687917	531036500	

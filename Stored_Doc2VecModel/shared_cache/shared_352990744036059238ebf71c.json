@@ -1,0 +1,26 @@
+{
+  "dataset_mtime_ns": 1781311736556529139,
+  "dataset_path": "/Users/mohsen11/Desktop/June 10 session final/test/Dataset/TwitterObtained/GENERATED/Reduced_94k_2026-06-12 20-48-55-047-2a400824_GENERATED.txt",
+  "dataset_size": 113388555,
+  "model_params": {
+    "dbow_words": 1,
+    "dm": 0,
+    "epochs": 20,
+    "hs": 0,
+    "min_count": 4,
+    "negative": 3,
+    "sample": 0.0001,
+    "vector_size": 300,
+    "window": 5
+  },
+  "runtime": {
+    "compatibility_version": 1,
+    "dot_kernel": "direct-float-blas",
+    "fast_version": 1,
+    "gensim_version": "4.4.0",
+    "numpy_version": "1.26.4",
+    "scipy_version": "1.13.1"
+  },
+  "script_version": 3,
+  "workers": 12
+}

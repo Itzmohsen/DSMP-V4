@@ -1,0 +1,73 @@
+480 at 2026-07-01T18:27:57.452455
+[StageTimer] STARTER setup DF discovery and agent list collection: 1 ms
+Starter Agent using controller-provided user-agent roster: 480 of 480 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 1 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 0 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+ExtremeAuthorC15M29 to Reducer1: 24107 ms
+ExtremeAuthorC15M29 to Reducer8: 24206 ms
+ExtremeAuthorC15M29 to Reducer6: 24207 ms
+ExtremeAuthorC15M29 to Reducer2: 24210 ms
+ExtremeAuthorC15M29 to Reducer4: 24231 ms
+ExtremeAuthorC15M29 to Reducer5: 24279 ms
+ExtremeAuthorC15M29 to Reducer3: 24287 ms
+ExtremeAuthorC15M29 to Reducer7: 24294 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 31876 ms
+Recommender-ServiceAgent2completionTimeTextProcessing: 31615 ms
+Recommender-ServiceAgent2After processing, tweets: 31232
+Recommender-ServiceAgent1completionTimeTextProcessing: 31232 ms
+Recommender-ServiceAgent1After processing, tweets: 30720
+Recommender-ServiceAgent7completionTimeTextProcessing: 31737 ms
+Recommender-ServiceAgent5completionTimeTextProcessing: 31711 ms
+Recommender-ServiceAgent8completionTimeTextProcessing: 31663 ms
+Recommender-ServiceAgent5After processing, tweets: 31232
+Recommender-ServiceAgent4completionTimeTextProcessing: 31Recommender-ServiceAgent3completionTimeTextProcessing: 31660 ms
+664 ms
+Recommender-ServiceAgent4After processing, tweets:Recommender-ServiceAgent6completionTimeTextProcessing: 31656 ms
+ 31232
+Recommender-ServiceAgent7After processing, tweets: 31232
+Recommender-ServiceAgent8After processing, tweets: 31232
+Recommender-ServiceAgent3After processing, tweets: 31232
+Recommender-ServiceAgent6After processing, tweets: 31232
+Message Passing: 31860 ms
+Message Passing: 31861 ms
+Message Passing: 31860 ms
+Message Passing: 31860 ms
+Message Passing: 31860 ms
+Message Passing: 31859 ms
+Message Passing: 31860 ms
+Message Passing: 31860 ms
+MAX Message Passing: 31861 ms
+Messages Cost: 208966344 bytes
+Messages Cost: 212389948 bytes
+Messages Cost: 212389948 bytes
+Messages Cost: 212398492 bytes
+Messages Cost: 212387260 bytes
+Messages Cost: 212387260 bytes
+Messages Cost: 212387260 bytes
+Messages Cost: 212387260 bytes
+TOTAL Messages Cost: 1695693772 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 13 ms
+[StageTimer] START Recommend Algorithms broadcast: 1 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 19926 ms
+Recommender-ServiceAgent6 completionTimeTFIDF: 20504 ms
+Recommender-ServiceAgent3 completionTimeTFIDF: 20669 ms
+Recommender-ServiceAgent5 completionTimeTFIDF: 20674 ms
+Recommender-ServiceAgent7 completionTimeTFIDF: 20687 ms
+Recommender-ServiceAgent2 completionTimeTFIDF: 20715 ms
+Recommender-ServiceAgent4 completionTimeTFIDF: 20761 ms
+Recommender-ServiceAgent8 completionTimeTFIDF: 20763 ms
+Mapper1- Total Tweets Processed: 30720 TP: 31232 ms TFIDF: 19926 ms Reducer1 K-means: 324338 ms Total: 375497 ms
+Mapper6- Total Tweets Processed: 31232 TP: 31656 ms TFIDF: 20504 ms Reducer6 K-means: 348397 ms Total: 400559 ms
+Mapper7- Total Tweets Processed: 31232 TP: 31737 ms TFIDF: 20687 ms Reducer7 K-means: 354466 ms Total: 406891 ms
+Mapper4- Total Tweets Processed: 31232 TP: 31664 ms TFIDF: 20761 ms Reducer4 K-means: 354539 ms Total: 406965 ms
+Mapper2- Total Tweets Processed: 31232 TP: 31615 ms TFIDF: 20715 ms Reducer2 K-means: 355219 ms Total: 407550 ms
+Mapper3- Total Tweets Processed: 31232 TP: 31660 ms TFIDF: 20669 ms Reducer3 K-means: 355503 ms Total: 407833 ms
+Mapper8- Total Tweets Processed: 31232 TP: 31663 ms TFIDF: 20763 ms Reducer8 K-means: 355553 ms Total: 407980 ms
+Mapper5- Total Tweets Processed: 31232 TP: 31711 ms TFIDF: 20674 ms Reducer5 K-means: 355699 ms Total: 408085 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 376380 ms
+[StageTimer] WAIT merge completed after algorithm start: 376380 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 0 ms
+Merge Message Time: 32116 ms
+Merge Message Time: 32116699208 ns
+

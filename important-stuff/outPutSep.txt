@@ -1,0 +1,5 @@
+================== Recommendations for Customer13004 ==================
+Recommendation 1: HomeDecor	Score: 100.000
+Recommendation 2: BagsAccessories	Score: 4.42186
+Recommendation 3: KitchenDining	Score: 0.850370
+

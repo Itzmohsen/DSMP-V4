@@ -1,0 +1,4 @@
+CommonNeighbors=TP+TFIDF+CommonNeighbors	Recommender-ServiceAgent4	16855	268377749	19764083	7342625	
+CommonNeighbors=TP+TFIDF+CommonNeighbors	Recommender-ServiceAgent2	17247	275146667	19976417	7511833	
+CommonNeighbors=TP+TFIDF+CommonNeighbors	Recommender-ServiceAgent3	18714	295595124	20054750	7466125	
+CommonNeighbors=TP+TFIDF+CommonNeighbors	Recommender-ServiceAgent1	16954	272195126	19960083	7583500	

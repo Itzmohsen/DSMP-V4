@@ -1,0 +1,12 @@
+run=R1-SVM-N1-B1-Goff-Doff-P1
+status=COMPLETE
+message=Run archived successfully.
+algorithm=SVM
+nodes=1
+batchUsers=1
+policy=DSMP default
+graphEnabled=false
+simulateTweetDelay=false
+elapsedMs=14107
+dataset=Online_Retail_DSMP_FULL.txt
+datasetPath=/Users/mohsen11/Downloads/DSMP_Imported/Online_Retail_DSMP_FULL.txt

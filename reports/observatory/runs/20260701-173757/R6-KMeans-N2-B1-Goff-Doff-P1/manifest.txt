@@ -1,0 +1,12 @@
+run=R6-KMeans-N2-B1-Goff-Doff-P1
+status=COMPLETE
+message=Run archived successfully.
+algorithm=K-Means
+nodes=2
+batchUsers=1
+policy=DSMP default
+graphEnabled=false
+simulateTweetDelay=false
+elapsedMs=2692
+dataset=Retail50K.txt
+datasetPath=/Users/mohsen11/Downloads/Retail50K.txt

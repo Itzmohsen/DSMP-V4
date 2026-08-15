@@ -1,0 +1,12 @@
+run=R20-KMeansEuclidean-N8-B1-Goff-Doff-P1
+status=COMPLETE
+message=Run archived successfully.
+algorithm=K-Means Euclidean
+nodes=8
+batchUsers=1
+policy=DSMP default
+graphEnabled=false
+simulateTweetDelay=false
+elapsedMs=3315
+dataset=Retail50K.txt
+datasetPath=/Users/mohsen11/Downloads/Retail50K.txt

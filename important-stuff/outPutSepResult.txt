@@ -1,0 +1,6 @@
+HomeDecor : HomeDecor
+BagsAccessories : BagsAccessories
+KitchenDining : KitchenDining
+KidsToysGames : KidsToysGames
+PaperStationery : PaperStationery
+

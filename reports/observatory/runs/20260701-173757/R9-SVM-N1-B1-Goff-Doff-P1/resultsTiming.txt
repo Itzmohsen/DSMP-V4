@@ -1,0 +1,24 @@
+2 at 2026-07-01T17:38:21.664201
+[StageTimer] STARTER setup DF discovery and agent list collection: 0 ms
+Starter Agent using controller-provided user-agent roster: 2 of 2 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 0 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 0 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+RobertBlake to Reducer1: 181 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 857 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 786 ms
+Recommender-ServiceAgent1After processing, tweets: 49381
+Message Passing: 856 ms
+MAX Message Passing: 856 ms
+Messages Cost: 6467794 bytes
+TOTAL Messages Cost: 6467794 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 13 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 26 ms
+Recommender-ServiceAgent1 Accuracy of SVM: 40.33%
+---------------------------------
+Mapper1- Total Tweets Processed: 52061 TP: 786 ms TFIDF: 26 ms Reducer1 SVM: 713 ms Total: 1526 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 845 ms
+[StageTimer] WAIT merge completed after algorithm start: 858 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 13 ms
+

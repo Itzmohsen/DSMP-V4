@@ -1,0 +1,39 @@
+DSMP Graph Insights Report
+Generated: 2026-06-20 00:15:25
+Mapping: important-stuff/name-number-Retail50K.txt
+Edges: important-stuff/edges-numbers-Retail50K.txt
+
+Summary
+Mapped nodes: 628
+Active nodes: 0
+Valid edges: 0
+Unique edges: 0
+Duplicate edges: 0
+Malformed edge lines: 0
+Unknown node edges: 0
+Active components: 0
+Largest component: 0
+Estimated communities: 0
+Recommendation edges: 0
+Unique recommended targets: 0
+Recommendation diversity: 0.0%
+Hub concentration: 0.0%
+
+
+Warnings
+- No edge list exists yet for this dataset and recommendation mode.
+- Recommendations will populate this file even when final graph export is unchecked.
+- No valid graph edges are present yet.
+- Most mapped nodes are isolates. This is normal early in a run but weak for community analysis.
+
+Top recommended targets
+- None
+
+Top incoming nodes
+- None
+
+Top graph hubs
+- None
+
+Largest communities
+- None

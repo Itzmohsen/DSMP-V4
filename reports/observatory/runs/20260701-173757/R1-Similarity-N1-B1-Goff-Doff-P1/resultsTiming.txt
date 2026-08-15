@@ -1,0 +1,28 @@
+618 at 2026-07-01T17:37:57.978805
+[StageTimer] STARTER setup DF discovery and agent list collection: 2 ms
+Starter Agent using controller-provided user-agent roster: 618 of 618 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 3 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 12 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+RobertBlake to Reducer1: 1144 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 1139 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 1015 ms
+Recommender-ServiceAgent1After processing, tweets: 49381
+Message Passing: 1122 ms
+MAX Message Passing: 1122 ms
+Messages Cost: 6467794 bytes
+TOTAL Messages Cost: 6467794 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 16 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 25 ms
+Recommender-ServiceAgent1
+Total Tweets Processed: 52061 TP: 1015 ms TFIDF: 25 ms CosSim: 2 ms Total: 1044 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 36 ms
+[StageTimer] WAIT merge completed after algorithm start: 36 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 0 ms
+[StageTimer] START Querying broadcast: 0 ms
+[StageTimer] Persist recommendation choice and graph edges: 8 ms
+[StageTimer] WAIT querying/recommendation completed: 24 ms
+[StageTimer] SIMULATION total before graph visualization: 1244 ms
+[StageTimer] GRAPH visualization/export skipped; accumulated node and edge data retained at 2026-07-01T17:37:59.225614
+

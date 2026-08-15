@@ -1,0 +1,12 @@
+run=R1-SVM-N1-B1-Goff-Doff-P1
+status=COMPLETE
+message=Run archived successfully.
+algorithm=SVM
+nodes=1
+batchUsers=1
+policy=DSMP default
+graphEnabled=false
+simulateTweetDelay=false
+elapsedMs=260173
+dataset=Extreme-15-Minute-Plus-Journal-245k.txt
+datasetPath=/Users/mohsen11/Desktop/June 10 session final/test/Dataset/Benchmarks/Extreme-15-Minute-Plus-Journal-245k.txt

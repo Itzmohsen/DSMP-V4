@@ -1,0 +1,2 @@
+weathernetwork: 100.0	TheCatTweeting: 0.2992405849073039	TorontoStar: 0.0012138309943837947	RyersonU: 2.6021586984602773E-4	
+weathernetwork: 100.0	TheCatTweeting: 66.66666666666666	TorontoStar: 33.33333333333333	RyersonU: 0.0	

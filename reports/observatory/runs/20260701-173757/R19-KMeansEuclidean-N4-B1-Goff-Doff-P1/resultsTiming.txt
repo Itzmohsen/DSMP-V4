@@ -1,0 +1,45 @@
+618 at 2026-07-01T17:38:51.693348
+[StageTimer] STARTER setup DF discovery and agent list collection: 1 ms
+Starter Agent using controller-provided user-agent roster: 618 of 618 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 1 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 6 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+RobertBlake to Reducer1: 355 ms
+RobertBlake to Reducer3: 355 ms
+RobertBlake to Reducer4: 355 ms
+RobertBlake to Reducer2: 355 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 361 ms
+Recommender-ServiceAgent3completionTimeTextProcessing: 336 ms
+Recommender-ServiceAgent3After processing, tweets: 17728
+Recommender-ServiceAgent2completionTimeTextProcessing: 313 ms
+Recommender-ServiceAgent4completionTimeTextProcessing: 309 ms
+Recommender-ServiceAgent2After processing, tweets: 16378
+Recommender-ServiceAgent1completionTimeTextProcessing: 307 ms
+Recommender-ServiceAgent1After processing, tweets: 16092
+Recommender-ServiceAgent4After processing, tweets: 15977
+Message Passing: 366 ms
+Message Passing: 366 ms
+Message Passing: 366 ms
+Message Passing: 366 ms
+MAX Message Passing: 366 ms
+Messages Cost: 2201256 bytes
+Messages Cost: 2211066 bytes
+Messages Cost: 2373946 bytes
+Messages Cost: 2166492 bytes
+TOTAL Messages Cost: 8952760 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 12 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent4 completionTimeTFIDF: 16 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 17 ms
+Recommender-ServiceAgent3 completionTimeTFIDF: 17 ms
+Recommender-ServiceAgent2 completionTimeTFIDF: 17 ms
+Mapper4- Total Tweets Processed: 16855 TP: 309 ms TFIDF: 16 ms Reducer4 K-means Euclidean: 10 ms Total: 336 ms
+Mapper3- Total Tweets Processed: 18714 TP: 336 ms TFIDF: 17 ms Reducer3 K-means Euclidean: 22 ms Total: 377 ms
+Mapper2- Total Tweets Processed: 17247 TP: 313 ms TFIDF: 17 ms Reducer2 K-means Euclidean: 50 ms Total: 381 ms
+Mapper1- Total Tweets Processed: 16954 TP: 307 ms TFIDF: 17 ms Reducer1 K-means Euclidean: 59 ms Total: 384 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 92 ms
+[StageTimer] WAIT merge completed after algorithm start: 92 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 0 ms
+Merge Message Time: 58 ms
+Merge Message Time: 58409834 ns
+

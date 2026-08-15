@@ -1,0 +1,29 @@
+2 at 2026-07-02T00:38:39.983142
+[StageTimer] STARTER setup DF discovery and agent list collection: 4 ms
+Starter Agent using controller-provided user-agent roster: 2 of 2 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 4 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 0 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+ExtremeAuthorC15M29 to Reducer1: 1272 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 217669 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 215636 ms
+Recommender-ServiceAgent1After processing, tweets: 245760
+Message Passing: 217601 ms
+MAX Message Passing: 217601 ms
+Messages Cost: 1671227232 bytes
+TOTAL Messages Cost: 1671227232 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 13 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 19720 ms
+Recommender-ServiceAgent1 Accuracy of SVM: 100.00%
+---------------------------------
+Mapper1- Total Tweets Processed: 245760 TP: 215636 ms TFIDF: 19720 ms Reducer1 SVM: 5141 ms Total: 240499 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 30167 ms
+[StageTimer] WAIT merge completed after algorithm start: 30167 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 0 ms
+[StageTimer] START Querying broadcast: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 15 ms
+[StageTimer] WAIT querying/recommendation completed: 24 ms
+[StageTimer] SIMULATION total before graph visualization: 247877 ms
+[StageTimer] GRAPH visualization/export skipped; accumulated node and edge data retained at 2026-07-02T00:42:47.864034
+

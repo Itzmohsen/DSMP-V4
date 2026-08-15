@@ -1,0 +1,12 @@
+run=R1-Similarity-N1-B1-Goff-Doff-P1
+status=COMPLETE
+message=Run archived successfully.
+algorithm=Similarity
+nodes=1
+batchUsers=1
+policy=DSMP default
+graphEnabled=false
+simulateTweetDelay=false
+elapsedMs=1848
+dataset=Retail50K.txt
+datasetPath=/Users/mohsen11/Downloads/Retail50K.txt

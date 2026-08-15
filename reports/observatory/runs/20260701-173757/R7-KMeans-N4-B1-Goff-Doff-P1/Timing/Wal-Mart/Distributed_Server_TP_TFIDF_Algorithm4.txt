@@ -1,0 +1,4 @@
+K-means=TP+TFIDF+K-means	Recommender-ServiceAgent2	17247	312758085	17933292	16052750	
+K-means=TP+TFIDF+K-means	Recommender-ServiceAgent1	16954	307445608	20089125	26705667	
+K-means=TP+TFIDF+K-means	Recommender-ServiceAgent3	18714	333634390	19980167	28114708	
+K-means=TP+TFIDF+K-means	Recommender-ServiceAgent4	16855	310395824	19876000	29047917	

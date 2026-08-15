@@ -1,0 +1,2 @@
+totalMessagePassingCost: 1695693772 bytes Nodes: 8
+maxMessagePassingTime: 30434 ms Nodes: 8

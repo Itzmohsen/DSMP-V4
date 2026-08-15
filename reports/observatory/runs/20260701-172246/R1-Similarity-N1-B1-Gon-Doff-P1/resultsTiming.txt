@@ -1,0 +1,35 @@
+618 at 2026-07-01T17:22:47.533733
+[StageTimer] STARTER setup DF discovery and agent list collection: 8 ms
+Starter Agent using controller-provided user-agent roster: 618 of 618 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 8 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 14 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+RobertBlake to Reducer1: 1286 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 1280 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 1012 ms
+Recommender-ServiceAgent1After processing, tweets: 49381
+Message Passing: 1141 ms
+MAX Message Passing: 1141 ms
+Messages Cost: 6467794 bytes
+TOTAL Messages Cost: 6467794 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 14 ms
+[StageTimer] START Recommend Algorithms broadcast: 1 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 25 ms
+Recommender-ServiceAgent1
+Total Tweets Processed: 52061 TP: 1012 ms TFIDF: 25 ms CosSim: 2 ms Total: 1040 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 35 ms
+[StageTimer] WAIT merge completed after algorithm start: 46 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 11 ms
+[StageTimer] START Querying broadcast: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 7 ms
+[StageTimer] WAIT querying/recommendation completed: 25 ms
+[StageTimer] SIMULATION total before graph visualization: 1398 ms
+[StageTimer] GRAPH visualization started at 2026-07-01T17:22:48.939747
+[StageTimer] GRAPH build validated GML file: 2 ms
+[StageTimer] GRAPH initialize Gephi controllers/workspace: 83 ms
+[StageTimer] GRAPH import GML file: 5 ms
+[StageTimer] GRAPH process imported container: 10 ms
+[StageTimer] GRAPH modularity calculation: 3 ms
+[StageTimer] GRAPH partition/color transform: 182 ms
+GRAPH visualization skipped: unexpected graph finalization failure. Cannot invoke "org.gephi.preview.api.PreviewModel.getProperties()" because "<local37>" is null
+

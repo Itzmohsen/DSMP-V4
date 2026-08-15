@@ -1,0 +1,4 @@
+K-meansEuclidean=TP+TFIDF+K-meansEuclidean	Recommender-ServiceAgent4	16855	309851330	16470916	10582917	
+K-meansEuclidean=TP+TFIDF+K-meansEuclidean	Recommender-ServiceAgent3	18714	336895445	17462583	22919292	
+K-meansEuclidean=TP+TFIDF+K-meansEuclidean	Recommender-ServiceAgent2	17247	313609142	17739500	50045791	
+K-meansEuclidean=TP+TFIDF+K-meansEuclidean	Recommender-ServiceAgent1	16954	307098098	17449459	59657416	

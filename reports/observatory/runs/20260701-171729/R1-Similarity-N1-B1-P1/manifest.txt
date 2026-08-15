@@ -1,0 +1,11 @@
+run=R1-Similarity-N1-B1-P1
+status=FAILED
+message=Timed out waiting for simulator initialization.
+algorithm=Similarity
+nodes=1
+batchUsers=1
+policy=DSMP default
+graphEnabled=false
+elapsedMs=3600094
+dataset=Retail50K.txt
+datasetPath=/Users/mohsen11/Downloads/Retail50K.txt
