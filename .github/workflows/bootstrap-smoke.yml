@@ -1,0 +1,36 @@
+name: DSMP Bootstrap Smoke Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  bootstrap:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Verify bootstrap and dependencies
+        run: python build.py doctor
+
+      - name: Compile simulator sources
+        run: python build.py compile

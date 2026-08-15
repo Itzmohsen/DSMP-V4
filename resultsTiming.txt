@@ -1,0 +1,372 @@
+2 at 2026-07-07T20:54:21.930535
+[StageTimer] STARTER setup DF discovery and agent list collection: 3 ms
+Starter Agent using controller-provided user-agent roster: 2 of 2 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 3 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 0 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+Customer15311 to Reducer3: 764 ms
+Customer15311 to Reducer7: 764 ms
+Customer15311 to Reducer5: 764 ms
+Customer15311 to Reducer8: 765 ms
+Customer15311 to Reducer1: 765 ms
+Customer15311 to Reducer4: 766 ms
+Customer15311 to Reducer6: 768 ms
+Customer15311 to Reducer2: 770 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 1349 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 1127 ms
+Recommender-ServiceAgent1After processing, tweets: 48234
+Recommender-ServiceAgent2completionTimeTextProcessing: 1132 ms
+Recommender-ServiceAgent2After processing, tweets: 48176
+Recommender-ServiceAgent3completionTimeTextProcessing: 1271 ms
+Recommender-ServiceAgent3After processing, tweets: 55111
+Recommender-ServiceAgent6completionTimeTextProcessing: 1151 ms
+Recommender-ServiceAgent8completionTimeTextProcessing: 1139 ms
+Recommender-ServiceAgent5completionTimeTextProcessing: 1127 ms
+Recommender-ServiceAgent6After processing, tweets: 49324
+Recommender-ServiceAgent7After processing, tweets: 48510
+Recommender-ServiceAgent7completionTimeTextProcessing: 11Recommender-ServiceAgent4completionTimeTextProcessing: 1195 ms
+34 ms
+Recommender-ServiceAgent5After processing, tweets: 48040
+Recommender-ServiceAgent4After processing, tweets: 51614
+Recommender-ServiceAgent8After processing, tweets: 49232
+Message Passing: 1348 ms
+Message Passing: 1348 ms
+Message Passing: 1348 ms
+Message Passing: 1348 ms
+Message Passing: 1348 ms
+Message Passing: 1348 ms
+Message Passing: 1348 ms
+Message Passing: 1348 ms
+MAX Message Passing: 1348 ms
+Messages Cost: 7727086 bytes
+Messages Cost: 7667842 bytes
+Messages Cost: 8840506 bytes
+Messages Cost: 8274464 bytes
+Messages Cost: 7668736 bytes
+Messages Cost: 7854884 bytes
+Messages Cost: 7738250 bytes
+Messages Cost: 7886750 bytes
+TOTAL Messages Cost: 63658518 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 12 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent4 completionTimeTFIDF: 127 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 138 ms
+Recommender-ServiceAgent2 completionTimeTFIDF: 157 ms
+Recommender-ServiceAgent6 completionTimeTFIDF: 162 ms
+Recommender-ServiceAgent7 completionTimeTFIDF: 164 ms
+Recommender-ServiceAgent3 completionTimeTFIDF: 165 ms
+Recommender-ServiceAgent8 completionTimeTFIDF: 165 ms
+Recommender-ServiceAgent5 completionTimeTFIDF: 165 ms
+Recommender-ServiceAgent4 Accuracy of SVM: 57.86%
+---------------------------------
+Mapper4- Total Tweets Processed: 53692 TP: 1195 ms TFIDF: 127 ms Reducer4 SVM: 1077 ms Total: 2400 ms
+Recommender-ServiceAgent2 Accuracy of SVM: 53.85%
+---------------------------------
+Mapper2- Total Tweets Processed: 50117 TP: 1132 ms TFIDF: 157 ms Reducer2 SVM: 1126 ms Total: 2416 ms
+Recommender-ServiceAgent5 Accuracy of SVM: 58.60%
+---------------------------------
+Mapper5- Total Tweets Processed: 49888 TP: 1127 ms TFIDF: 165 ms Reducer5 SVM: 1142 ms Total: 2436 ms
+Recommender-ServiceAgent7 Accuracy of SVM: 56.05%
+---------------------------------
+Mapper7- Total Tweets Processed: 50420 TP: 1134 ms TFIDF: 164 ms Reducer7 SVM: 1154 ms Total: 2453 ms
+Recommender-ServiceAgent1 Accuracy of SVM: 59.62%
+---------------------------------
+Mapper1- Total Tweets Processed: 50084 TP: 1127 ms TFIDF: 138 ms Reducer1 SVM: 1213 ms Total: 2478 ms
+Recommender-ServiceAgent6 Accuracy of SVM: 57.96%
+---------------------------------
+Mapper6- Total Tweets Processed: 51420 TP: 1151 ms TFIDF: 162 ms Reducer6 SVM: 1203 ms Total: 2517 ms
+Recommender-ServiceAgent3 Accuracy of SVM: 54.72%
+---------------------------------
+Mapper3- Total Tweets Processed: 57454 TP: 1271 ms TFIDF: 165 ms Reducer3 SVM: 1220 ms Total: 2656 ms
+Recommender-ServiceAgent8 Accuracy of SVM: 49.04%
+---------------------------------
+Mapper8- Total Tweets Processed: 51258 TP: 1139 ms TFIDF: 165 ms Reducer8 SVM: 1295 ms Total: 2601 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 1533 ms
+[StageTimer] WAIT merge completed after algorithm start: 1533 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 0 ms
+Merge Message Time: 253 ms
+Merge Message Time: 253538416 ns
+
+2 at 2026-07-07T20:55:07.408947
+[StageTimer] STARTER setup DF discovery and agent list collection: 3 ms
+Starter Agent using controller-provided user-agent roster: 2 of 2 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 3 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 0 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+Customer15311 to Reducer1: 527 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 9407 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 8174 ms
+Recommender-ServiceAgent1After processing, tweets: 381994
+Message Passing: 9407 ms
+MAX Message Passing: 9407 ms
+Messages Cost: 61146624 bytes
+TOTAL Messages Cost: 61146624 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 13 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 202 ms
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Mapper1- Total Tweets Processed: 397708 TP: 8174 ms TFIDF: 202 ms Reducer1 SVM: 2900 ms Total: 11277 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 3599 ms
+[StageTimer] WAIT merge completed after algorithm start: 3599 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 0 ms
+[StageTimer] START Querying broadcast: 0 ms
+[StageTimer] Persist recommendation choice and graph edges: 3 ms
+[StageTimer] WAIT querying/recommendation completed: 11 ms
+[StageTimer] SIMULATION total before graph visualization: 13030 ms
+[StageTimer] GRAPH visualization/export skipped; accumulated node and edge data retained at 2026-07-07T20:55:20.441679
+
+2 at 2026-07-07T20:56:01.717466
+[StageTimer] STARTER setup DF discovery and agent list collection: 2 ms
+Starter Agent using controller-provided user-agent roster: 2 of 2 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 2 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 0 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+Customer15311 to Reducer1: 574 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 9380 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 8064 ms
+Recommender-ServiceAgent1After processing, tweets: 381994
+Message Passing: 9372 ms
+MAX Message Passing: 9372 ms
+Messages Cost: 61146624 bytes
+TOTAL Messages Cost: 61146624 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 13 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 197 ms
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Mapper1- Total Tweets Processed: 397708 TP: 8064 ms TFIDF: 197 ms Reducer1 SVM: 2896 ms Total: 11159 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 3589 ms
+[StageTimer] WAIT merge completed after algorithm start: 3590 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 1 ms
+[StageTimer] START Querying broadcast: 0 ms
+[StageTimer] Persist recommendation choice and graph edges: 8 ms
+[StageTimer] WAIT querying/recommendation completed: 12 ms
+[StageTimer] SIMULATION total before graph visualization: 12998 ms
+[StageTimer] GRAPH visualization/export skipped; accumulated node and edge data retained at 2026-07-07T20:56:14.717622
+
+51 at 2026-07-07T20:57:11.303263
+[StageTimer] STARTER setup DF discovery and agent list collection: 2 ms
+Starter Agent using controller-provided user-agent roster: 51 of 51 participant(s).
+[StageTimer] STARTER resolve user-agent startup roster: 2 ms
+[StageTimer] START_SIM broadcast to MobileAgents: 1 ms
+[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.
+Customer15341 to Reducer1: 31 ms
+Customer15790 to Reducer1: 38 ms
+Customer16141 to Reducer1: 39 ms
+Customer17639 to Reducer1: 39 ms
+Customer15589 to Reducer1: 42 ms
+Customer13165 to Reducer1: 61 ms
+Customer16207 to Reducer1: 69 ms
+Customer16406 to Reducer1: 82 ms
+Customer14741 to Reducer1: 86 ms
+Customer16727 to Reducer1: 87 ms
+Customer15083 to Reducer1: 89 ms
+Customer16214 to Reducer1: 101 ms
+Customer17214 to Reducer1: 153 ms
+Customer17470 to Reducer1: 156 ms
+Customer14543 to Reducer1: 156 ms
+Customer13014 to Reducer1: 156 ms
+Customer14005 to Reducer1: 165 ms
+Customer16143 to Reducer1: 167 ms
+Customer15220 to Reducer1: 172 ms
+Customer18177 to Reducer1: 182 ms
+Customer14239 to Reducer1: 186 ms
+Customer16612 to Reducer1: 190 ms
+Customer14710 to Reducer1: 211 ms
+Customer12569 to Reducer1: 218 ms
+Customer15860 to Reducer1: 233 ms
+Customer16477 to Reducer1: 235 ms
+Customer12712 to Reducer1: 243 ms
+Customer13093 to Reducer1: 244 ms
+Customer12347 to Reducer1: 245 ms
+Customer15907 to Reducer1: 259 ms
+Customer14573 to Reducer1: 266 ms
+Customer14031 to Reducer1: 284 ms
+Customer16655 to Reducer1: 310 ms
+Customer16684 to Reducer1: 311 ms
+Customer12626 to Reducer1: 314 ms
+Customer15805 to Reducer1: 323 ms
+Customer13798 to Reducer1: 336 ms
+Customer17377 to Reducer1: 356 ms
+Customer14849 to Reducer1: 357 ms
+Customer17799 to Reducer1: 362 ms
+Customer13004 to Reducer1: 363 ms
+Customer12621 to Reducer1: 386 ms
+Customer15856 to Reducer1: 435 ms
+Customer16729 to Reducer1: 436 ms
+Customer16931 to Reducer1: 493 ms
+Customer17511 to Reducer1: 512 ms
+Customer18118 to Reducer1: 555 ms
+Customer15311 to Reducer1: 837 ms
+Customer14911 to Reducer1: 1449 ms
+Customer17841 to Reducer1: 1723 ms
+[StageTimer] WAIT all MobileAgents Tweeting Completed: 9396 ms
+Recommender-ServiceAgent1completionTimeTextProcessing: 8055 ms
+Recommender-ServiceAgent1After processing, tweets: 381994
+Message Passing: 9370 ms
+MAX Message Passing: 9370 ms
+Messages Cost: 61146624 bytes
+TOTAL Messages Cost: 61146624 bytes
+[StageTimer] WAIT all RecommenderAgents Text Processing Complete: 13 ms
+[StageTimer] START Recommend Algorithms broadcast: 0 ms
+Recommender-ServiceAgent1 completionTimeTFIDF: 0 ms
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Recommender-ServiceAgent1 Accuracy of SVM: 76.93%
+---------------------------------
+Mapper1- Total Tweets Processed: 397708 TP: 8055 ms TFIDF: 0 ms Reducer1 SVM Batch: 160183 ms Total: 168239 ms
+[StageTimer] WAIT all RecommenderAgents Algorithm/TFIDF Done: 160190 ms
+[StageTimer] WAIT merge completed after algorithm start: 160202 ms
+[StageTimer] WAIT merge completed after all algorithms reported: 12 ms
+[StageTimer] START Querying broadcast: 0 ms
+[StageTimer] Persist recommendation choice and graph edges: 8 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 7 ms
+[StageTimer] Persist recommendation choice and graph edges: 33 ms
+[StageTimer] Persist recommendation choice and graph edges: 36 ms
+[StageTimer] Persist recommendation choice and graph edges: 51 ms
+[StageTimer] Persist recommendation choice and graph edges: 33 ms
+[StageTimer] Persist recommendation choice and graph edges: 4 ms
+[StageTimer] Persist recommendation choice and graph edges: 9 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 8 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 9 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 14 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 6 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 4 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 3 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 13 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 27 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 10 ms
+[StageTimer] Persist recommendation choice and graph edges: 15 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 14 ms
+[StageTimer] Persist recommendation choice and graph edges: 2 ms
+[StageTimer] Persist recommendation choice and graph edges: 14 ms
+[StageTimer] Persist recommendation choice and graph edges: 1 ms
+[StageTimer] Persist recommendation choice and graph edges: 4 ms
+[StageTimer] Persist recommendation choice and graph edges: 8 ms
+[StageTimer] Persist recommendation choice and graph edges: 10 ms
+[StageTimer] Persist recommendation choice and graph edges: 18 ms
+[StageTimer] Persist recommendation choice and graph edges: 5 ms
+[StageTimer] Persist recommendation choice and graph edges: 3 ms
+[StageTimer] WAIT querying/recommendation completed: 909 ms
+[StageTimer] SIMULATION total before graph visualization: 170525 ms
+[StageTimer] GRAPH visualization/export skipped; accumulated node and edge data retained at 2026-07-07T21:00:01.831134
+

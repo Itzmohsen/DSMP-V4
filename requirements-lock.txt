@@ -1,0 +1,10 @@
+# Bounded runtime set for DSMP Doc2Vec and import/plot helper scripts.
+# The upper bounds prevent future major-version drift from breaking fresh clones.
+numpy>=1.26.4,<2.0
+scipy>=1.12,<1.17
+gensim>=4.3.2,<4.5
+scikit-learn>=1.4,<1.7
+nltk>=3.8,<4
+seaborn>=0.13,<0.14
+matplotlib>=3.8,<3.11
+ipython>=8.18,<10

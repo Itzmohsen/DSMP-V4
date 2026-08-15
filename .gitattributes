@@ -1,0 +1,5 @@
+*toolkit.jar filter=lfs diff=lfs merge=lfs -text
+Dataset/Benchmarks/*.txt filter=lfs diff=lfs merge=lfs -text
+Dataset/TwitterObtained/GENERATED/*_GENERATED.txt filter=lfs diff=lfs merge=lfs -text
+important-stuff/*_GENERATED.txt filter=lfs diff=lfs merge=lfs -text
+Stored_Doc2VecModel/shared_cache/*.npy filter=lfs diff=lfs merge=lfs -text

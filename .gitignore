@@ -1,0 +1,13 @@
+*.gitconfig
+*/*.iml
+./classes
+.simulator-runtime.properties
+.simulator-runtime.properties.tmp
+.venv/
+.runtime/
+logs/
+classes/
+sources.txt
+classpath.txt
+__pycache__/
+*.pyc
