@@ -29,48 +29,34 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private ControllerAgent myAgent;
 	private StarterAgent myStarter;   // added by Sepide 
 
-	private static final int FRAME_WIDTH = 1575;
-	private static final int FRAME_HEIGHT = 670;
+	private static final int FRAME_WIDTH = 1620;
+	private static final int FRAME_HEIGHT = 930;
 	private static final int AREA_ROWS = 15;
 	private static final int AREA_COLUMNS = 40;
 	private static final int MAX_USER_GENERATION_LOG_CHARACTERS = 300000;
-	private static final int SURFACE_RADIUS = 8;
-	private static final Color APP_BACKGROUND_TOP = StudioNightTheme.adaptiveColor(
-			new Color(246, 248, 251), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color APP_BACKGROUND_BOTTOM = StudioNightTheme.adaptiveColor(
-			new Color(229, 234, 242), StudioNightTheme.NIGHT_BACKGROUND_BOTTOM);
-	private static final Color APP_SURFACE = StudioNightTheme.adaptiveColor(
-			new Color(255, 255, 255, 238), StudioNightTheme.NIGHT_SURFACE);
-	private static final Color APP_SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(248, 250, 252, 240), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color APP_BORDER = StudioNightTheme.adaptiveColor(
-			new Color(207, 216, 227), StudioNightTheme.NIGHT_BORDER);
-	private static final Color APP_TEXT = StudioNightTheme.adaptiveColor(
-			new Color(24, 29, 36), StudioNightTheme.NIGHT_TEXT);
-	private static final Color APP_MUTED_TEXT = StudioNightTheme.adaptiveColor(
-			new Color(91, 101, 116), StudioNightTheme.NIGHT_MUTED);
-	private static final Color APP_BLUE = StudioNightTheme.adaptiveColor(
-			new Color(0, 113, 227), StudioNightTheme.NIGHT_BLUE);
-	private static final Color APP_BLUE_HOVER = StudioNightTheme.adaptiveColor(
-			new Color(38, 139, 236), new Color(120, 184, 255));
-	private static final Color APP_GREEN = StudioNightTheme.adaptiveColor(
-			new Color(20, 150, 105), StudioNightTheme.NIGHT_GREEN);
+	private static final int SURFACE_RADIUS = 12;
+	private static final Color APP_BACKGROUND_TOP = NebulaDesign.CANVAS_TOP;
+	private static final Color APP_BACKGROUND_BOTTOM = NebulaDesign.CANVAS_BOTTOM;
+	private static final Color APP_SURFACE = NebulaDesign.SURFACE;
+	private static final Color APP_SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color APP_BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color APP_TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color APP_MUTED_TEXT = NebulaDesign.TEXT_SECONDARY;
+	private static final Color APP_BLUE = NebulaDesign.ACCENT;
+	private static final Color APP_BLUE_HOVER = NebulaDesign.ACCENT_HOVER;
+	private static final Color APP_GREEN = NebulaDesign.SUCCESS;
 	private static final Color APP_GREEN_HOVER = StudioNightTheme.adaptiveColor(
-			new Color(31, 170, 123), new Color(92, 230, 169));
-	private static final Color APP_RED = StudioNightTheme.adaptiveColor(
-			new Color(211, 47, 47), StudioNightTheme.NIGHT_RED);
+			new Color(26, 176, 123), new Color(102, 236, 180));
+	private static final Color APP_RED = NebulaDesign.DANGER;
 	private static final Color APP_RED_HOVER = StudioNightTheme.adaptiveColor(
-			new Color(226, 75, 75), new Color(255, 130, 124));
+			new Color(230, 82, 92), new Color(255, 146, 138));
 	private static final Color APP_NEUTRAL = StudioNightTheme.adaptiveColor(
-			new Color(241, 244, 248), StudioNightTheme.NIGHT_PANEL_INK);
+			NebulaDesign.DAY_SURFACE, NebulaDesign.NIGHT_SURFACE_RAISED);
 	private static final Color APP_NEUTRAL_HOVER = StudioNightTheme.adaptiveColor(
-			new Color(229, 235, 243), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color APP_TEXT_AREA = StudioNightTheme.adaptiveColor(
-			new Color(15, 20, 26), new Color(8, 12, 18));
-	private static final Color APP_TEXT_AREA_TEXT = StudioNightTheme.adaptiveColor(
-			new Color(234, 241, 248), StudioNightTheme.NIGHT_TEXT);
-	private static final Color APP_SELECTION = StudioNightTheme.adaptiveColor(
-			new Color(217, 236, 255), new Color(43, 89, 134));
+			new Color(240, 243, 249), new Color(37, 51, 78));
+	private static final Color APP_TEXT_AREA = NebulaDesign.CONSOLE;
+	private static final Color APP_TEXT_AREA_TEXT = NebulaDesign.CONSOLE_TEXT;
+	private static final Color APP_SELECTION = NebulaDesign.SELECTION;
 	private static final int BUTTON_PRIMARY = 0;
 	private static final int BUTTON_SECONDARY = 1;
 	private static final int BUTTON_DANGER = 2;
@@ -247,7 +233,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private JCheckBox removeStopWords;
 	private JCheckBox simulateTweetDelay;
 	private JCheckBox generateGraphOutput;
-	private JLabel algorithmSettingsProfileLabel;
+	private BadgeLabel algorithmSettingsProfileLabel;
 	private JLabel algorithmSettingsSummaryLabel;
 	private AlgorithmParameterSettings algorithmParameterSettings =
 			AlgorithmParameterSettings.defaults();
@@ -501,79 +487,75 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			{
 			try
 			{
-				UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+				// The cross-platform look and feel respects explicit colors on
+				// every OS, so the Nebula design system renders identically
+				// on Windows, macOS, and Linux.
+				UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName());
 			}
 			catch (Exception e)
 			{
 				try
 				{
-					for (LookAndFeelInfo info : UIManager.getInstalledLookAndFeels())
-					{
-						if ("Nimbus".equals(info.getName()))
-						{
-							UIManager.setLookAndFeel(info.getClassName());
-							break;
-						}
-					}
+					UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
 				}
 				catch (Exception ignored)
 				{
-					// Keep Swing's default look and feel if the platform theme is unavailable.
+					// Keep Swing's default look and feel if neither is available.
 				}
 			}
-				Color dialogBackground = new Color(
-						APP_SURFACE.getRed(),
-						APP_SURFACE.getGreen(),
-						APP_SURFACE.getBlue());
-			UIManager.put("control", dialogBackground);
-			UIManager.put("info", dialogBackground);
-			UIManager.put("nimbusBase", APP_BLUE);
-			UIManager.put("nimbusFocus", new Color(80, 150, 255));
-			UIManager.put("OptionPane.background", dialogBackground);
-			UIManager.put("Panel.background", dialogBackground);
-			UIManager.put("TextField.selectionBackground", APP_SELECTION);
-			UIManager.put("TextArea.selectionBackground", new Color(55, 116, 184));
+			NebulaDesign.loadFonts();
+			NebulaDesign.installUiDefaults();
 		}
 
 		private Font appFont(int style, int size)
 		{
-			return new Font("SansSerif", style, size);
+			if ((style & Font.BOLD) != 0)
+			{
+				return NebulaDesign.fontSemiBold(size);
+			}
+			if ((style & Font.ITALIC) != 0)
+			{
+				return NebulaDesign.fontBody(size).deriveFont(Font.ITALIC);
+			}
+			return NebulaDesign.fontBody(size);
 		}
 
 		private void styleLabel(JLabel label)
 		{
 			label.setForeground(APP_MUTED_TEXT);
-			label.setFont(appFont(Font.BOLD, 12));
+			label.setFont(NebulaDesign.fontMedium(12f));
 			label.setBorder(BorderFactory.createEmptyBorder(3, 0, 3, 4));
 		}
 
 		private void styleTitleLabel(JLabel label, int size)
 		{
 			label.setForeground(APP_TEXT);
-			label.setFont(appFont(Font.BOLD, size));
+			label.setFont(NebulaDesign.fontSemiBold(size));
 			label.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
 		}
 
 		private void styleTextArea(JTextArea textArea, boolean highlight)
 		{
-			textArea.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+			textArea.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
 			textArea.setEditable(false);
 			textArea.setLineWrap(true);
 			textArea.setWrapStyleWord(true);
-			textArea.setFont(appFont(highlight ? Font.BOLD : Font.PLAIN, 12));
+			textArea.setFont(NebulaDesign.fontMono(12f));
 			textArea.setBackground(highlight ? APP_SURFACE : APP_TEXT_AREA);
 			textArea.setForeground(highlight ? APP_TEXT : APP_TEXT_AREA_TEXT);
 			textArea.setCaretColor(highlight ? APP_TEXT : APP_TEXT_AREA_TEXT);
-			textArea.setSelectionColor(highlight ? APP_SELECTION : new Color(55, 116, 184));
-			textArea.setSelectedTextColor(highlight ? APP_TEXT : Color.WHITE);
+			textArea.setSelectionColor(APP_SELECTION);
+			textArea.setSelectedTextColor(APP_TEXT);
 		}
 
 		private void styleTextField(JTextField textField)
 		{
-			textField.setFont(appFont(Font.PLAIN, 13));
+			textField.setFont(NebulaDesign.fontBody(13f));
 			textField.setForeground(APP_TEXT);
-			textField.setBackground(APP_SURFACE);
+			textField.setBackground(APP_SURFACE_ALT);
 			textField.setCaretColor(APP_BLUE);
+			textField.setSelectionColor(APP_SELECTION);
+			textField.setSelectedTextColor(APP_TEXT);
 			textField.setBorder(BorderFactory.createCompoundBorder(
 					BorderFactory.createLineBorder(APP_BORDER, 1),
 					BorderFactory.createEmptyBorder(7, 9, 7, 9)));
@@ -581,20 +563,35 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 		private void styleComboBox(JComboBox<?> comboBox)
 		{
-			comboBox.setFont(appFont(Font.BOLD, 13));
+			comboBox.setFont(NebulaDesign.fontMedium(12.5f));
 			comboBox.setForeground(APP_TEXT);
-			comboBox.setBackground(APP_SURFACE);
-			comboBox.setBorder(BorderFactory.createLineBorder(APP_BORDER, 1));
-			comboBox.setPreferredSize(new Dimension(180, 40));
+			comboBox.setBackground(APP_SURFACE_ALT);
+			comboBox.setBorder(BorderFactory.createEmptyBorder());
+			comboBox.setMaximumRowCount(12);
+			comboBox.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			comboBox.setUI(new NebulaComboBoxUI());
+			comboBox.setPreferredSize(new Dimension(180, 38));
+		}
+
+		private void styleMenuItem(JMenuItem menuItem)
+		{
+			menuItem.setFont(NebulaDesign.fontBody(12.5f));
+			menuItem.setForeground(APP_TEXT);
+			menuItem.setBackground(APP_SURFACE);
+			menuItem.setOpaque(true);
+			menuItem.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 20));
 		}
 
 		private void styleCheckBox(JCheckBox checkBox)
 		{
 			checkBox.setOpaque(false);
 			checkBox.setForeground(APP_TEXT);
-			checkBox.setFont(appFont(Font.BOLD, 12));
+			checkBox.setFont(NebulaDesign.fontBody(12.5f));
 			checkBox.setFocusPainted(false);
-			checkBox.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+			checkBox.setIconTextGap(9);
+			checkBox.setIcon(new NebulaCheckIcon());
+			checkBox.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			checkBox.setBorder(BorderFactory.createEmptyBorder(6, 4, 6, 8));
 		}
 
 		private JButton createModernButton(String text, int kind)
@@ -606,28 +603,31 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		{
 			Color base = APP_NEUTRAL;
 			Color hover = APP_NEUTRAL_HOVER;
-			Color pressed = new Color(216, 224, 235);
+			Color pressed = StudioNightTheme.adaptiveColor(
+					new Color(226, 231, 240), NebulaDesign.NIGHT_SURFACE_ALT);
 			Color foreground = APP_TEXT;
 			if (kind == BUTTON_PRIMARY)
 			{
 				base = APP_BLUE;
 				hover = APP_BLUE_HOVER;
-				pressed = new Color(0, 88, 184);
-				foreground = Color.WHITE;
+				pressed = NebulaDesign.ACCENT_PRESS;
+				foreground = NebulaDesign.TEXT_ON_ACCENT;
 			}
 			else if (kind == BUTTON_SECONDARY)
 			{
 				base = APP_GREEN;
 				hover = APP_GREEN_HOVER;
-				pressed = new Color(17, 126, 88);
-				foreground = Color.WHITE;
+				pressed = StudioNightTheme.adaptiveColor(
+						new Color(11, 105, 72), new Color(43, 189, 133));
+				foreground = NebulaDesign.TEXT_ON_ACCENT;
 			}
 			else if (kind == BUTTON_DANGER)
 			{
 				base = APP_RED;
 				hover = APP_RED_HOVER;
-				pressed = new Color(178, 39, 39);
-				foreground = Color.WHITE;
+				pressed = StudioNightTheme.adaptiveColor(
+						new Color(168, 33, 43), new Color(232, 96, 88));
+				foreground = NebulaDesign.TEXT_ON_ACCENT;
 			}
 			ModernButton button = new ModernButton(text, base, hover, pressed, foreground);
 			if (iconType != null)
@@ -639,13 +639,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 		private void styleList()
 		{
-			showAgentsList.setFont(appFont(Font.PLAIN, 13));
+			showAgentsList.setFont(NebulaDesign.fontBody(13f));
 			showAgentsList.setBackground(APP_SURFACE);
 			showAgentsList.setForeground(APP_TEXT);
-				showAgentsList.setSelectionBackground(APP_SELECTION);
-				showAgentsList.setSelectionForeground(StudioNightTheme.adaptiveColor(
-						new Color(0, 68, 136), StudioNightTheme.NIGHT_TEXT));
-				showAgentsList.setFixedCellHeight(46);
+				showAgentsList.setSelectionBackground(NebulaDesign.ACCENT_SOFT);
+				showAgentsList.setSelectionForeground(NebulaDesign.TEXT_PRIMARY);
+				showAgentsList.setFixedCellHeight(44);
 				showAgentsList.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 				showAgentsList.setCellRenderer(new ModernUserCellRenderer());
 			}
@@ -656,6 +655,23 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			scrollPane.getViewport().setOpaque(false);
 			scrollPane.setBorder(BorderFactory.createEmptyBorder());
 			scrollPane.getVerticalScrollBar().setUnitIncrement(14);
+			scrollPane.getVerticalScrollBar().setOpaque(false);
+			scrollPane.getVerticalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+			scrollPane.getHorizontalScrollBar().setOpaque(false);
+			scrollPane.getHorizontalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+		}
+
+		/** Rounded console well that hosts a log surface. */
+		private JPanel createConsoleCard(JComponent content)
+		{
+			TintPanel card = new TintPanel(
+					new BorderLayout(),
+					NebulaDesign.CONSOLE,
+					NebulaDesign.BORDER_SUBTLE,
+					NebulaDesign.RADIUS_CONSOLE);
+			card.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+			card.add(content, BorderLayout.CENTER);
+			return card;
 		}
 
 		private TitledBorder createModernTitle(String title)
@@ -663,8 +679,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			TitledBorder titledBorder = BorderFactory.createTitledBorder(
 					BorderFactory.createEmptyBorder(), title);
 			titledBorder.setTitleJustification(TitledBorder.LEFT);
-			titledBorder.setTitleFont(appFont(Font.BOLD, 13));
-			titledBorder.setTitleColor(APP_MUTED_TEXT);
+			titledBorder.setTitleFont(NebulaDesign.fontSemiBold(13f));
+			titledBorder.setTitleColor(APP_TEXT);
 			return titledBorder;
 		}
 
@@ -685,78 +701,158 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		private JLabel createPanelTitle(String text)
 		{
 			JLabel label = new JLabel(text);
-			label.setFont(appFont(Font.BOLD, 15));
+			label.setFont(NebulaDesign.fontSemiBold(15f));
 			label.setForeground(APP_TEXT);
 			label.setBorder(BorderFactory.createEmptyBorder(0, 0, 10, 0));
 			return label;
 		}
 
+		private JLabel createHeroEyebrow(String text)
+		{
+			JLabel label = new TokenLabel(
+					text.toUpperCase(Locale.US),
+					NebulaDesign.fontSection(),
+					NebulaDesign.ACCENT);
+			label.setAlignmentX(Component.LEFT_ALIGNMENT);
+			label.setBorder(BorderFactory.createEmptyBorder(0, 1, 5, 0));
+			return label;
+		}
+
 		private JLabel createHeroTitle(String text)
 		{
-			JLabel label = new JLabel(text);
-			label.setFont(appFont(Font.BOLD, 28));
-			label.setForeground(APP_TEXT);
+			JLabel label = new TokenLabel(
+					text, NebulaDesign.fontSemiBold(24f), NebulaDesign.TEXT_PRIMARY);
 			label.setBorder(BorderFactory.createEmptyBorder(0, 0, 2, 0));
 			return label;
 		}
 
-		private JPanel createAttributionLine(String role, String name)
+		private JLabel createAttributionBlock()
 		{
-			JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 7, 0));
-			row.setOpaque(false);
-			row.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-			JLabel roleLabel = new JLabel(role.toUpperCase(Locale.US));
-			roleLabel.setFont(appFont(Font.BOLD, 9));
-			roleLabel.setForeground(APP_MUTED_TEXT);
-			roleLabel.setBorder(BorderFactory.createEmptyBorder(1, 0, 0, 0));
-
-			JLabel nameLabel = new JLabel(name);
-			nameLabel.setFont(appFont(Font.BOLD, 12));
-			nameLabel.setForeground(APP_TEXT);
-
-			row.add(roleLabel);
-			row.add(nameLabel);
-			return row;
-		}
-
-		private JPanel createAttributionBlock()
-		{
-			JPanel block = new JPanel();
-			block.setOpaque(false);
-			block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
-			block.setAlignmentX(Component.LEFT_ALIGNMENT);
-			block.setBorder(BorderFactory.createEmptyBorder(5, 1, 0, 0));
-			block.add(createAttributionLine(
-					"Faculty Advisor",
-					"Dr. Abdolreza Abhari"));
-			block.add(Box.createRigidArea(new Dimension(0, 3)));
-			block.add(createAttributionLine(
-					"Developer",
-					"Mohsen Alavi"));
-			return block;
+			JLabel credits = new TokenLabel(
+					"Faculty advisor Dr. Abdolreza Abhari  ·  Developer Mohsen Alavi",
+					NebulaDesign.fontSmall(),
+					NebulaDesign.TEXT_TERTIARY);
+			credits.setAlignmentX(Component.LEFT_ALIGNMENT);
+			credits.setBorder(BorderFactory.createEmptyBorder(8, 1, 0, 0));
+			return credits;
 		}
 
 		private JLabel createHeaderSubtitle(String text)
 		{
-			JLabel label = new JLabel(text);
-			label.setFont(appFont(Font.PLAIN, 12));
-			label.setForeground(APP_MUTED_TEXT);
+			JLabel label = new TokenLabel(
+					text, NebulaDesign.fontBody(12.5f), NebulaDesign.TEXT_SECONDARY);
 			label.setAlignmentX(Component.LEFT_ALIGNMENT);
 			return label;
 		}
 
 		private JLabel createSubtleLabel(String text)
 		{
-			JLabel label = new JLabel(text);
-			label.setFont(appFont(Font.BOLD, 12));
-			label.setForeground(APP_MUTED_TEXT);
-			return label;
+			return new TokenLabel(
+					text, NebulaDesign.fontMedium(12.5f), NebulaDesign.TEXT_PRIMARY);
 		}
 
 		private BadgeLabel createBadge(String text, Color accentColor)
 		{
 			return new BadgeLabel(text, accentColor);
+		}
+
+		/**
+		 * Nebula-styled modal form used by the generation and collection
+		 * prompts. Returns JOptionPane.OK_OPTION or CANCEL_OPTION so the
+		 * existing call sites keep their control flow.
+		 */
+		private int showFormDialog(String title, String subtitle, JComponent form)
+		{
+			NebulaDesign.installUiDefaults();
+			JPanel content = new JPanel(new BorderLayout(0, 14));
+			content.setOpaque(false);
+			content.setBorder(BorderFactory.createEmptyBorder(6, 4, 4, 4));
+
+			JPanel heading = new JPanel();
+			heading.setOpaque(false);
+			heading.setLayout(new BoxLayout(heading, BoxLayout.Y_AXIS));
+			JLabel headingLabel = new TokenLabel(
+					title, NebulaDesign.fontSemiBold(15f), NebulaDesign.TEXT_PRIMARY);
+			headingLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+			heading.add(headingLabel);
+			if (subtitle != null)
+			{
+				JLabel subtitleLabel = new TokenLabel(
+						subtitle, NebulaDesign.fontBody(12f), NebulaDesign.TEXT_SECONDARY);
+				subtitleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+				heading.add(Box.createRigidArea(new Dimension(0, 6)));
+				heading.add(subtitleLabel);
+			}
+			content.add(heading, BorderLayout.NORTH);
+			form.setOpaque(false);
+			content.add(form, BorderLayout.CENTER);
+
+			Object[] options = { "Continue", "Cancel" };
+			JOptionPane pane = new JOptionPane(
+					content,
+					JOptionPane.PLAIN_MESSAGE,
+					JOptionPane.OK_CANCEL_OPTION,
+					null,
+					options,
+					options[0]);
+			pane.setBorder(BorderFactory.createEmptyBorder(10, 12, 8, 12));
+			decorateDialogSurface(pane);
+			JDialog dialog = pane.createDialog(this, title);
+			dialog.setVisible(true);
+			dialog.dispose();
+			return "Continue".equals(pane.getValue())
+					? JOptionPane.OK_OPTION : JOptionPane.CANCEL_OPTION;
+		}
+
+		private static void decorateDialogSurface(Component component)
+		{
+			if (component instanceof JPanel || component instanceof JOptionPane)
+			{
+				((JComponent) component).setOpaque(true);
+				component.setBackground(NebulaDesign.currentSurface());
+			}
+			if (component instanceof JButton)
+			{
+				JButton button = (JButton) component;
+				button.setFont(NebulaDesign.fontMedium(12.5f));
+				button.setBackground(NebulaDesign.currentSurface());
+				button.setForeground(NebulaDesign.currentTextPrimary());
+				button.setFocusPainted(false);
+				button.setBorder(BorderFactory.createCompoundBorder(
+						BorderFactory.createLineBorder(
+								NebulaDesign.currentBorderStrong(), 1),
+						BorderFactory.createEmptyBorder(6, 18, 6, 18)));
+				NebulaWidgets.polishButton(button);
+			}
+			if (component instanceof Container)
+			{
+				Component[] children = ((Container) component).getComponents();
+				for (int i = 0; i < children.length; i++)
+				{
+					decorateDialogSurface(children[i]);
+				}
+			}
+		}
+
+		private JLabel createFormLabel(String text)
+		{
+			return new TokenLabel(
+					text, NebulaDesign.fontMedium(12f), NebulaDesign.TEXT_SECONDARY);
+		}
+
+		private JTextField createFormField(int columns)
+		{
+			JTextField field = new JTextField(columns);
+			styleTextField(field);
+			return field;
+		}
+
+		/** Accent hairline that keeps its translucency in both day and night. */
+		private static Color accentLine(int alpha)
+		{
+			return StudioNightTheme.adaptiveColor(
+					NebulaDesign.withAlpha(NebulaDesign.DAY_ACCENT, alpha),
+					NebulaDesign.withAlpha(NebulaDesign.NIGHT_ACCENT, alpha));
 		}
 
 		private void addFieldPair(JPanel panel, JLabel label, JComponent component)
@@ -768,20 +864,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 		private JLabel createSectionEyebrow(String text)
 		{
-			JLabel label = new JLabel(text.toUpperCase(Locale.US));
-			label.setFont(appFont(Font.BOLD, 11));
-			label.setForeground(APP_BLUE);
-			label.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
+			JLabel label = new TokenLabel(
+					text.toUpperCase(Locale.US),
+					NebulaDesign.fontSection(),
+					NebulaDesign.TEXT_TERTIARY);
+			label.setBorder(BorderFactory.createEmptyBorder(0, 0, 9, 0));
 			return label;
 		}
 
 		private JPanel createFieldBlock(String labelText, String tooltip, JComponent component)
 		{
-			JPanel block = new JPanel(new BorderLayout(0, 7));
+			JPanel block = new JPanel(new BorderLayout(0, 6));
 			block.setOpaque(false);
-			JLabel label = new JLabel(labelText);
-			label.setFont(appFont(Font.BOLD, 12));
-			label.setForeground(APP_MUTED_TEXT);
+			JLabel label = new TokenLabel(
+					labelText, NebulaDesign.fontMedium(12f), NebulaDesign.TEXT_SECONDARY);
 			label.setLabelFor(component);
 			if (tooltip != null)
 			{
@@ -800,7 +896,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			section.add(createSectionEyebrow(title), BorderLayout.NORTH);
 			section.add(content, BorderLayout.CENTER);
 			section.setBorder(BorderFactory.createMatteBorder(
-					0, 0, 1, 0, new Color(222, 228, 236)));
+					0, 0, 1, 0, NebulaDesign.BORDER_SUBTLE));
 			return section;
 		}
 
@@ -825,9 +921,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		{
 			JTabbedPane tabs = new JTabbedPane();
 			outputTabs = tabs;
-			tabs.setFont(appFont(Font.BOLD, 12));
+			tabs.setFont(NebulaDesign.fontMedium(12f));
 			tabs.setForeground(APP_TEXT);
 			tabs.setBackground(APP_SURFACE);
+			tabs.setOpaque(false);
 			tabs.setBorder(BorderFactory.createEmptyBorder());
 
 				JScrollPane resultScrollPane = new JScrollPane(resultArea);
@@ -838,44 +935,49 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				JComponent recommendationResultsView = createRecommendationResultsView();
 				JComponent nodeExecutionView = new NodeExecutionDashboard();
 
-				tabs.addTab("Live Timing", new LineIcon(LineIconType.ITERATIONS, 16), liveTimingView);
-				tabs.addTab("Previous", new LineIcon(LineIconType.RESET, 16), previousResultScrollPane);
-				tabs.addTab("Recommendations", new LineIcon(LineIconType.RECOMMENDER, 16), recommendationResultsView);
-				tabs.addTab("Nodes", new LineIcon(LineIconType.NODES, 16), nodeExecutionView);
+				tabs.addTab("Live Timing", null, liveTimingView);
+				tabs.addTab("Previous", null, createConsoleCard(previousResultScrollPane));
+				tabs.addTab("Recommendations", null, recommendationResultsView);
+				tabs.addTab("Nodes", null, nodeExecutionView);
 				return tabs;
 			}
 
 		private JComponent createLiveTimingView(JScrollPane resultScrollPane)
 		{
 			JPanel view = new JPanel(new BorderLayout(0, 10));
-			view.setBackground(APP_TEXT_AREA);
-			view.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+			view.setOpaque(false);
 			view.add(createRunAccuracyPanel(), BorderLayout.NORTH);
-			view.add(resultScrollPane, BorderLayout.CENTER);
+			view.add(createConsoleCard(resultScrollPane), BorderLayout.CENTER);
 			return view;
 		}
 
 		private JComponent createRunAccuracyPanel()
 		{
-			SurfacePanel panel = createSurfacePanel(new BorderLayout(10, 6), APP_SURFACE_ALT);
+			TintPanel panel = new TintPanel(
+					new BorderLayout(10, 6),
+					NebulaDesign.SURFACE_ALT,
+					NebulaDesign.BORDER_SUBTLE,
+					NebulaDesign.RADIUS_CONSOLE);
 			runAccuracyPanel = panel;
-			panel.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+			panel.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
 
 			JPanel header = new JPanel(new BorderLayout(10, 2));
 			header.setOpaque(false);
-			JLabel title = new JLabel("Run Accuracy");
-			title.setForeground(APP_TEXT);
-			title.setFont(appFont(Font.BOLD, 13));
-			runAccuracySummaryLabel = new JLabel("Waiting for run accuracy");
-			runAccuracySummaryLabel.setForeground(APP_MUTED_TEXT);
-			runAccuracySummaryLabel.setFont(appFont(Font.BOLD, 11));
+			JLabel title = new TokenLabel(
+					"Run accuracy",
+					NebulaDesign.fontSemiBold(13f),
+					NebulaDesign.TEXT_PRIMARY);
+			runAccuracySummaryLabel = new TokenLabel(
+					"Waiting for run accuracy",
+					NebulaDesign.fontSmall(),
+					NebulaDesign.TEXT_TERTIARY);
 			header.add(title, BorderLayout.WEST);
 			header.add(runAccuracySummaryLabel, BorderLayout.CENTER);
 
-			runAccuracyMeasurementLabel = new JLabel(
-					runAccuracyMeasurementText());
-			runAccuracyMeasurementLabel.setForeground(APP_MUTED_TEXT);
-			runAccuracyMeasurementLabel.setFont(appFont(Font.PLAIN, 10));
+			runAccuracyMeasurementLabel = new TokenLabel(
+					runAccuracyMeasurementText(),
+					NebulaDesign.fontBody(10.5f),
+					NebulaDesign.TEXT_TERTIARY);
 
 			JScrollPane accuracyScroll = new JScrollPane(runAccuracyArea);
 			styleScrollPane(accuracyScroll);
@@ -891,36 +993,31 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		private JComponent createRecommendationResultsView()
 		{
 			JPanel dashboard = new JPanel(new BorderLayout(0, 12));
-			dashboard.setBackground(APP_SURFACE_ALT);
-			dashboard.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+			dashboard.setOpaque(false);
+			dashboard.setBorder(BorderFactory.createEmptyBorder(4, 2, 4, 2));
 
 			JPanel summary = new JPanel(new BorderLayout(12, 0));
 			summary.setOpaque(false);
 			summary.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createMatteBorder(0, 0, 1, 0, APP_BORDER),
+					BorderFactory.createMatteBorder(0, 0, 1, 0, NebulaDesign.BORDER_SUBTLE),
 					BorderFactory.createEmptyBorder(2, 2, 12, 2)));
 
 			JPanel summaryText = new JPanel();
 			summaryText.setOpaque(false);
 			summaryText.setLayout(new BoxLayout(summaryText, BoxLayout.Y_AXIS));
-			JLabel title = new JLabel("Recommendation Results");
-			title.setForeground(APP_TEXT);
-			title.setFont(appFont(Font.BOLD, 17));
-			recommendationContextLabel = new JLabel("Waiting for simulation results");
-			recommendationContextLabel.setForeground(APP_MUTED_TEXT);
-			recommendationContextLabel.setFont(appFont(Font.PLAIN, 12));
+			JLabel title = new TokenLabel(
+					"Recommendation results",
+					NebulaDesign.fontSemiBold(16f),
+					NebulaDesign.TEXT_PRIMARY);
+			recommendationContextLabel = new TokenLabel(
+					"Waiting for simulation results",
+					NebulaDesign.fontBody(12f),
+					NebulaDesign.TEXT_SECONDARY);
 			summaryText.add(title);
 			summaryText.add(Box.createRigidArea(new Dimension(0, 3)));
 			summaryText.add(recommendationContextLabel);
 
-			recommendationOverviewLabel = new JLabel("0 TARGETS  |  0 MATCHES");
-			recommendationOverviewLabel.setForeground(APP_BLUE);
-			recommendationOverviewLabel.setFont(appFont(Font.BOLD, 11));
-			recommendationOverviewLabel.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(new Color(169, 207, 245), 1),
-					BorderFactory.createEmptyBorder(7, 10, 7, 10)));
-			recommendationOverviewLabel.setOpaque(true);
-			recommendationOverviewLabel.setBackground(new Color(236, 246, 255));
+			recommendationOverviewLabel = createBadge("0 TARGETS  |  0 MATCHES", APP_BLUE);
 
 			summary.add(summaryText, BorderLayout.CENTER);
 			summary.add(recommendationOverviewLabel, BorderLayout.EAST);
@@ -932,12 +1029,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			recommendationCardsPanel.add(recommendationEmptyState);
 
 			JPanel cardsHolder = new JPanel(new BorderLayout());
-			cardsHolder.setBackground(APP_SURFACE_ALT);
+			cardsHolder.setOpaque(false);
 			cardsHolder.add(recommendationCardsPanel, BorderLayout.NORTH);
 
 			JScrollPane scrollPane = new JScrollPane(cardsHolder);
 			scrollPane.setBorder(BorderFactory.createEmptyBorder());
-			scrollPane.getViewport().setBackground(APP_SURFACE_ALT);
+			styleScrollPane(scrollPane);
 			scrollPane.getVerticalScrollBar().setUnitIncrement(18);
 			scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 
@@ -953,16 +1050,19 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			emptyState.setLayout(new BoxLayout(emptyState, BoxLayout.Y_AXIS));
 			emptyState.setBorder(BorderFactory.createEmptyBorder(72, 16, 24, 16));
 
-			JLabel icon = new JLabel(new LineIcon(LineIconType.RECOMMENDER, 34));
-			icon.setForeground(new Color(145, 162, 181));
+			JLabel icon = new TokenLabel(
+					null, NebulaDesign.fontBody(12f), NebulaDesign.TEXT_TERTIARY);
+			icon.setIcon(new LineIcon(LineIconType.RECOMMENDER, 34));
 			icon.setAlignmentX(Component.CENTER_ALIGNMENT);
-			JLabel title = new JLabel("No recommendations yet");
-			title.setForeground(APP_TEXT);
-			title.setFont(appFont(Font.BOLD, 15));
+			JLabel title = new TokenLabel(
+					"No recommendations yet",
+					NebulaDesign.fontSemiBold(14f),
+					NebulaDesign.TEXT_PRIMARY);
 			title.setAlignmentX(Component.CENTER_ALIGNMENT);
-			JLabel detail = new JLabel("Completed results will appear here by target user.");
-			detail.setForeground(APP_MUTED_TEXT);
-			detail.setFont(appFont(Font.PLAIN, 12));
+			JLabel detail = new TokenLabel(
+					"Completed results will appear here by target user.",
+					NebulaDesign.fontBody(12f),
+					NebulaDesign.TEXT_TERTIARY);
 			detail.setAlignmentX(Component.CENTER_ALIGNMENT);
 
 			emptyState.add(icon);
@@ -1187,9 +1287,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		private JTabbedPane createUserGenTabs()
 		{
 			JTabbedPane tabs = new JTabbedPane();
-			tabs.setFont(appFont(Font.BOLD, 12));
+			tabs.setFont(NebulaDesign.fontMedium(12f));
 			tabs.setForeground(APP_TEXT);
 			tabs.setBackground(APP_SURFACE);
+			tabs.setOpaque(false);
 			tabs.setBorder(BorderFactory.createEmptyBorder());
 
 			JScrollPane userGenTweetsScrollPane = new JScrollPane(userGenTweetsResultArea);
@@ -1199,38 +1300,42 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			JScrollPane grabTwitterResultScrollPane = new JScrollPane(grabTwitterResultArea);
 			styleScrollPane(grabTwitterResultScrollPane);
 
-				tabs.addTab("Artificial Tweets", new LineIcon(LineIconType.ARTIFICIAL, 16), userGenTweetsScrollPane);
-				tabs.addTab("Homophily", new LineIcon(LineIconType.GENERATED, 16), clusterResultScrollPane);
-				tabs.addTab("Twitter Gathering", new LineIcon(LineIconType.COLLECT, 16), grabTwitterResultScrollPane);
+				tabs.addTab("Artificial Tweets", new LineIcon(LineIconType.ARTIFICIAL, 16),
+						createConsoleCard(userGenTweetsScrollPane));
+				tabs.addTab("Homophily", new LineIcon(LineIconType.GENERATED, 16),
+						createConsoleCard(clusterResultScrollPane));
+				tabs.addTab("Twitter Gathering", new LineIcon(LineIconType.COLLECT, 16),
+						createConsoleCard(grabTwitterResultScrollPane));
 				return tabs;
 			}
 
 		private JPanel createStatusPanel(JLabel progressLabel, boolean performancePanel)
 		{
 			SurfacePanel panel = createSurfacePanel(new BorderLayout(18, 0), APP_SURFACE);
-			panel.setBorder(BorderFactory.createEmptyBorder(9, 14, 9, 14));
+			panel.setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 16));
 
-			JPanel progressGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+			JPanel progressGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 9, 0));
 			progressGroup.setOpaque(false);
-			JLabel progressTitle = new JLabel("Current progress");
-			progressTitle.setForeground(APP_MUTED_TEXT);
-			progressTitle.setFont(appFont(Font.BOLD, 11));
+			JLabel progressTitle = new TokenLabel(
+					"CURRENT PROGRESS",
+					NebulaDesign.fontSection(),
+					NebulaDesign.TEXT_TERTIARY);
 
 			StatusPill statusPill = new StatusPill("READY", StatusTone.READY);
 			progressLabel.setText(performancePanel
 					? "Choose a data source to begin a new experiment."
 					: "User Generation Studio is ready.");
-			progressLabel.setFont(appFont(Font.BOLD, 12));
-			progressLabel.setForeground(APP_TEXT);
 			progressGroup.add(progressTitle);
 			progressGroup.add(statusPill);
 			progressGroup.add(progressLabel);
 
-			JLabel contextLabel = new JLabel(performancePanel
-					? "No dataset loaded"
-					: "No collection or generation task running");
-			contextLabel.setFont(appFont(Font.PLAIN, 11));
-			contextLabel.setForeground(APP_MUTED_TEXT);
+			JLabel contextLabel = new TokenLabel(
+					performancePanel
+							? "No dataset loaded"
+							: "No collection or generation task running",
+					NebulaDesign.fontBody(11.5f),
+					NebulaDesign.TEXT_TERTIARY);
+			contextLabel.setForeground(NebulaDesign.TEXT_TERTIARY);
 			contextLabel.setHorizontalAlignment(SwingConstants.RIGHT);
 			contextLabel.setIcon(new LineIcon(
 					performancePanel ? LineIconType.DATABASE : LineIconType.STUDIO, 15));
@@ -1376,7 +1481,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						g2.drawLine(left + 3, top + 4, left + 9, top + 5);
 						break;
 					case HELP:
-						g2.setFont(new Font("SansSerif", Font.BOLD, size - 4));
+						g2.setFont(NebulaDesign.fontSemiBold(size - 4));
 						FontMetrics metrics = g2.getFontMetrics();
 						String question = "?";
 						g2.drawString(question, x + (w - metrics.stringWidth(question)) / 2, y + h - 4);
@@ -1461,121 +1566,171 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(
-						RenderingHints.KEY_ANTIALIASING,
-						RenderingHints.VALUE_ANTIALIAS_ON);
+				NebulaDesign.prepare(g2);
 				int width = getWidth();
 				int height = getHeight();
-				if (StudioNightTheme.isNightMode())
-				{
-					g2.setPaint(new GradientPaint(
-							0,
-							0,
-							StudioNightTheme.NIGHT_BACKGROUND,
-							width,
-							0,
-							StudioNightTheme.NIGHT_SURFACE));
-					g2.fillRect(0, 0, width, height);
-					g2.setColor(StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BLUE, 44));
-					g2.drawLine(0, height - 1, width, height - 1);
-					g2.setColor(StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_GREEN, 20));
-					for (int x = 0; x < width; x += 42)
-					{
-						g2.drawLine(x, 0, x + 18, height);
-					}
-				}
-				else
-				{
-					g2.setColor(new Color(255, 255, 255, 236));
-					g2.fillRect(0, 0, width, height);
-					g2.setColor(new Color(205, 216, 227));
-					g2.drawLine(0, height - 1, width, height - 1);
-				}
+				boolean night = StudioNightTheme.isNightMode();
+				g2.setColor(night ? NebulaDesign.NIGHT_RAIL : NebulaDesign.DAY_SURFACE);
+				g2.fillRect(0, 0, width, height);
+				g2.setPaint(new GradientPaint(
+						0, 0,
+						StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), night ? 26 : 12),
+						width * 0.55f, 0,
+						StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 0)));
+				g2.fillRect(0, 0, Math.round(width * 0.55f), height);
+				g2.setColor(NebulaDesign.currentBorderSubtle());
+				g2.fillRect(0, height - 1, width, 1);
 				g2.dispose();
 				super.paintComponent(graphics);
 			}
 		}
 
-		private final class ThemeToggleButton extends JToggleButton
+		/** Painted brand mark: rounded gradient tile with three linked nodes. */
+		private static final class BrandMark extends JComponent
 		{
-			ThemeToggleButton()
+			BrandMark()
 			{
-				setPreferredSize(new Dimension(122, 34));
-				setMinimumSize(new Dimension(122, 34));
-				setFocusPainted(false);
-				setContentAreaFilled(false);
-				setBorderPainted(false);
-				setOpaque(false);
-				setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-				setToolTipText("Day / Night");
-				getAccessibleContext().setAccessibleName("Day Night theme toggle");
+				setPreferredSize(new Dimension(34, 34));
+				setMinimumSize(new Dimension(34, 34));
 			}
 
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(
-						RenderingHints.KEY_ANTIALIASING,
-						RenderingHints.VALUE_ANTIALIAS_ON);
+				NebulaDesign.prepare(g2);
+				int size = Math.min(getWidth(), getHeight());
+				int x = (getWidth() - size) / 2;
+				int y = (getHeight() - size) / 2;
+				boolean night = StudioNightTheme.isNightMode();
+				Color from = night ? NebulaDesign.NIGHT_ACCENT : NebulaDesign.DAY_ACCENT;
+				Color to = night ? NebulaDesign.NIGHT_PURPLE : NebulaDesign.DAY_PURPLE;
+				g2.setPaint(new GradientPaint(x, y, from, x + size, y + size, to));
+				g2.fillRoundRect(x, y, size, size, 11, 11);
+				g2.setColor(StudioNightTheme.withAlpha(Color.WHITE, night ? 235 : 245));
+				g2.setStroke(new BasicStroke(1.7f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+				int cx = x + size / 2;
+				int cy = y + size / 2;
+				g2.drawLine(cx - 7, cy + 5, cx, cy - 6);
+				g2.drawLine(cx, cy - 6, cx + 7, cy + 5);
+				g2.drawLine(cx - 7, cy + 5, cx + 7, cy + 5);
+				g2.fillOval(cx - 9, cy + 3, 5, 5);
+				g2.fillOval(cx - 2, cy - 9, 5, 5);
+				g2.fillOval(cx + 4, cy + 3, 5, 5);
+				g2.dispose();
+			}
+		}
+
+		private final class ThemeToggleButton extends JToggleButton
+		{
+			private float knobProgress;
+			private float targetProgress;
+			private final javax.swing.Timer slideTimer;
+
+			ThemeToggleButton()
+			{
+				setPreferredSize(new Dimension(64, 30));
+				setMinimumSize(new Dimension(64, 30));
+				setFocusPainted(false);
+				setContentAreaFilled(false);
+				setBorderPainted(false);
+				setOpaque(false);
+				setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+				setToolTipText("Switch between day and night mode");
+				getAccessibleContext().setAccessibleName("Day Night theme toggle");
+				slideTimer = new javax.swing.Timer(16, new ActionListener()
+				{
+					public void actionPerformed(ActionEvent event)
+					{
+						knobProgress += (targetProgress - knobProgress) * 0.30f;
+						if (Math.abs(targetProgress - knobProgress) < 0.01f)
+						{
+							knobProgress = targetProgress;
+							slideTimer.stop();
+						}
+						repaint();
+					}
+				});
+				addItemListener(new ItemListener()
+				{
+					public void itemStateChanged(ItemEvent event)
+					{
+						targetProgress = isSelected() ? 1.0f : 0.0f;
+						if (!slideTimer.isRunning())
+						{
+							slideTimer.start();
+						}
+					}
+				});
+			}
+
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
 				boolean night = isSelected();
 				int width = getWidth();
 				int height = getHeight();
-				Color trackStart = night
-						? StudioNightTheme.NIGHT_PANEL_INK
-						: new Color(244, 248, 253);
-				Color trackEnd = night
+				int trackHeight = 26;
+				int trackY = (height - trackHeight) / 2;
+				Color trackFrom = night
+						? NebulaDesign.NIGHT_SURFACE_RAISED
+						: new Color(228, 233, 243);
+				Color trackTo = night
 						? StudioNightTheme.blend(
-								StudioNightTheme.NIGHT_PANEL_INK,
-								StudioNightTheme.NIGHT_BLUE,
-								0.24f)
-						: Color.WHITE;
-				g2.setPaint(new GradientPaint(0, 0, trackStart, width, height, trackEnd));
-				g2.fillRoundRect(0, 0, width - 1, height - 1, 17, 17);
+								NebulaDesign.NIGHT_SURFACE_RAISED,
+								NebulaDesign.NIGHT_ACCENT,
+								0.28f)
+						: new Color(219, 226, 240);
+				g2.setPaint(new GradientPaint(0, trackY, trackFrom, width, trackY + trackHeight, trackTo));
+				g2.fillRoundRect(0, trackY, width - 1, trackHeight, trackHeight, trackHeight);
 				g2.setColor(night
-						? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BLUE, 150)
-						: new Color(190, 205, 222));
-				g2.drawRoundRect(0, 0, width - 1, height - 1, 17, 17);
+						? StudioNightTheme.withAlpha(NebulaDesign.NIGHT_ACCENT, 130)
+						: NebulaDesign.DAY_BORDER_STRONG);
+				g2.drawRoundRect(0, trackY, width - 1, trackHeight, trackHeight, trackHeight);
 
-				int knob = 24;
-				int knobX = night ? width - knob - 5 : 5;
-				int knobY = (height - knob) / 2;
-				g2.setColor(night
-						? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BLUE, 42)
-						: new Color(210, 225, 242));
-				g2.fillOval(knobX - 2, knobY - 2, knob + 4, knob + 4);
-				g2.setColor(night ? StudioNightTheme.NIGHT_TEXT : Color.WHITE);
-				g2.fillOval(knobX, knobY, knob, knob);
-				g2.setColor(night ? StudioNightTheme.NIGHT_TEAL : APP_BLUE);
+				int knob = 20;
+				int minX = 3;
+				int maxX = width - knob - 4;
+				int knobX = minX + Math.round((maxX - minX) * knobProgress);
+				int knobY = trackY + (trackHeight - knob) / 2;
 				if (night)
 				{
-					g2.fillOval(knobX + 7, knobY + 6, 11, 11);
-					g2.setColor(night ? trackEnd : Color.WHITE);
-					g2.fillOval(knobX + 11, knobY + 4, 10, 10);
+					g2.setColor(StudioNightTheme.withAlpha(NebulaDesign.NIGHT_ACCENT, 70));
+					g2.fillOval(knobX - 3, knobY - 3, knob + 6, knob + 6);
 				}
 				else
 				{
-					g2.fillOval(knobX + 8, knobY + 8, 8, 8);
-					g2.setStroke(new BasicStroke(1.3f));
+					g2.setColor(new Color(23, 35, 60, 26));
+					g2.fillOval(knobX - 1, knobY + 1, knob + 2, knob + 2);
+				}
+				g2.setColor(night ? NebulaDesign.NIGHT_TEXT_PRIMARY : Color.WHITE);
+				g2.fillOval(knobX, knobY, knob, knob);
+				int cx = knobX + knob / 2;
+				int cy = knobY + knob / 2;
+				if (knobProgress > 0.5f)
+				{
+					// Crescent moon.
+					g2.setColor(NebulaDesign.NIGHT_SURFACE);
+					g2.fillOval(cx - 5, cy - 5, 10, 10);
+					g2.setColor(night ? NebulaDesign.NIGHT_TEXT_PRIMARY : Color.WHITE);
+					g2.fillOval(cx - 1, cy - 7, 10, 10);
+				}
+				else
+				{
+					// Sun with rays.
+					g2.setColor(NebulaDesign.DAY_WARNING);
+					g2.fillOval(cx - 3, cy - 3, 7, 7);
+					g2.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 					for (int i = 0; i < 8; i++)
 					{
 						double angle = i * Math.PI / 4.0;
-						int cx = knobX + knob / 2;
-						int cy = knobY + knob / 2;
-						int x1 = cx + (int) Math.round(Math.cos(angle) * 7.0);
-						int y1 = cy + (int) Math.round(Math.sin(angle) * 7.0);
-						int x2 = cx + (int) Math.round(Math.cos(angle) * 10.0);
-						int y2 = cy + (int) Math.round(Math.sin(angle) * 10.0);
+						int x1 = cx + (int) Math.round(Math.cos(angle) * 5.5);
+						int y1 = cy + (int) Math.round(Math.sin(angle) * 5.5);
+						int x2 = cx + (int) Math.round(Math.cos(angle) * 8.0);
+						int y2 = cy + (int) Math.round(Math.sin(angle) * 8.0);
 						g2.drawLine(x1, y1, x2, y2);
 					}
 				}
-
-				g2.setFont(appFont(Font.BOLD, 11));
-				String text = night ? "NIGHT" : "DAY";
-				FontMetrics metrics = g2.getFontMetrics();
-				int textX = night ? 14 : 48;
-				int textY = (height - metrics.getHeight()) / 2 + metrics.getAscent();
-				g2.setColor(night ? StudioNightTheme.NIGHT_TEXT : APP_TEXT);
-				g2.drawString(text, textX, textY);
 				g2.dispose();
 			}
 		}
@@ -1620,73 +1775,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 			private BufferedImage renderBackground(int width, int height)
 			{
-				BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-				Graphics2D g2 = image.createGraphics();
-				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-				GradientPaint gradient = new GradientPaint(0, 0, APP_BACKGROUND_TOP, 0, height, APP_BACKGROUND_BOTTOM);
-				g2.setPaint(gradient);
-				g2.fillRect(0, 0, width, height);
-
-				g2.setComposite(AlphaComposite.SrcOver.derive(
-						StudioNightTheme.isNightMode() ? 0.26f : 0.45f));
-				g2.setColor(StudioNightTheme.isNightMode()
-						? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BORDER, 82)
-						: new Color(255, 255, 255, 86));
-				for (int x = 0; x < width; x += 32)
-				{
-					g2.drawLine(x, 0, x, height);
-				}
-				for (int y = 0; y < height; y += 32)
-				{
-					g2.drawLine(0, y, width, y);
-				}
-
-				paintFlowRibbon(g2, width, height, 0.18f, 0.35f,
-						StudioNightTheme.isNightMode()
-								? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BLUE, 34)
-								: new Color(0, 113, 227, 44));
-				paintFlowRibbon(g2, width, height, 0.48f, -0.35f,
-						StudioNightTheme.isNightMode()
-								? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_GREEN, 28)
-								: new Color(20, 150, 105, 36));
-				paintFlowRibbon(g2, width, height, 0.78f, 0.19f,
-						StudioNightTheme.isNightMode()
-								? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_PURPLE, 24)
-								: new Color(128, 88, 216, 28));
-
-				g2.setComposite(AlphaComposite.SrcOver);
-				g2.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-				g2.setColor(StudioNightTheme.isNightMode()
-						? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_TEXT, 34)
-						: new Color(255, 255, 255, 125));
-				for (int x = -width; x < width * 2; x += 84)
-				{
-					g2.drawLine(x + 15, 0, x + 15 + height / 2, height);
-				}
-
-				g2.setColor(StudioNightTheme.isNightMode()
-						? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BLUE, 44)
-						: new Color(255, 255, 255, 115));
-				g2.fillRect(0, 0, width, 1);
-				g2.dispose();
-				return image;
-			}
-
-			private void paintFlowRibbon(Graphics2D g2, int width, int height, float anchor, float motion, Color color)
-			{
-				java.awt.geom.Path2D.Float path = new java.awt.geom.Path2D.Float();
-				float baseY = height * anchor + motion * 18.0f;
-				path.moveTo(-40, baseY);
-				path.curveTo(width * 0.22f, baseY - 52, width * 0.42f, baseY + 54, width * 0.64f, baseY);
-				path.curveTo(width * 0.82f, baseY - 34, width * 0.94f, baseY + 30, width + 40, baseY - 16);
-				g2.setColor(color);
-				g2.setStroke(new BasicStroke(22.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-				g2.draw(path);
-				g2.setColor(StudioNightTheme.isNightMode()
-						? StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_TEXT, 26)
-						: new Color(255, 255, 255, 60));
-				g2.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-				g2.draw(path);
+				return StudioNightTheme.renderCanvas(
+						width, height, StudioNightTheme.isNightMode());
 			}
 		}
 
@@ -1704,19 +1794,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-				g2.setColor(StudioNightTheme.isNightMode()
-						? new Color(0, 0, 0, 78)
-						: new Color(34, 44, 58, 24));
-				g2.fillRoundRect(1, 3, getWidth() - 3, getHeight() - 4, SURFACE_RADIUS, SURFACE_RADIUS);
-				g2.setColor(StudioNightTheme.isNightMode()
-						? StudioNightTheme.NIGHT_SURFACE
-						: fillColor);
-				g2.fillRoundRect(0, 0, getWidth() - 2, getHeight() - 4, SURFACE_RADIUS, SURFACE_RADIUS);
-				g2.setColor(StudioNightTheme.isNightMode()
-						? StudioNightTheme.NIGHT_BORDER
-						: APP_BORDER);
-				g2.drawRoundRect(0, 0, getWidth() - 2, getHeight() - 4, SURFACE_RADIUS, SURFACE_RADIUS);
+				NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(), SURFACE_RADIUS);
 				g2.dispose();
 				super.paintComponent(graphics);
 			}
@@ -1903,8 +1981,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			{
 				super(text);
 				this.tone = tone;
-				setFont(new Font("SansSerif", Font.BOLD, 10));
-				setBorder(BorderFactory.createEmptyBorder(5, 9, 5, 9));
+				setFont(NebulaDesign.fontSmall());
+				setBorder(BorderFactory.createEmptyBorder(4, 11, 4, 11));
 				setOpaque(false);
 				updateForeground();
 			}
@@ -1919,19 +1997,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 			private void updateForeground()
 			{
-				setForeground(statusColor(tone).darker());
+				setForeground(statusColor(tone));
 			}
 
 			protected void paintComponent(Graphics graphics)
 			{
-				Color color = statusColor(tone);
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-				g2.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 32));
-				g2.fillRoundRect(0, 0, getWidth(), getHeight(), SURFACE_RADIUS, SURFACE_RADIUS);
-				g2.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 105));
-				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, SURFACE_RADIUS, SURFACE_RADIUS);
+				NebulaDesign.prepare(g2);
+				int arc = getHeight();
+				g2.setColor(statusSoftColor(tone));
+				g2.fillRoundRect(0, 0, getWidth(), getHeight(), arc, arc);
+				g2.setColor(StudioNightTheme.withAlpha(statusColor(tone), 70));
+				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, arc, arc);
 				g2.dispose();
+				updateForeground();
 				super.paintComponent(graphics);
 			}
 
@@ -1940,16 +2019,34 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				switch (tone)
 				{
 					case RUNNING:
-						return APP_BLUE;
+						return NebulaDesign.ACCENT;
 					case SUCCESS:
-						return APP_GREEN;
+						return NebulaDesign.SUCCESS;
 					case WARNING:
-						return new Color(207, 125, 31);
+						return NebulaDesign.WARNING;
 					case ERROR:
-						return APP_RED;
+						return NebulaDesign.DANGER;
 					case READY:
 					default:
-						return new Color(82, 105, 130);
+						return NebulaDesign.TEXT_SECONDARY;
+				}
+			}
+
+			private static Color statusSoftColor(StatusTone tone)
+			{
+				switch (tone)
+				{
+					case RUNNING:
+						return NebulaDesign.ACCENT_SOFT;
+					case SUCCESS:
+						return NebulaDesign.SUCCESS_SOFT;
+					case WARNING:
+						return NebulaDesign.WARNING_SOFT;
+					case ERROR:
+						return NebulaDesign.DANGER_SOFT;
+					case READY:
+					default:
+						return NebulaDesign.SURFACE_ALT;
 				}
 			}
 		}
@@ -1979,32 +2076,35 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+				NebulaDesign.prepare(g2);
 				boolean selected = isSelected();
 				boolean hovered = getModel().isRollover();
 				Color background = selected
-						? APP_SELECTION
-						: hovered ? APP_SURFACE_ALT : APP_SURFACE;
-				Color border = selected ? APP_BLUE : hovered
-						? new Color(176, 194, 215) : APP_BORDER;
+						? NebulaDesign.ACCENT_SOFT
+						: hovered ? NebulaDesign.SURFACE_ALT : NebulaDesign.SURFACE;
+				Color border = selected
+						? NebulaDesign.ACCENT
+						: hovered
+						? StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 110)
+						: NebulaDesign.BORDER_SUBTLE;
 				g2.setColor(background);
-				g2.fillRoundRect(0, 0, getWidth(), getHeight(), SURFACE_RADIUS, SURFACE_RADIUS);
+				g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
 				g2.setColor(border);
-				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, SURFACE_RADIUS, SURFACE_RADIUS);
+				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
 
-				g2.setColor(selected ? APP_BLUE : APP_MUTED_TEXT);
-				icon.paintIcon(this, g2, 11, 11);
-				g2.setFont(appFont(Font.BOLD, 12));
-				g2.setColor(APP_TEXT);
-				g2.drawString(title, 39, 25);
-				g2.setFont(appFont(Font.PLAIN, 9));
-				g2.setColor(APP_MUTED_TEXT);
-				drawWrappedText(g2, description, 11, 47, getWidth() - 22, 11, 2);
+				g2.setColor(selected ? NebulaDesign.ACCENT : NebulaDesign.TEXT_TERTIARY);
+				icon.paintIcon(this, g2, 12, 12);
+				g2.setFont(NebulaDesign.fontMedium(12.5f));
+				g2.setColor(NebulaDesign.TEXT_PRIMARY);
+				g2.drawString(title, 40, 26);
+				g2.setFont(NebulaDesign.fontBody(10.5f));
+				g2.setColor(NebulaDesign.TEXT_TERTIARY);
+				drawWrappedText(g2, description, 12, 48, getWidth() - 24, 12, 2);
 
 				if (selected)
 				{
-					g2.setColor(APP_BLUE);
-					g2.fillOval(getWidth() - 17, 10, 7, 7);
+					g2.setColor(NebulaDesign.ACCENT);
+					g2.fillOval(getWidth() - 18, 11, 7, 7);
 				}
 				g2.dispose();
 			}
@@ -2059,21 +2159,26 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			{
 				super(text);
 				this.accentColor = accentColor;
-				setFont(new Font("SansSerif", Font.BOLD, 11));
-				setForeground(accentColor.darker());
-				setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+				setFont(NebulaDesign.fontSmall());
+				setForeground(accentColor);
+				setBorder(BorderFactory.createEmptyBorder(4, 11, 4, 11));
 				setOpaque(false);
 			}
 
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-				g2.setColor(new Color(accentColor.getRed(), accentColor.getGreen(), accentColor.getBlue(), 34));
-				g2.fillRoundRect(0, 0, getWidth(), getHeight(), SURFACE_RADIUS, SURFACE_RADIUS);
-				g2.setColor(new Color(accentColor.getRed(), accentColor.getGreen(), accentColor.getBlue(), 90));
-				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, SURFACE_RADIUS, SURFACE_RADIUS);
+				NebulaDesign.prepare(g2);
+				int arc = getHeight();
+				g2.setColor(StudioNightTheme.withAlpha(accentColor, 34));
+				g2.fillRoundRect(0, 0, getWidth(), getHeight(), arc, arc);
+				g2.setColor(StudioNightTheme.withAlpha(accentColor, 82));
+				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, arc, arc);
 				g2.dispose();
+				if (getForeground() != accentColor)
+				{
+					setForeground(accentColor);
+				}
 				super.paintComponent(graphics);
 			}
 		}
@@ -2092,8 +2197,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				int algorithm = algorithmIndexForName(value == null ? "" : value.toString());
 				label.setIcon(new LineIcon(iconForAlgorithm(algorithm), 17));
 				label.setIconTextGap(9);
-				label.setFont(appFont(index < 0 ? Font.BOLD : Font.PLAIN, 13));
-				label.setBorder(BorderFactory.createEmptyBorder(7, 9, 7, 9));
+				label.setFont(index < 0
+						? NebulaDesign.fontMedium(12.5f)
+						: NebulaDesign.fontBody(12.5f));
+				label.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 10));
 				return label;
 			}
 		}
@@ -2119,8 +2226,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						: LineIconType.SETTINGS;
 				label.setIcon(new LineIcon(icon, 17));
 				label.setIconTextGap(9);
-				label.setFont(appFont(index < 0 ? Font.BOLD : Font.PLAIN, 13));
-				label.setBorder(BorderFactory.createEmptyBorder(7, 9, 7, 9));
+				label.setFont(index < 0
+						? NebulaDesign.fontMedium(12.5f)
+						: NebulaDesign.fontBody(12.5f));
+				label.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 10));
 				return label;
 			}
 		}
@@ -2203,11 +2312,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				this.field = field;
 				this.minimum = minimum;
 				this.step = Math.max(1, step);
-				setOpaque(true);
-				setBackground(APP_SURFACE);
-				setBorder(BorderFactory.createLineBorder(APP_BORDER, 1));
+				setOpaque(false);
 
-				field.setBorder(BorderFactory.createEmptyBorder(7, 9, 7, 4));
+				field.setBorder(BorderFactory.createEmptyBorder(7, 8, 7, 2));
+				field.setFont(NebulaDesign.fontMono(12.5f));
+				field.setBackground(APP_SURFACE_ALT);
 				field.setOpaque(false);
 				add(field, BorderLayout.CENTER);
 
@@ -2232,7 +2341,23 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				controls.add(decrementButton);
 				controls.add(incrementButton);
 				add(controls, BorderLayout.EAST);
-				setPreferredSize(new Dimension(150, 40));
+				setPreferredSize(new Dimension(126, 38));
+				setMinimumSize(new Dimension(96, 38));
+			}
+
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
+				g2.setColor(isEnabled() ? NebulaDesign.SURFACE_ALT : NebulaDesign.INSET);
+				g2.fillRoundRect(0, 0, getWidth(), getHeight(),
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g2.setColor(isEnabled()
+						? NebulaDesign.BORDER_STRONG : NebulaDesign.BORDER_SUBTLE);
+				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g2.dispose();
+				super.paintComponent(graphics);
 			}
 
 			private void adjustValue(int delta)
@@ -2258,7 +2383,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				field.setEnabled(enabled);
 				decrementButton.setEnabled(enabled);
 				incrementButton.setEnabled(enabled);
-				setBackground(enabled ? APP_SURFACE : APP_SURFACE_ALT);
 				repaint();
 			}
 		}
@@ -2268,36 +2392,301 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			StepperButton(String text)
 			{
 				super(text);
-				setFont(new Font("SansSerif", Font.BOLD, 15));
+				setFont(NebulaDesign.fontMedium(14f));
 				setForeground(APP_MUTED_TEXT);
-				setPreferredSize(new Dimension(32, 38));
+				setPreferredSize(new Dimension(26, 34));
 				setFocusPainted(false);
 				setContentAreaFilled(false);
-				setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, APP_BORDER));
+				setOpaque(false);
+				setBorder(BorderFactory.createEmptyBorder());
 				setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 			}
 
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				if (getModel().isPressed())
+				NebulaDesign.prepare(g2);
+				if (isEnabled() && getModel().isPressed())
 				{
-					g2.setColor(StudioNightTheme.isNightMode()
-							? StudioNightTheme.NIGHT_BORDER : new Color(220, 231, 244));
+					g2.setColor(StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 74));
+					g2.fillRoundRect(2, 4, getWidth() - 4, getHeight() - 8, 7, 7);
 				}
-				else if (getModel().isRollover())
+				else if (isEnabled() && getModel().isRollover())
 				{
-					g2.setColor(StudioNightTheme.isNightMode()
-							? StudioNightTheme.NIGHT_SURFACE_ALT : new Color(235, 243, 252));
+					g2.setColor(StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 40));
+					g2.fillRoundRect(2, 4, getWidth() - 4, getHeight() - 8, 7, 7);
+				}
+				setForeground(isEnabled()
+						? NebulaDesign.TEXT_SECONDARY : NebulaDesign.TEXT_TERTIARY);
+				g2.dispose();
+				super.paintComponent(graphics);
+			}
+		}
+
+		/**
+		 * Soft rounded surface used for inline cards: tinted fills, console
+		 * wells, and status blocks. Never opaque, so the theme walk leaves the
+		 * adaptive tokens intact and both modes resolve at paint time.
+		 */
+		private static class TintPanel extends JPanel
+		{
+			private final Color fillColor;
+			private final Color lineColor;
+			private final int radius;
+
+			TintPanel(LayoutManager layout, Color fillColor, Color lineColor, int radius)
+			{
+				super(layout);
+				this.fillColor = fillColor;
+				this.lineColor = lineColor;
+				this.radius = radius;
+				setOpaque(false);
+			}
+
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
+				if (fillColor != null)
+				{
+					g2.setColor(fillColor);
+					g2.fillRoundRect(0, 0, getWidth(), getHeight(), radius, radius);
+				}
+				if (lineColor != null)
+				{
+					g2.setColor(lineColor);
+					g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, radius, radius);
+				}
+				g2.dispose();
+				super.paintComponent(graphics);
+			}
+		}
+
+		/**
+		 * Label that keeps its Nebula token colour in both modes. The theme
+		 * walk rewrites plain label foregrounds when night mode is applied;
+		 * re-asserting the token at paint time keeps captions, eyebrows, and
+		 * field labels exactly on-palette.
+		 */
+		private static final class TokenLabel extends JLabel
+		{
+			private final Color tokenColor;
+
+			TokenLabel(String text, Font font, Color tokenColor)
+			{
+				super(text);
+				this.tokenColor = tokenColor;
+				setFont(font);
+				setForeground(tokenColor);
+			}
+
+			protected void paintComponent(Graphics graphics)
+			{
+				if (getForeground() != tokenColor)
+				{
+					setForeground(tokenColor);
+				}
+				super.paintComponent(graphics);
+			}
+		}
+
+		/** 16px rounded checkbox: token outline in the off state, accent fill with a check when on. */
+		private static final class NebulaCheckIcon implements Icon
+		{
+			public int getIconWidth()
+			{
+				return 16;
+			}
+
+			public int getIconHeight()
+			{
+				return 16;
+			}
+
+			public void paintIcon(Component component, Graphics graphics, int x, int y)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
+				boolean selected = false;
+				boolean rollover = false;
+				boolean enabled = component.isEnabled();
+				if (component instanceof AbstractButton)
+				{
+					AbstractButton button = (AbstractButton) component;
+					selected = button.isSelected();
+					rollover = button.getModel().isRollover();
+				}
+				if (rollover && enabled)
+				{
+					g2.setColor(StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 34));
+					g2.fillRoundRect(x - 3, y - 3, 22, 22, 8, 8);
+				}
+				if (selected && enabled)
+				{
+					g2.setColor(NebulaDesign.ACCENT);
+					g2.fillRoundRect(x, y, 16, 16, 5, 5);
+					g2.setColor(NebulaDesign.TEXT_ON_ACCENT);
+					g2.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+					g2.drawLine(x + 4, y + 8, x + 7, y + 11);
+					g2.drawLine(x + 7, y + 11, x + 12, y + 5);
 				}
 				else
 				{
-					g2.setColor(StudioNightTheme.isNightMode()
-							? StudioNightTheme.NIGHT_PANEL_INK : new Color(248, 250, 252));
+					g2.setColor(enabled ? NebulaDesign.SURFACE_ALT : NebulaDesign.INSET);
+					g2.fillRoundRect(x, y, 16, 16, 5, 5);
+					g2.setColor(enabled ? NebulaDesign.BORDER_STRONG : NebulaDesign.BORDER_SUBTLE);
+					g2.drawRoundRect(x, y, 15, 15, 5, 5);
+					if (selected)
+					{
+						g2.setColor(NebulaDesign.TEXT_TERTIARY);
+						g2.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+						g2.drawLine(x + 4, y + 8, x + 7, y + 11);
+						g2.drawLine(x + 7, y + 11, x + 12, y + 5);
+					}
 				}
-				g2.fillRect(0, 0, getWidth(), getHeight());
 				g2.dispose();
+			}
+		}
+
+		/** Flat combo box: rounded token field, chevron arrow, themed popup list. */
+		private static final class NebulaComboBoxUI extends javax.swing.plaf.basic.BasicComboBoxUI
+		{
+			protected JButton createArrowButton()
+			{
+				JButton button = new JButton()
+				{
+					protected void paintComponent(Graphics graphics)
+					{
+						Graphics2D g2 = (Graphics2D) graphics.create();
+						NebulaDesign.prepare(g2);
+						NebulaWidgets.paintChevron(
+								g2,
+								getWidth() / 2,
+								getHeight() / 2 - 1,
+								9,
+								isEnabled()
+										? NebulaDesign.TEXT_SECONDARY
+										: NebulaDesign.TEXT_TERTIARY);
+						g2.dispose();
+					}
+				};
+				button.setBorder(BorderFactory.createEmptyBorder());
+				button.setContentAreaFilled(false);
+				button.setFocusPainted(false);
+				button.setOpaque(false);
+				button.setPreferredSize(new Dimension(26, 26));
+				return button;
+			}
+
+			protected javax.swing.plaf.basic.ComboPopup createPopup()
+			{
+				javax.swing.plaf.basic.BasicComboPopup popup =
+						new javax.swing.plaf.basic.BasicComboPopup(comboBox);
+				popup.setBorder(BorderFactory.createCompoundBorder(
+						BorderFactory.createLineBorder(NebulaDesign.BORDER_STRONG, 1),
+						BorderFactory.createEmptyBorder(4, 4, 4, 4)));
+				JList<Object> list = popup.getList();
+				list.setBackground(NebulaDesign.SURFACE);
+				list.setForeground(NebulaDesign.TEXT_PRIMARY);
+				list.setSelectionBackground(NebulaDesign.ACCENT_SOFT);
+				list.setSelectionForeground(NebulaDesign.TEXT_PRIMARY);
+				return popup;
+			}
+
+			public void paint(Graphics graphics, JComponent component)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
+				boolean enabled = component.isEnabled();
+				g2.setColor(enabled ? NebulaDesign.SURFACE_ALT : NebulaDesign.INSET);
+				g2.fillRoundRect(0, 0, component.getWidth(), component.getHeight(),
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g2.setColor(comboBox.isPopupVisible()
+						? NebulaDesign.ACCENT
+						: NebulaDesign.BORDER_STRONG);
+				g2.drawRoundRect(0, 0, component.getWidth() - 1, component.getHeight() - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g2.dispose();
+				super.paint(graphics, component);
+			}
+
+			public void paintCurrentValueBackground(
+					Graphics graphics,
+					Rectangle bounds,
+					boolean hasFocus)
+			{
+				// The rounded field is painted once for the whole control.
+			}
+		}
+
+		/**
+		 * Neutral pill menu used in the hero action row. Keeps the JMenu
+		 * behaviour (items, mnemonics, popup) but paints like a Nebula
+		 * neutral button with a chevron.
+		 */
+		private static final class MenuButton extends JMenu
+		{
+			MenuButton(String text)
+			{
+				super(text);
+				setFont(NebulaDesign.fontMedium(12.5f));
+				setForeground(NebulaDesign.TEXT_PRIMARY);
+				setOpaque(false);
+				setBorderPainted(false);
+				setBorder(BorderFactory.createEmptyBorder(9, 14, 9, 28));
+				setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			}
+
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
+				boolean active = isSelected() || getModel().isRollover();
+				g2.setColor(active ? NebulaDesign.SURFACE_ALT : NebulaDesign.SURFACE);
+				g2.fillRoundRect(0, 0, getWidth(), getHeight() - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g2.setColor(active
+						? StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 120)
+						: NebulaDesign.BORDER_STRONG);
+				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 2,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				NebulaWidgets.paintChevron(
+						g2,
+						getWidth() - 15,
+						getHeight() / 2 - 1,
+						8,
+						NebulaDesign.TEXT_SECONDARY);
+				g2.dispose();
+				setForeground(NebulaDesign.TEXT_PRIMARY);
 				super.paintComponent(graphics);
+			}
+		}
+
+		/** Padded list renderer for the plain choice combo boxes. */
+		private static final class PaddedChoiceRenderer extends DefaultListCellRenderer
+		{
+			private final int alignment;
+
+			PaddedChoiceRenderer(int alignment)
+			{
+				this.alignment = alignment;
+			}
+
+			public Component getListCellRendererComponent(
+					JList<?> list,
+					Object value,
+					int index,
+					boolean isSelected,
+					boolean cellHasFocus)
+			{
+				JLabel label = (JLabel) super.getListCellRendererComponent(
+						list, value, index, isSelected, cellHasFocus);
+				label.setHorizontalAlignment(alignment);
+				label.setFont(index < 0
+						? NebulaDesign.fontMedium(12.5f)
+						: NebulaDesign.fontBody(12.5f));
+				label.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 10));
+				return label;
 			}
 		}
 
@@ -2314,13 +2703,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				setBorder(BorderFactory.createEmptyBorder(5, 7, 5, 7));
 				indexBadge = new JLabel();
 				indexBadge.setHorizontalAlignment(SwingConstants.CENTER);
-				indexBadge.setPreferredSize(new Dimension(38, 26));
-				indexBadge.setFont(appFont(Font.BOLD, 11));
+				indexBadge.setPreferredSize(new Dimension(34, 26));
+				indexBadge.setFont(NebulaDesign.fontMono(11f));
 
 				userName = new JLabel();
-				userName.setFont(appFont(Font.BOLD, 13));
+				userName.setFont(NebulaDesign.fontMedium(13f));
 				detail = new JLabel();
-				detail.setFont(appFont(Font.PLAIN, 11));
+				detail.setFont(NebulaDesign.fontBody(11f));
 
 				JPanel textStack = new JPanel();
 				textStack.setOpaque(false);
@@ -2344,25 +2733,26 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				userName.setText(parts[0]);
 				detail.setText(parts.length > 1 ? parts[1] : "Recommendation target");
 
-				boolean night = StudioNightTheme.isNightMode();
-				Color background = isSelected ? APP_SELECTION : APP_SURFACE;
-				Color foreground = isSelected
-						? night ? StudioNightTheme.NIGHT_TEXT : new Color(0, 68, 136)
-						: APP_TEXT;
-				Color muted = isSelected
-						? night ? StudioNightTheme.NIGHT_MUTED : new Color(38, 105, 170)
-						: APP_MUTED_TEXT;
+				Color background = isSelected
+						? NebulaDesign.ACCENT_SOFT : NebulaDesign.SURFACE;
 				setBackground(background);
-				userName.setForeground(foreground);
-				detail.setForeground(muted);
-				indexBadge.setForeground(isSelected ? Color.WHITE : APP_BLUE);
+				setBorder(BorderFactory.createCompoundBorder(
+						BorderFactory.createMatteBorder(0, 3, 0, 0,
+								isSelected
+										? NebulaDesign.ACCENT
+										: NebulaDesign.withAlpha(NebulaDesign.currentSurface(), 0)),
+						BorderFactory.createEmptyBorder(5, 7, 5, 7)));
+				userName.setForeground(NebulaDesign.TEXT_PRIMARY);
+				detail.setForeground(NebulaDesign.TEXT_TERTIARY);
+				indexBadge.setForeground(isSelected
+						? NebulaDesign.TEXT_ON_ACCENT : NebulaDesign.TEXT_SECONDARY);
 				indexBadge.setBorder(BorderFactory.createCompoundBorder(
-						BorderFactory.createLineBorder(isSelected ? APP_BLUE
-								: night ? StudioNightTheme.NIGHT_BORDER : new Color(181, 212, 246), 1),
+						BorderFactory.createLineBorder(isSelected
+								? NebulaDesign.ACCENT : NebulaDesign.BORDER_SUBTLE, 1),
 						BorderFactory.createEmptyBorder(4, 6, 4, 6)));
 				indexBadge.setOpaque(true);
-				indexBadge.setBackground(isSelected ? APP_BLUE
-						: night ? StudioNightTheme.NIGHT_PANEL_INK : new Color(238, 247, 255));
+				indexBadge.setBackground(isSelected
+						? NebulaDesign.ACCENT : NebulaDesign.SURFACE_ALT);
 				return this;
 			}
 		}
@@ -2430,7 +2820,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				super(new BorderLayout(0, 12), APP_SURFACE);
 				setBorder(BorderFactory.createEmptyBorder(14, 14, 16, 14));
 				setAlignmentX(Component.LEFT_ALIGNMENT);
-				int cardHeight = 82 + Math.max(1, result.recommendations.size()) * 47;
+				int cardHeight = 80 + Math.max(1, result.recommendations.size()) * 58;
 				setPreferredSize(new Dimension(390, cardHeight));
 				setMaximumSize(new Dimension(Integer.MAX_VALUE, cardHeight));
 
@@ -2441,12 +2831,14 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				JPanel identity = new JPanel();
 				identity.setOpaque(false);
 				identity.setLayout(new BoxLayout(identity, BoxLayout.Y_AXIS));
-				JLabel targetLabel = new JLabel("TARGET USER");
-				targetLabel.setForeground(APP_MUTED_TEXT);
-				targetLabel.setFont(appFont(Font.BOLD, 10));
-				JLabel userLabel = new JLabel(result.targetUser);
-				userLabel.setForeground(APP_TEXT);
-				userLabel.setFont(appFont(Font.BOLD, 15));
+				JLabel targetLabel = new TokenLabel(
+						"TARGET USER",
+						NebulaDesign.fontSection(),
+						NebulaDesign.TEXT_TERTIARY);
+				JLabel userLabel = new TokenLabel(
+						result.targetUser,
+						NebulaDesign.fontSemiBold(15f),
+						NebulaDesign.TEXT_PRIMARY);
 				identity.add(targetLabel);
 				identity.add(Box.createRigidArea(new Dimension(0, 2)));
 				identity.add(userLabel);
@@ -2457,18 +2849,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						? "FOLLOWEE ACCOUNTS"
 						: result.candidateType == RecommendationCandidateType.USER
 						? "SIMILAR USERS" : "RANKED MATCHES";
-				JLabel matchCount = new JLabel(result.status == RecommendationResultStatus.OK
-						? result.recommendations.size() + " " + resultType
-						: result.status.toString().replace('_', ' '));
-				matchCount.setForeground(result.status == RecommendationResultStatus.OK
-						? APP_GREEN : new Color(177, 65, 57));
-				matchCount.setFont(appFont(Font.BOLD, 10));
-				matchCount.setBorder(BorderFactory.createCompoundBorder(
-						BorderFactory.createLineBorder(new Color(168, 220, 198), 1),
-						BorderFactory.createEmptyBorder(6, 8, 6, 8)));
-				matchCount.setOpaque(true);
-				matchCount.setBackground(result.status == RecommendationResultStatus.OK
-						? new Color(237, 249, 243) : new Color(254, 241, 240));
+				BadgeLabel matchCount = new BadgeLabel(
+						result.status == RecommendationResultStatus.OK
+								? result.recommendations.size() + " " + resultType
+								: result.status.toString().replace('_', ' '),
+						result.status == RecommendationResultStatus.OK
+								? NebulaDesign.SUCCESS : NebulaDesign.DANGER);
 
 				header.add(identity, BorderLayout.CENTER);
 				header.add(matchCount, BorderLayout.EAST);
@@ -2481,11 +2867,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				}
 				if (result.recommendations.isEmpty())
 				{
-					JLabel emptyMessage = new JLabel(
+					JLabel emptyMessage = new TokenLabel(
 							result.message == null ? "No recommendation candidates were available."
-									: result.message);
-					emptyMessage.setForeground(APP_MUTED_TEXT);
-					emptyMessage.setFont(appFont(Font.PLAIN, 12));
+									: result.message,
+							NebulaDesign.fontBody(12f),
+							NebulaDesign.TEXT_SECONDARY);
 					rankedResults.add(emptyMessage);
 				}
 
@@ -2497,41 +2883,34 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		private JPanel createRecommendationRankRow(int rank, RecommendationMatch match)
 		{
 			boolean topResult = rank == 1;
-			Color accent = topResult ? APP_BLUE
-					: rank == 2 ? new Color(128, 88, 216)
-					: rank == 3 ? APP_GREEN
-					: new Color(207, 125, 31);
-			Color rowBackground = StudioNightTheme.isNightMode()
-					? (topResult ? StudioNightTheme.NIGHT_SURFACE_ALT
-							: StudioNightTheme.NIGHT_PANEL_INK)
-					: (topResult ? new Color(238, 247, 255) : new Color(248, 250, 252));
+			Color accent = NebulaDesign.chartColor(rank - 1);
 
-			JPanel row = new JPanel(new BorderLayout(10, 0));
-			row.setBackground(rowBackground);
-			row.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(
-							new Color(accent.getRed(), accent.getGreen(), accent.getBlue(), 90), 1),
-					BorderFactory.createEmptyBorder(8, 9, 8, 10)));
+			JPanel row = new TintPanel(
+					new BorderLayout(10, 0),
+					topResult ? NebulaDesign.ACCENT_SOFT : NebulaDesign.SURFACE_ALT,
+					topResult ? accentLine(110) : NebulaDesign.BORDER_SUBTLE,
+					NebulaDesign.RADIUS_CONTROL);
+			row.setBorder(BorderFactory.createEmptyBorder(9, 11, 9, 12));
 
 			JLabel rankBadge = new JLabel(Integer.toString(rank));
 			rankBadge.setHorizontalAlignment(SwingConstants.CENTER);
-			rankBadge.setPreferredSize(new Dimension(28, 28));
-			rankBadge.setForeground(Color.WHITE);
-			rankBadge.setBackground(accent);
+			rankBadge.setPreferredSize(new Dimension(26, 26));
+			rankBadge.setForeground(accent);
+			rankBadge.setBackground(StudioNightTheme.withAlpha(accent, 38));
 			rankBadge.setOpaque(true);
-			rankBadge.setFont(appFont(Font.BOLD, 12));
+			rankBadge.setFont(NebulaDesign.fontMono(11.5f));
 
 			JPanel namePanel = new JPanel();
 			namePanel.setOpaque(false);
 			namePanel.setLayout(new BoxLayout(namePanel, BoxLayout.Y_AXIS));
-			JLabel name = new JLabel(match.name);
-			name.setForeground(APP_TEXT);
-			name.setFont(appFont(Font.BOLD, 13));
-			JLabel description = new JLabel(match.detail != null
-					? match.detail
-					: topResult ? "Highest-ranked recommendation" : "Ranked recommendation");
-			description.setForeground(APP_MUTED_TEXT);
-			description.setFont(appFont(Font.PLAIN, 10));
+			JLabel name = new TokenLabel(
+					match.name, NebulaDesign.fontMedium(13f), NebulaDesign.TEXT_PRIMARY);
+			JLabel description = new TokenLabel(
+					match.detail != null
+							? match.detail
+							: topResult ? "Highest-ranked recommendation" : "Ranked recommendation",
+					NebulaDesign.fontBody(10.5f),
+					NebulaDesign.TEXT_TERTIARY);
 			namePanel.add(name);
 			namePanel.add(description);
 
@@ -2542,22 +2921,21 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			resultMeta.setLayout(new BoxLayout(resultMeta, BoxLayout.Y_AXIS));
 			if (match.score != null)
 			{
-				JLabel scoreLabel = new JLabel("MODEL SCORE");
-				scoreLabel.setForeground(APP_MUTED_TEXT);
-				scoreLabel.setFont(appFont(Font.BOLD, 8));
+				JLabel scoreLabel = new TokenLabel(
+						"MODEL SCORE",
+						NebulaDesign.fontSemiBold(9f),
+						NebulaDesign.TEXT_TERTIARY);
 				scoreLabel.setAlignmentX(Component.RIGHT_ALIGNMENT);
-				JLabel scoreValue = new JLabel(match.score);
-				scoreValue.setForeground(accent);
-				scoreValue.setFont(appFont(Font.BOLD, 11));
+				JLabel scoreValue = new TokenLabel(
+						match.score, NebulaDesign.fontMono(11.5f), accent);
 				scoreValue.setAlignmentX(Component.RIGHT_ALIGNMENT);
 				resultMeta.add(scoreLabel);
 				resultMeta.add(scoreValue);
 			}
 			else if (topResult)
 			{
-				JLabel topBadge = new JLabel("TOP RESULT");
-				topBadge.setForeground(APP_BLUE);
-				topBadge.setFont(appFont(Font.BOLD, 9));
+				JLabel topBadge = new TokenLabel(
+						"TOP RESULT", NebulaDesign.fontSection(), NebulaDesign.ACCENT);
 				topBadge.setAlignmentX(Component.RIGHT_ALIGNMENT);
 				resultMeta.add(topBadge);
 			}
@@ -2574,21 +2952,22 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			{
 				super(getInitials(userName));
 				setHorizontalAlignment(SwingConstants.CENTER);
-				setPreferredSize(new Dimension(42, 42));
-				setForeground(Color.WHITE);
-				setFont(appFont(Font.BOLD, 13));
+				setPreferredSize(new Dimension(40, 40));
+				setForeground(NebulaDesign.TEXT_ON_ACCENT);
+				setFont(NebulaDesign.fontSemiBold(13f));
 				setOpaque(false);
 			}
 
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-				g2.setColor(new Color(224, 239, 255));
+				NebulaDesign.prepare(g2);
+				g2.setColor(NebulaDesign.ACCENT_SOFT);
 				g2.fillOval(0, 0, getWidth(), getHeight());
-				g2.setColor(APP_BLUE);
+				g2.setColor(NebulaDesign.ACCENT);
 				g2.fillOval(3, 3, getWidth() - 6, getHeight() - 6);
 				g2.dispose();
+				setForeground(NebulaDesign.TEXT_ON_ACCENT);
 				super.paintComponent(graphics);
 			}
 		}
@@ -2611,7 +2990,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				this.pressedColor = pressedColor;
 				this.enabledForeground = foreground;
 				setForeground(foreground);
-					setFont(new Font("SansSerif", Font.BOLD, 13));
+					setFont(NebulaDesign.fontMedium(13f));
 					setFocusPainted(false);
 					setContentAreaFilled(false);
 					setBorderPainted(false);
@@ -2659,19 +3038,48 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g2 = (Graphics2D) graphics.create();
-				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+				NebulaDesign.prepare(g2);
+				boolean neutral = baseColor == APP_NEUTRAL;
+				int radius = 10;
+				int width = getWidth();
+				int height = getHeight();
 				Color fill = getModel().isPressed() ? pressedColor : blend(baseColor, hoverColor, hoverProgress);
 				if (!isEnabled())
 				{
-					fill = new Color(218, 224, 232);
-					setForeground(new Color(126, 136, 150));
+					fill = NebulaDesign.SURFACE_ALT;
+					setForeground(NebulaDesign.TEXT_TERTIARY);
 				}
 				else
 				{
 					setForeground(enabledForeground);
 				}
+				if (isEnabled() && !neutral && !StudioNightTheme.isNightMode())
+				{
+					g2.setColor(StudioNightTheme.withAlpha(fill, 60));
+					g2.fillRoundRect(1, 3, width - 2, height - 3, radius + 2, radius + 2);
+				}
+				if (isEnabled() && hoverProgress > 0.05f)
+				{
+					g2.setColor(StudioNightTheme.withAlpha(
+							neutral ? NebulaDesign.currentAccent() : fill,
+							Math.round(50 * hoverProgress)));
+					g2.fillRoundRect(-2, 0, width + 4, height + 1, radius + 4, radius + 4);
+				}
 				g2.setColor(fill);
-				g2.fillRoundRect(0, 0, getWidth(), getHeight(), SURFACE_RADIUS, SURFACE_RADIUS);
+				g2.fillRoundRect(0, 0, width, height - 1, radius, radius);
+				if (neutral)
+				{
+					g2.setColor(isEnabled() && hoverProgress > 0.4f
+							? StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 130)
+							: NebulaDesign.currentBorderStrong());
+					g2.drawRoundRect(0, 0, width - 1, height - 2, radius, radius);
+				}
+				if (isFocusOwner())
+				{
+					g2.setColor(StudioNightTheme.withAlpha(NebulaDesign.currentAccent(), 110));
+					g2.setStroke(new BasicStroke(1.6f));
+					g2.drawRoundRect(1, 1, width - 3, height - 4, radius - 1, radius - 1);
+				}
 				g2.dispose();
 				super.paintComponent(graphics);
 			}
@@ -2820,17 +3228,16 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			String[] algorithmsSelection = {"Similarity", "K-Means", "SVM", "MLP", "Doc2Vec", "Common-Neighbors", "K-meansEuclidean", "Scalable Linear SVM", "Temporal Graph Foundation"};
 			algorithmSelectionBox = new JComboBox<String>(algorithmsSelection);
 			algorithmSelectionBox.setSelectedIndex(K_MEANS);
-			algorithmSelectionBox.setRenderer(new AlgorithmChoiceRenderer());
 			algorithmSelectionBox.addActionListener(new AlgorithmSelectionListener());
 			algorithmSelectionBox.setToolTipText(
 					"SVM preserves the original exact calibrated SMO model. "
 					+ "Scalable Linear SVM and Temporal Graph Foundation are separate experimental models.");
 			styleComboBox(algorithmSelectionBox);
+			algorithmSelectionBox.setRenderer(new AlgorithmChoiceRenderer());
 
 			recommendationTargetModeBox =
 					new JComboBox<RecommendationTargetMode>(RecommendationTargetMode.values());
 			recommendationTargetModeBox.setSelectedItem(RecommendationTargetMode.ALGORITHM_DEFAULT);
-			recommendationTargetModeBox.setRenderer(new RecommendationModeRenderer());
 			recommendationTargetModeBox.setToolTipText(
 					"Algorithm Default preserves the original recommender output. "
 					+ "Explicit modes choose similar users or followee accounts.");
@@ -2843,12 +3250,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				}
 			});
 			styleComboBox(recommendationTargetModeBox);
+			recommendationTargetModeBox.setRenderer(new RecommendationModeRenderer());
 
 			String[] simulationSelection = {"0", "1", "2", "3", "4", "5"};       // added by Sepide
 			simulationSelectionBox = new JComboBox<String>(simulationSelection);       // added by Sepide
 			simulationSelectionBox.setSelectedIndex(zero);          // added by Sepide
-			((JLabel)simulationSelectionBox.getRenderer()).setHorizontalAlignment(SwingConstants.CENTER);     // added by Sepide
 			styleComboBox(simulationSelectionBox);
+			simulationSelectionBox.setRenderer(new PaddedChoiceRenderer(SwingConstants.CENTER));     // added by Sepide
 			simulationSelectionBox.addActionListener(new ActionListener()
 			{
 				public void actionPerformed(ActionEvent event)
@@ -2862,16 +3270,16 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			String[] mappersSelection = {"Feature Extraction", "Clustering"};
 			mapperSelectionBox = new JComboBox<String>(mappersSelection);
 			mapperSelectionBox.setSelectedIndex(FEATURE_EXTRACTION);
-			((JLabel)mapperSelectionBox.getRenderer()).setHorizontalAlignment(SwingConstants.CENTER);
 			mapperSelectionBox.addActionListener(new MapperSelectionListener());
 			styleComboBox(mapperSelectionBox);
+			mapperSelectionBox.setRenderer(new PaddedChoiceRenderer(SwingConstants.CENTER));
 
 			String[] reducersSelection = {"Feature Extraction", "Clustering"};
 			reducerSelectionBox = new JComboBox<String>(reducersSelection);
 				reducerSelectionBox.setSelectedIndex(ALGORITHM_CLUSTERING);
-				((JLabel)reducerSelectionBox.getRenderer()).setHorizontalAlignment(SwingConstants.CENTER);
 				reducerSelectionBox.addActionListener(new ReducerSelectionListener());
 				styleComboBox(reducerSelectionBox);
+				reducerSelectionBox.setRenderer(new PaddedChoiceRenderer(SwingConstants.CENTER));
 				installSimulatorHelpRefreshListeners();
 				updateBatchUsersFieldState();
 			}
@@ -3190,11 +3598,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			}
 			if (simulatorDoc2VecCacheDeletionLocked())
 			{
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showInfo(
 						this,
 						"Stop the active simulator run before removing Doc2Vec cache files.",
-						"Simulator Is Busy",
-						JOptionPane.INFORMATION_MESSAGE);
+						"Simulator Is Busy");
 				return;
 			}
 			final File selectedDataset = selectedSimulatorDoc2VecDatasetFile();
@@ -3204,15 +3611,14 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				{
 					return;
 				}
-			int answer = JOptionPane.showConfirmDialog(
+			int answer = NebulaDialogs.showConfirm(
 					this,
-					"<html><b>Remove Doc2Vec cache for this selected dataset?</b><br>"
+					"Remove the Doc2Vec cache for this selected dataset?\n\n"
 							+ "The dataset file is not touched. The next Doc2Vec simulator run "
-							+ "will retrain the shared model before scoring.</html>",
+							+ "will retrain the shared model before scoring.",
 					"Remove Doc2Vec Cache",
-					JOptionPane.OK_CANCEL_OPTION,
-					JOptionPane.WARNING_MESSAGE);
-			if (answer != JOptionPane.OK_OPTION)
+					NebulaDialogs.TONE_WARNING);
+			if (answer != JOptionPane.YES_OPTION)
 			{
 				return;
 			}
@@ -3221,7 +3627,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			applySimulatorDoc2VecCacheMessage(
 					"CLEARING CACHE",
 					"Removing only Doc2Vec cache files tied to the selected simulator dataset.",
-					new Color(207, 125, 31));
+					NebulaDesign.WARNING);
 			setSimulatorDoc2VecCacheButtons(false, false);
 			Thread thread = new Thread(new Runnable() {
 				public void run()
@@ -3351,7 +3757,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				applySimulatorDoc2VecCacheMessage(
 						"STALE CACHE",
 						"Cache files exist for this dataset path, but not for the exact current file and Doc2Vec parameter signature. The next run will retrain.",
-						new Color(207, 125, 31));
+						NebulaDesign.WARNING);
 			}
 			else
 			{
@@ -3388,7 +3794,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			{
 				simulatorDoc2VecCacheBadge.setText(state);
 				simulatorDoc2VecCacheBadge.accentColor = color;
-				simulatorDoc2VecCacheBadge.setForeground(color.darker());
+				simulatorDoc2VecCacheBadge.setForeground(color);
 				simulatorDoc2VecCacheBadge.repaint();
 			}
 			if (simulatorDoc2VecCacheDetailLabel != null)
@@ -3725,9 +4131,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				resetExperimentButton.addActionListener(this);
 
 				applyHeapButton = createModernButton(
-						"Apply & Restart",
-						BUTTON_NEUTRAL,
-						LineIconType.RESET);
+						"Apply",
+						BUTTON_NEUTRAL);
+				applyHeapButton.setToolTipText(
+						"Apply the new maximum Java heap and restart the simulator.");
 				applyHeapButton.addActionListener(this);
 
 				algorithmSettingsButton = createModernButton(
@@ -3763,13 +4170,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				helpUserSimButton = createModernButton("Help", BUTTON_NEUTRAL, LineIconType.HELP);
 				helpUserSimButton.addActionListener(this);
 
-				dataCollectionButton = createModernButton("Collect Data", BUTTON_PRIMARY, LineIconType.COLLECT);
+				dataCollectionButton = createModernButton("Collect Data", BUTTON_NEUTRAL, LineIconType.COLLECT);
 				dataCollectionButton.addActionListener(this);
 
-				loadCorpusButton = createModernButton("Load Corpus", BUTTON_PRIMARY, LineIconType.CORPUS);
+				loadCorpusButton = createModernButton("Load Corpus", BUTTON_NEUTRAL, LineIconType.CORPUS);
 				loadCorpusButton.addActionListener(this);
 
-				setSimulatedTweetsButton = createModernButton("Tweet Count", BUTTON_PRIMARY, LineIconType.SETTINGS);
+				setSimulatedTweetsButton = createModernButton("Tweet Count", BUTTON_NEUTRAL, LineIconType.SETTINGS);
 				setSimulatedTweetsButton.addActionListener(this);
 
 				startUserSimButton = createModernButton("Start User Sim", BUTTON_SECONDARY, LineIconType.PLAY);
@@ -3890,9 +4297,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JMenuBar menuBar = new JMenuBar();
 		menuBar.setOpaque(false);
 		menuBar.setBorder(BorderFactory.createEmptyBorder());
-		JMenu fileMenu = new JMenu("File");
-		fileMenu.setFont(appFont(Font.BOLD, 13));
-		fileMenu.setForeground(APP_TEXT);
+		JMenu fileMenu = new MenuButton("File");
+		fileMenu.setToolTipText("Choose a dataset source or open the simulator help.");
 		menuBar.add(fileMenu);
 		fromTextMenu = new JMenuItem("Dataset From Text",KeyEvent.VK_T);
 		fromTextMenu.addActionListener(this);
@@ -3910,6 +4316,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		fileMenu.add(fromArtificialMenu);
 		fileMenu.addSeparator();
 		fileMenu.add(helpPerformanceMenu);
+		styleMenuItem(fromTextMenu);
+		styleMenuItem(fromDbMenu);
+		styleMenuItem(fromGenerationMenu);
+		styleMenuItem(fromArtificialMenu);
+		styleMenuItem(helpPerformanceMenu);
+		fileMenu.getPopupMenu().setBackground(APP_SURFACE);
+		fileMenu.getPopupMenu().setBorder(BorderFactory.createCompoundBorder(
+				BorderFactory.createLineBorder(NebulaDesign.BORDER_STRONG, 1),
+				BorderFactory.createEmptyBorder(5, 4, 5, 4)));
 
 		agentsListTitle = createModernTitle("List of Users");
 		chooseDatasetTitle = createModernTitle("Data Source");
@@ -3981,11 +4396,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				StudioNightTheme.wrapTab(uciRetailImportPanel, true);
 		JComponent helpTab =
 				StudioNightTheme.wrapTab(simulatorHelpPanel, true);
-		applicationTabs = new JTabbedPane();
-		applicationTabs.setFont(appFont(Font.BOLD, 12));
+		applicationTabs = new JTabbedPane(JTabbedPane.LEFT, JTabbedPane.SCROLL_TAB_LAYOUT);
+		applicationTabs.setFont(NebulaDesign.fontMedium(12.5f));
 		applicationTabs.setForeground(APP_TEXT);
 		applicationTabs.setBackground(APP_BACKGROUND_TOP);
 		applicationTabs.setBorder(BorderFactory.createEmptyBorder());
+		applicationTabs.setOpaque(false);
+		NebulaWidgets.setTabStyle(applicationTabs, NebulaWidgets.TAB_STYLE_RAIL);
+		java.util.Map<Integer, String> railSections = new java.util.HashMap<Integer, String>();
+		railSections.put(Integer.valueOf(0), "Workspace");
+		railSections.put(Integer.valueOf(5), "Studio");
+		railSections.put(Integer.valueOf(6), "Labs");
+		railSections.put(Integer.valueOf(11), "Data");
+		railSections.put(Integer.valueOf(12), "Support");
+		applicationTabs.setUI(new NebulaWidgets.RailTabbedPaneUI(railSections));
 		applicationTabs.addTab(
 				"Simulator",
 				new LineIcon(LineIconType.RECOMMENDER, 16),
@@ -4032,7 +4456,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				liveWorkloadTab,
 				"Adjust live safe-boundary queue work while the simulator is running");
 		applicationTabs.addTab(
-				"Dynamic Queue Lab (Demo)",
+				"Dynamic Queue (Demo)",
 				new LineIcon(LineIconType.NODES, 16),
 				dynamicQueueTab,
 				"Run isolated pull-queue scheduling demonstrations without producing simulator recommendations");
@@ -4113,19 +4537,25 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private ThemeChromePanel createThemeChrome()
 	{
 		ThemeChromePanel chrome = new ThemeChromePanel(new BorderLayout(14, 0));
-		chrome.setBorder(BorderFactory.createEmptyBorder(8, 14, 8, 14));
+		chrome.setBorder(BorderFactory.createEmptyBorder(9, 16, 9, 16));
+
+		JPanel brandRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+		brandRow.setOpaque(false);
+		brandRow.add(new BrandMark());
 
 		JPanel titleStack = new JPanel();
 		titleStack.setOpaque(false);
 		titleStack.setLayout(new BoxLayout(titleStack, BoxLayout.Y_AXIS));
 		JLabel product = new JLabel("DSMP Studio");
-		product.setFont(appFont(Font.BOLD, 13));
+		product.setFont(NebulaDesign.fontSemiBold(14f));
 		product.setForeground(APP_TEXT);
-		themeModeLabel = new JLabel("Day mode");
-		themeModeLabel.setFont(appFont(Font.BOLD, 10));
+		themeModeLabel = new JLabel("Distributed recommender lab · Day");
+		themeModeLabel.setFont(NebulaDesign.fontMedium(10.5f));
 		themeModeLabel.setForeground(APP_MUTED_TEXT);
 		titleStack.add(product);
+		titleStack.add(Box.createVerticalStrut(1));
 		titleStack.add(themeModeLabel);
+		brandRow.add(titleStack);
 
 		themeToggleButton = new ThemeToggleButton();
 		themeToggleButton.addActionListener(new ActionListener()
@@ -4136,14 +4566,19 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			}
 		});
 
-		chrome.add(titleStack, BorderLayout.WEST);
-		chrome.add(themeToggleButton, BorderLayout.EAST);
+		JPanel togglePanel = new JPanel(new GridBagLayout());
+		togglePanel.setOpaque(false);
+		togglePanel.add(themeToggleButton);
+
+		chrome.add(brandRow, BorderLayout.WEST);
+		chrome.add(togglePanel, BorderLayout.EAST);
 		return chrome;
 	}
 
 	private void applyNightMode(boolean enabled)
 	{
 		StudioNightTheme.setNightMode(enabled);
+		NebulaDesign.installUiDefaults();
 		if (themeToggleButton != null && themeToggleButton.isSelected() != enabled)
 		{
 			themeToggleButton.setSelected(enabled);
@@ -4176,7 +4611,9 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		boolean night = StudioNightTheme.isNightMode();
 		if (themeModeLabel != null)
 		{
-			themeModeLabel.setText(night ? "Night mode" : "Day mode");
+			themeModeLabel.setText(night
+					? "Distributed recommender lab · Night"
+					: "Distributed recommender lab · Day");
 			themeModeLabel.setForeground(night
 					? StudioNightTheme.NIGHT_MUTED
 					: APP_MUTED_TEXT);
@@ -4194,7 +4631,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private JPanel createRecommendationHeader(JMenuBar menuBar)
 	{
 		SurfacePanel headerPanel = createSurfacePanel(new BorderLayout(16, 0), APP_SURFACE);
-		headerPanel.setBorder(BorderFactory.createEmptyBorder(16, 18, 16, 18));
+		headerPanel.setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 18));
 
 		JPanel identityPanel = new JPanel(new BorderLayout(18, 0));
 		identityPanel.setOpaque(false);
@@ -4205,12 +4642,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JLabel productTitle = createHeroTitle("Distributed Recommender Simulator");
 		productTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
 		productTitle.setHorizontalAlignment(SwingConstants.LEFT);
+		titleStack.add(createHeroEyebrow("Workspace"));
 		titleStack.add(productTitle);
-		titleStack.add(Box.createRigidArea(new Dimension(0, 4)));
+		titleStack.add(Box.createRigidArea(new Dimension(0, 5)));
 		titleStack.add(createHeaderSubtitle("Run the JADE recommendation simulator."));
 		titleStack.add(createAttributionBlock());
 		identityPanel.add(titleStack, BorderLayout.WEST);
-		identityPanel.add(new SignalGraphPanel(APP_BLUE, APP_GREEN), BorderLayout.CENTER);
+		identityPanel.add(new SignalGraphPanel(APP_BLUE, NebulaDesign.PURPLE), BorderLayout.CENTER);
 
 		JPanel headerActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
 		headerActions.setOpaque(false);
@@ -4291,12 +4729,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		sourceChoices.add(generatedSourceButton);
 		sourceChoices.add(artificialSourceButton);
 
-		JPanel selectedSourcePanel = new JPanel(new BorderLayout(10, 0));
-		selectedSourcePanel.setOpaque(true);
-		selectedSourcePanel.setBackground(APP_SURFACE_ALT);
-		selectedSourcePanel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(205, 220, 238), 1),
-				BorderFactory.createEmptyBorder(10, 11, 10, 11)));
+		JPanel selectedSourcePanel = new TintPanel(
+				new BorderLayout(11, 0),
+				NebulaDesign.ACCENT_SOFT,
+				accentLine(90),
+				NebulaDesign.RADIUS_CONTROL);
+		selectedSourcePanel.setBorder(BorderFactory.createEmptyBorder(11, 13, 11, 13));
 		sourceSelectionIconLabel = new JLabel(new LineIcon(LineIconType.TEXT_FILE, 19));
 		sourceSelectionIconLabel.setForeground(APP_BLUE);
 		selectedSourcePanel.add(sourceSelectionIconLabel, BorderLayout.WEST);
@@ -4304,12 +4742,14 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JPanel selectedSourceText = new JPanel();
 		selectedSourceText.setOpaque(false);
 		selectedSourceText.setLayout(new BoxLayout(selectedSourceText, BoxLayout.Y_AXIS));
-		sourceSelectionTitleLabel = new JLabel("Text file selected");
-		sourceSelectionTitleLabel.setFont(appFont(Font.BOLD, 12));
-		sourceSelectionTitleLabel.setForeground(APP_TEXT);
-		sourceSelectionDetailLabel = new JLabel("Choose a dataset file");
-		sourceSelectionDetailLabel.setFont(appFont(Font.PLAIN, 10));
-		sourceSelectionDetailLabel.setForeground(APP_MUTED_TEXT);
+		sourceSelectionTitleLabel = new TokenLabel(
+				"Text file selected",
+				NebulaDesign.fontMedium(12.5f),
+				NebulaDesign.TEXT_PRIMARY);
+		sourceSelectionDetailLabel = new TokenLabel(
+				"Choose a dataset file",
+				NebulaDesign.fontBody(10.5f),
+				NebulaDesign.TEXT_TERTIARY);
 		selectedSourceText.add(sourceSelectionTitleLabel);
 		selectedSourceText.add(Box.createRigidArea(new Dimension(0, 2)));
 		selectedSourceText.add(sourceSelectionDetailLabel);
@@ -4317,9 +4757,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 		JPanel datasetLabelPanel = new JPanel(new BorderLayout(0, 6));
 		datasetLabelPanel.setOpaque(false);
-		JLabel datasetLabelTitle = new JLabel("Experiment label");
-		datasetLabelTitle.setFont(appFont(Font.BOLD, 11));
-		datasetLabelTitle.setForeground(APP_MUTED_TEXT);
+		JLabel datasetLabelTitle = new TokenLabel(
+				"Experiment label",
+				NebulaDesign.fontMedium(12f),
+				NebulaDesign.TEXT_SECONDARY);
+		datasetLabelTitle.setFont(NebulaDesign.fontMedium(12f));
+		datasetLabelTitle.setForeground(NebulaDesign.TEXT_SECONDARY);
 		datasetLabelTitle.setLabelFor(enterDatasetField);
 		enterDatasetField.setToolTipText(
 				"Names this dataset in result folders and database queries.");
@@ -4467,6 +4910,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 									physicalMemoryMb);
 				}
 				runtimeMemoryLabel.setText(memoryText);
+					runtimeMemoryLabel.setToolTipText(memoryText);
 
 				int requested = snapshot.getRequestedParallelism();
 				int effectiveLimit = snapshot.getEffectiveLimit();
@@ -4515,7 +4959,9 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 							requested + " node"
 									+ (requested == 1 ? "" : "s")
 									+ " requested; all run together when their models fit.");
-				}
+					}
+					runtimeSchedulerLabel.setToolTipText(
+							runtimeSchedulerLabel.getText());
 			}
 		};
 		if (SwingUtilities.isEventDispatchThread())
@@ -4538,25 +4984,23 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 		catch (IllegalArgumentException exception)
 		{
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showError(
 					this,
 					exception.getMessage(),
-					"Invalid Java Heap",
-					JOptionPane.ERROR_MESSAGE);
+					"Invalid Java Heap");
 			maxHeapField.requestFocusInWindow();
 			return;
 		}
 
 		if (RuntimeResourceSettings.isCurrentHeap(requestedHeapMb))
 		{
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showInfo(
 					this,
 					"The simulator is already running with a "
 							+ RuntimeResourceSettings.formatMegabytes(
 									requestedHeapMb)
 							+ " maximum Java heap.",
-					"Java Heap Already Active",
-					JOptionPane.INFORMATION_MESSAGE);
+					"Java Heap Already Active");
 			return;
 		}
 
@@ -4583,14 +5027,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					.append("of system memory and may cause the operating system to swap.");
 		}
 
-		int choice = JOptionPane.showConfirmDialog(
+		int choice = NebulaDialogs.showConfirm(
 				this,
 				message.toString(),
 				"Apply Java Heap",
-				JOptionPane.YES_NO_OPTION,
 				requestedHeapMb > recommendedMaximum
-						? JOptionPane.WARNING_MESSAGE
-						: JOptionPane.QUESTION_MESSAGE);
+						? NebulaDialogs.TONE_WARNING
+						: NebulaDialogs.TONE_INFO);
 		if (choice != JOptionPane.YES_OPTION)
 		{
 			return;
@@ -4626,12 +5069,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					"READY",
 					"The heap restart could not be started.",
 					StatusTone.ERROR);
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showError(
 					this,
 					"Could not restart the simulator:\n"
 							+ exception.getMessage(),
-					"Heap Restart Failed",
-					JOptionPane.ERROR_MESSAGE);
+					"Heap Restart Failed");
 		}
 	}
 
@@ -4912,6 +5354,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		if (nodeCapacitySummaryLabel != null)
 		{
 			nodeCapacitySummaryLabel.setText(NodeCapacityRegistry.summary());
+			nodeCapacitySummaryLabel.setToolTipText(NodeCapacityRegistry.summary());
 		}
 	}
 
@@ -5030,21 +5473,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		addGridComponent(
 				modelGrid,
 				createFieldBlock(
-						"Recommendation target",
-						"Choose whether results represent users or field-0 accounts.",
+						"Target mode",
+						"Recommendation target: choose whether results represent users or field-0 accounts.",
 						recommendationTargetModeBox),
 				1, 1.0, new Insets(0, 7, 0, 0));
 
-		JPanel modelContext = new JPanel();
+		JPanel modelContext = new TintPanel(
+				null,
+				NebulaDesign.SURFACE_ALT,
+				NebulaDesign.BORDER_SUBTLE,
+				NebulaDesign.RADIUS_CONTROL);
 		modelContext.setLayout(new BoxLayout(modelContext, BoxLayout.Y_AXIS));
-		modelContext.setOpaque(true);
-		modelContext.setBackground(APP_SURFACE_ALT);
-		modelContext.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(205, 220, 238), 1),
-				BorderFactory.createEmptyBorder(8, 11, 8, 11)));
-		setupModelDescriptionLabel = new JLabel();
-		setupModelDescriptionLabel.setFont(appFont(Font.BOLD, 12));
-		setupModelDescriptionLabel.setForeground(APP_TEXT);
+		modelContext.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+		setupModelDescriptionLabel = new TokenLabel(
+				"", NebulaDesign.fontMedium(12.5f), NebulaDesign.TEXT_PRIMARY);
 		setupModelDescriptionLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 		modelContext.add(setupModelDescriptionLabel);
 		modelContext.add(Box.createRigidArea(new Dimension(0, 7)));
@@ -5053,8 +5495,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		modelBadges.setOpaque(false);
 		modelBadges.setAlignmentX(Component.LEFT_ALIGNMENT);
 		setupOutputBadge = createBadge("Outputs users", APP_BLUE);
-		setupBatchBadge = createBadge("Single target", APP_GREEN);
-		setupAvailabilityBadge = createBadge("Unavailable", new Color(196, 92, 34));
+		setupBatchBadge = createBadge("Single target", NebulaDesign.INFO);
+		setupAvailabilityBadge = createBadge("Unavailable", NebulaDesign.WARNING);
 		modelBadges.add(setupOutputBadge);
 		modelBadges.add(setupBatchBadge);
 		modelBadges.add(setupAvailabilityBadge);
@@ -5086,20 +5528,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JPanel workloadGrid = new JPanel(new GridLayout(1, 4, 12, 0));
 		workloadGrid.setOpaque(false);
 		workloadGrid.add(createFieldBlock(
-				"Recommender nodes",
-				"Number of distributed recommender agents.",
+				"Nodes",
+				"Recommender nodes: number of distributed recommender agents.",
 				numNodesStepper));
 		workloadGrid.add(createFieldBlock(
-				"Latest tweets",
-				"0 uses every available tweet; otherwise use the newest count.",
+				"Tweets",
+				"Latest tweets: 0 uses every available tweet; otherwise use the newest count.",
 				tweetLimitStepper));
 		workloadGrid.add(createFieldBlock(
-				"Top results",
-				"Number of ranked recommendations shown per target.",
+				"Top K",
+				"Top results: number of ranked recommendations shown per target.",
 				recommendationStepper));
 		workloadGrid.add(createFieldBlock(
-				"Batch users",
-				"Available for exact SVM, Scalable Linear SVM, and Doc2Vec.",
+				"Batch",
+				"Batch users: available for exact SVM, Scalable Linear SVM, and Doc2Vec.",
 				batchUsersStepper));
 
 		JPanel dateRange = new JPanel(new GridBagLayout());
@@ -5112,10 +5554,9 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				"To",
 				"Experiment end date in YYYY-MM-DD format.",
 				endDateField);
-		JLabel dateArrow = new JLabel("\u2192");
+		JLabel dateArrow = new TokenLabel(
+				"\u2192", NebulaDesign.fontMedium(16f), NebulaDesign.TEXT_TERTIARY);
 		dateArrow.setHorizontalAlignment(SwingConstants.CENTER);
-		dateArrow.setForeground(APP_MUTED_TEXT);
-		dateArrow.setFont(appFont(Font.BOLD, 18));
 		addGridComponent(dateRange, beginBlock, 0, 1.0, new Insets(0, 0, 0, 8));
 		addGridComponent(dateRange, dateArrow, 1, 0.0, new Insets(23, 0, 0, 0));
 		addGridComponent(dateRange, endBlock, 2, 1.0, new Insets(0, 8, 0, 0));
@@ -5137,21 +5578,33 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						simulationSelectionBox),
 				1, 0.7, new Insets(0, 0, 0, 0));
 
-		JPanel textProcessingPanel = createSurfacePanel(new FlowLayout(FlowLayout.LEFT, 10, 0), APP_SURFACE_ALT);
-		textProcessingPanel.setBorder(BorderFactory.createCompoundBorder(textProcessingTitle, BorderFactory.createEmptyBorder(12, 12, 12, 12)));
+		JPanel textProcessingPanel = new TintPanel(
+				new GridLayout(0, 2, 14, 4),
+				NebulaDesign.SURFACE_ALT,
+				NebulaDesign.BORDER_SUBTLE,
+				NebulaDesign.RADIUS_CONTROL);
+		textProcessingPanel.setBorder(BorderFactory.createCompoundBorder(textProcessingTitle, BorderFactory.createEmptyBorder(10, 12, 12, 12)));
 		textProcessingPanel.add(removeHashTags);
 		textProcessingPanel.add(removeRetweets);
 			textProcessingPanel.add(removeStopWords);
 			textProcessingPanel.add(simulateTweetDelay);
 
-			JPanel outputOptionsPanel = createSurfacePanel(new FlowLayout(FlowLayout.LEFT, 10, 0), APP_SURFACE_ALT);
+			JPanel outputOptionsPanel = new TintPanel(
+					new FlowLayout(FlowLayout.LEFT, 10, 0),
+					NebulaDesign.SURFACE_ALT,
+					NebulaDesign.BORDER_SUBTLE,
+					NebulaDesign.RADIUS_CONTROL);
 			outputOptionsPanel.setBorder(BorderFactory.createCompoundBorder(
 					createModernTitle("Post-processing"),
-					BorderFactory.createEmptyBorder(12, 12, 12, 12)));
+					BorderFactory.createEmptyBorder(10, 12, 12, 12)));
 			outputOptionsPanel.add(generateGraphOutput);
 
-			JPanel commandsPanel = createSurfacePanel(new GridLayout(0, 2, 10, 10), APP_SURFACE_ALT);
-		commandsPanel.setBorder(BorderFactory.createCompoundBorder(commandsTitle, BorderFactory.createEmptyBorder(14, 14, 14, 14)));
+			JPanel commandsPanel = new TintPanel(
+					new GridLayout(0, 2, 10, 10),
+					NebulaDesign.SURFACE_ALT,
+					NebulaDesign.BORDER_SUBTLE,
+					NebulaDesign.RADIUS_CONTROL);
+		commandsPanel.setBorder(BorderFactory.createCompoundBorder(commandsTitle, BorderFactory.createEmptyBorder(12, 14, 14, 14)));
 		commandsPanel.add(initializeButton);
 		commandsPanel.add(startButton);
 		commandsPanel.add(simulationButton);
@@ -5203,24 +5656,24 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	private JPanel createAlgorithmSettingsPanel()
 	{
-		JPanel panel = new JPanel(new BorderLayout(12, 0));
-		panel.setOpaque(true);
-		panel.setBackground(new Color(250, 252, 255));
-		panel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(207, 218, 234), 1),
-				BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+		JPanel panel = new TintPanel(
+				new BorderLayout(12, 0),
+				NebulaDesign.SURFACE_ALT,
+				NebulaDesign.BORDER_SUBTLE,
+				NebulaDesign.RADIUS_CONTROL);
+		panel.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 		panel.setAlignmentX(Component.LEFT_ALIGNMENT);
 		panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 72));
 
 		JPanel copy = new JPanel();
 		copy.setOpaque(false);
 		copy.setLayout(new BoxLayout(copy, BoxLayout.Y_AXIS));
-		JLabel title = new JLabel("Advanced parameters");
-		title.setFont(appFont(Font.BOLD, 12));
-		title.setForeground(APP_TEXT);
-		algorithmSettingsSummaryLabel = new JLabel();
-		algorithmSettingsSummaryLabel.setFont(appFont(Font.PLAIN, 10));
-		algorithmSettingsSummaryLabel.setForeground(APP_MUTED_TEXT);
+		JLabel title = new TokenLabel(
+				"Advanced parameters",
+				NebulaDesign.fontMedium(12.5f),
+				NebulaDesign.TEXT_PRIMARY);
+		algorithmSettingsSummaryLabel = new TokenLabel(
+				"", NebulaDesign.fontBody(10.5f), NebulaDesign.TEXT_TERTIARY);
 		copy.add(title);
 		copy.add(Box.createRigidArea(new Dimension(0, 3)));
 		copy.add(algorithmSettingsSummaryLabel);
@@ -5229,7 +5682,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
 		controls.setOpaque(false);
 		algorithmSettingsProfileLabel = createBadge("Default", APP_GREEN);
-		algorithmSettingsButton.setPreferredSize(new Dimension(190, 34));
+		algorithmSettingsButton.setPreferredSize(new Dimension(178, 34));
 		controls.add(algorithmSettingsProfileLabel);
 		controls.add(algorithmSettingsButton);
 		panel.add(controls, BorderLayout.EAST);
@@ -5239,57 +5692,62 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	private JComponent createSimulatorDoc2VecCachePanel()
 	{
-		simulatorDoc2VecCachePanel =
-				createSurfacePanel(new BorderLayout(14, 0), APP_SURFACE_ALT);
-		simulatorDoc2VecCachePanel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(190, 218, 204), 1),
-				BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+		simulatorDoc2VecCachePanel = new TintPanel(
+				new BorderLayout(0, 12),
+				NebulaDesign.SURFACE_ALT,
+				NebulaDesign.BORDER_SUBTLE,
+				NebulaDesign.RADIUS_CONTROL);
+		simulatorDoc2VecCachePanel.setBorder(
+				BorderFactory.createEmptyBorder(12, 14, 12, 14));
 
 		JPanel textStack = new JPanel();
 		textStack.setOpaque(false);
 		textStack.setLayout(new BoxLayout(textStack, BoxLayout.Y_AXIS));
 		JPanel heading = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 		heading.setOpaque(false);
-		JLabel title = new JLabel("Doc2Vec cache transparency");
-		title.setFont(appFont(Font.BOLD, 12));
-		title.setForeground(APP_TEXT);
-		simulatorDoc2VecCacheBadge = createBadge("CACHE UNKNOWN", APP_MUTED_TEXT);
+		heading.setAlignmentX(Component.LEFT_ALIGNMENT);
+		JLabel title = new TokenLabel(
+				"Doc2Vec cache transparency",
+				NebulaDesign.fontMedium(12.5f),
+				NebulaDesign.TEXT_PRIMARY);
+		simulatorDoc2VecCacheBadge = createBadge("CACHE UNKNOWN", NebulaDesign.TEXT_SECONDARY);
 		heading.add(title);
 		heading.add(simulatorDoc2VecCacheBadge);
 
-		simulatorDoc2VecCacheDetailLabel = new JLabel(
-				"Choose a text dataset to inspect whether Doc2Vec will train or reuse cached vectors.");
-		simulatorDoc2VecCacheDetailLabel.setFont(appFont(Font.PLAIN, 10));
-		simulatorDoc2VecCacheDetailLabel.setForeground(APP_MUTED_TEXT);
+		simulatorDoc2VecCacheDetailLabel = new TokenLabel(
+				"Choose a text dataset to inspect whether Doc2Vec will train or reuse cached vectors.",
+				NebulaDesign.fontBody(10.5f),
+				NebulaDesign.TEXT_TERTIARY);
+		simulatorDoc2VecCacheDetailLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-		JPanel stats = new JPanel(new GridLayout(1, 5, 8, 0));
+		JPanel stats = new JPanel(new GridLayout(1, 5, 10, 0));
 		stats.setOpaque(false);
+		stats.setAlignmentX(Component.LEFT_ALIGNMENT);
 		simulatorDoc2VecRowsLabel = cacheStatValue("--");
 		simulatorDoc2VecUsersLabel = cacheStatValue("--");
 		simulatorDoc2VecVectorsLabel = cacheStatValue("--");
 		simulatorDoc2VecSizeLabel = cacheStatValue("--");
 		simulatorDoc2VecKeyLabel = cacheStatValue("--");
-		stats.add(createCacheStatBlock("Dataset rows", simulatorDoc2VecRowsLabel));
-		stats.add(createCacheStatBlock("Target users", simulatorDoc2VecUsersLabel));
-		stats.add(createCacheStatBlock("User vectors", simulatorDoc2VecVectorsLabel));
-		stats.add(createCacheStatBlock("Cache size", simulatorDoc2VecSizeLabel));
-		stats.add(createCacheStatBlock("Cache key", simulatorDoc2VecKeyLabel));
+		stats.add(createCacheStatBlock("Rows", simulatorDoc2VecRowsLabel));
+		stats.add(createCacheStatBlock("Users", simulatorDoc2VecUsersLabel));
+		stats.add(createCacheStatBlock("Vectors", simulatorDoc2VecVectorsLabel));
+		stats.add(createCacheStatBlock("Size", simulatorDoc2VecSizeLabel));
+		stats.add(createCacheStatBlock("Key", simulatorDoc2VecKeyLabel));
 
 		textStack.add(heading);
-		textStack.add(Box.createRigidArea(new Dimension(0, 4)));
+		textStack.add(Box.createRigidArea(new Dimension(0, 6)));
 		textStack.add(simulatorDoc2VecCacheDetailLabel);
-		textStack.add(Box.createRigidArea(new Dimension(0, 8)));
+		textStack.add(Box.createRigidArea(new Dimension(0, 10)));
 		textStack.add(stats);
 
-		JPanel actions = new JPanel();
+		JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
 		actions.setOpaque(false);
-		actions.setLayout(new BoxLayout(actions, BoxLayout.Y_AXIS));
 		simulatorDoc2VecRefreshButton =
-				createModernButton("Refresh Cache", BUTTON_NEUTRAL, LineIconType.RESET);
+				createModernButton("Refresh", BUTTON_NEUTRAL, LineIconType.RESET);
 		simulatorDoc2VecRemoveButton =
-				createModernButton("Remove This Cache", BUTTON_DANGER, LineIconType.CLOSE);
-		simulatorDoc2VecRefreshButton.setMaximumSize(new Dimension(176, 34));
-		simulatorDoc2VecRemoveButton.setMaximumSize(new Dimension(176, 34));
+				createModernButton("Remove cache", BUTTON_DANGER, LineIconType.CLOSE);
+		simulatorDoc2VecRefreshButton.setPreferredSize(new Dimension(122, 34));
+		simulatorDoc2VecRemoveButton.setPreferredSize(new Dimension(156, 34));
 		simulatorDoc2VecRefreshButton.setToolTipText(
 				"Re-check whether this selected dataset has a valid Doc2Vec cache.");
 		simulatorDoc2VecRemoveButton.setToolTipText(
@@ -5307,26 +5765,26 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			}
 		});
 		actions.add(simulatorDoc2VecRefreshButton);
-		actions.add(Box.createRigidArea(new Dimension(0, 7)));
 		actions.add(simulatorDoc2VecRemoveButton);
 
 		simulatorDoc2VecCachePanel.add(textStack, BorderLayout.CENTER);
-		simulatorDoc2VecCachePanel.add(actions, BorderLayout.EAST);
+		simulatorDoc2VecCachePanel.add(actions, BorderLayout.SOUTH);
 		applySimulatorDoc2VecCacheMessage(
 				"CACHE UNKNOWN",
 				"Choose a text dataset to inspect whether Doc2Vec will train or reuse cached vectors.",
-				APP_MUTED_TEXT);
+				NebulaDesign.TEXT_SECONDARY);
 		simulatorDoc2VecRemoveButton.setEnabled(false);
 		return simulatorDoc2VecCachePanel;
 	}
 
 	private JPanel createCacheStatBlock(String labelText, JLabel valueLabel)
 	{
-		JPanel block = new JPanel(new BorderLayout(0, 2));
+		JPanel block = new JPanel(new BorderLayout(0, 3));
 		block.setOpaque(false);
-		JLabel title = new JLabel(labelText);
-		title.setFont(appFont(Font.BOLD, 9));
-		title.setForeground(APP_MUTED_TEXT);
+		JLabel title = new TokenLabel(
+				labelText.toUpperCase(Locale.US),
+				NebulaDesign.fontSection(),
+				NebulaDesign.TEXT_TERTIARY);
 		block.add(title, BorderLayout.NORTH);
 		block.add(valueLabel, BorderLayout.CENTER);
 		return block;
@@ -5334,10 +5792,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	private JLabel cacheStatValue(String text)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(appFont(Font.BOLD, 12));
-		label.setForeground(APP_TEXT);
-		return label;
+		return new TokenLabel(
+				text, NebulaDesign.fontMono(12.5f), NebulaDesign.TEXT_PRIMARY);
 	}
 
 	private JPanel createRuntimeResourcesPanel()
@@ -5345,78 +5801,118 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JPanel heapControl = new JPanel(new BorderLayout(8, 0));
 		heapControl.setOpaque(false);
 		heapControl.add(maxHeapStepper, BorderLayout.CENTER);
+		applyHeapButton.setPreferredSize(new Dimension(74, 38));
 		heapControl.add(applyHeapButton, BorderLayout.EAST);
 
-		JPanel statusPanel = new JPanel(new BorderLayout(10, 0));
-		statusPanel.setOpaque(true);
-		statusPanel.setBackground(APP_SURFACE_ALT);
-		statusPanel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(205, 220, 238), 1),
-				BorderFactory.createEmptyBorder(9, 11, 9, 11)));
+		JPanel statusPanel = new TintPanel(
+				new BorderLayout(10, 0),
+				NebulaDesign.SURFACE_ALT,
+				NebulaDesign.BORDER_SUBTLE,
+				NebulaDesign.RADIUS_CONTROL);
+		statusPanel.setBorder(BorderFactory.createEmptyBorder(9, 12, 9, 12));
 		runtimeStatusPill = new StatusPill("ADAPTIVE", StatusTone.READY);
-		statusPanel.add(runtimeStatusPill, BorderLayout.WEST);
+		JPanel pillHolder = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+		pillHolder.setOpaque(false);
+		pillHolder.add(runtimeStatusPill);
+		statusPanel.add(pillHolder, BorderLayout.WEST);
 
 		JPanel statusText = new JPanel();
 		statusText.setOpaque(false);
 		statusText.setLayout(new BoxLayout(statusText, BoxLayout.Y_AXIS));
-		runtimeMemoryLabel = new JLabel("Reading JVM memory limits...");
-		runtimeMemoryLabel.setFont(appFont(Font.BOLD, 11));
-		runtimeMemoryLabel.setForeground(APP_TEXT);
-		runtimeSchedulerLabel = new JLabel(
-				"Requested nodes run together when memory permits.");
-		runtimeSchedulerLabel.setFont(appFont(Font.PLAIN, 10));
-		runtimeSchedulerLabel.setForeground(APP_MUTED_TEXT);
+		runtimeMemoryLabel = new TokenLabel(
+				"Reading JVM memory limits...",
+				NebulaDesign.fontMedium(11.5f),
+				NebulaDesign.TEXT_PRIMARY);
+		runtimeSchedulerLabel = new TokenLabel(
+				"Requested nodes run together when memory permits.",
+				NebulaDesign.fontBody(10.5f),
+				NebulaDesign.TEXT_TERTIARY);
+		runtimeMemoryLabel.setMinimumSize(new Dimension(70, 16));
+		runtimeSchedulerLabel.setMinimumSize(new Dimension(70, 14));
+		statusText.setMinimumSize(new Dimension(70, 34));
 		statusText.add(runtimeMemoryLabel);
 		statusText.add(Box.createRigidArea(new Dimension(0, 3)));
 		statusText.add(runtimeSchedulerLabel);
 		statusPanel.add(statusText, BorderLayout.CENTER);
 
-		JPanel capacityPanel = new JPanel(new BorderLayout(10, 0));
-		capacityPanel.setOpaque(true);
-		capacityPanel.setBackground(APP_SURFACE_ALT);
-		capacityPanel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(205, 220, 238), 1),
-				BorderFactory.createEmptyBorder(9, 11, 9, 11)));
+		JPanel capacityPanel = new TintPanel(
+				new BorderLayout(10, 0),
+				NebulaDesign.SURFACE_ALT,
+				NebulaDesign.BORDER_SUBTLE,
+				NebulaDesign.RADIUS_CONTROL);
+		capacityPanel.setBorder(BorderFactory.createEmptyBorder(9, 12, 9, 12));
 		JPanel capacityText = new JPanel();
 		capacityText.setOpaque(false);
 		capacityText.setLayout(new BoxLayout(capacityText, BoxLayout.Y_AXIS));
-		JLabel capacityTitle = new JLabel("Node capacity contract");
-		capacityTitle.setFont(appFont(Font.BOLD, 11));
-		capacityTitle.setForeground(APP_TEXT);
-		nodeCapacitySummaryLabel =
-				new JLabel(NodeCapacityRegistry.summary());
-		nodeCapacitySummaryLabel.setFont(appFont(Font.PLAIN, 10));
-		nodeCapacitySummaryLabel.setForeground(APP_MUTED_TEXT);
+		JLabel capacityTitle = new TokenLabel(
+				"Node capacity contract",
+				NebulaDesign.fontMedium(11.5f),
+				NebulaDesign.TEXT_PRIMARY);
+		nodeCapacitySummaryLabel = new TokenLabel(
+				NodeCapacityRegistry.summary(),
+				NebulaDesign.fontBody(10.5f),
+				NebulaDesign.TEXT_TERTIARY);
+		nodeCapacitySummaryLabel.setMinimumSize(new Dimension(70, 14));
+		capacityText.setMinimumSize(new Dimension(70, 34));
 		capacityText.add(capacityTitle);
 		capacityText.add(Box.createRigidArea(new Dimension(0, 3)));
 		capacityText.add(nodeCapacitySummaryLabel);
-		nodeCapacityButton.setPreferredSize(new Dimension(152, 34));
+		nodeCapacityButton.setPreferredSize(new Dimension(158, 34));
 		capacityPanel.add(capacityText, BorderLayout.CENTER);
 		capacityPanel.add(nodeCapacityButton, BorderLayout.EAST);
 
 		JPanel resourcesGrid = new JPanel(new GridBagLayout());
 		resourcesGrid.setOpaque(false);
-		addGridComponent(
-				resourcesGrid,
+		GridBagConstraints heapConstraints = new GridBagConstraints();
+		heapConstraints.gridx = 0;
+		heapConstraints.gridy = 0;
+		heapConstraints.weightx = 0.0;
+		heapConstraints.fill = GridBagConstraints.NONE;
+		heapConstraints.anchor = GridBagConstraints.NORTHWEST;
+		heapConstraints.insets = new Insets(0, 0, 14, 14);
+		resourcesGrid.add(
 				createFieldBlock(
-						"Maximum Java heap (MB)",
-						"Applying a new limit safely restarts the simulator.",
+						"Java heap (MB)",
+						"Maximum Java heap. Applying a new limit safely restarts the simulator.",
 						heapControl),
-				0, 1.0, new Insets(0, 0, 0, 12));
-		addGridComponent(
-				resourcesGrid,
+				heapConstraints);
+
+		GridBagConstraints heapFillerConstraints = new GridBagConstraints();
+		heapFillerConstraints.gridx = 1;
+		heapFillerConstraints.gridy = 0;
+		heapFillerConstraints.weightx = 1.0;
+		heapFillerConstraints.fill = GridBagConstraints.HORIZONTAL;
+		resourcesGrid.add(Box.createHorizontalGlue(), heapFillerConstraints);
+
+		GridBagConstraints parallelConstraints = new GridBagConstraints();
+		parallelConstraints.gridx = 0;
+		parallelConstraints.gridy = 1;
+		parallelConstraints.gridwidth = 2;
+		parallelConstraints.weightx = 1.0;
+		parallelConstraints.fill = GridBagConstraints.HORIZONTAL;
+		parallelConstraints.anchor = GridBagConstraints.NORTHWEST;
+		parallelConstraints.insets = new Insets(0, 0, 14, 0);
+		resourcesGrid.add(
 				createFieldBlock(
 						"Parallel execution",
 						"Runs all requested nodes when they fit; otherwise uses safe waves.",
 						statusPanel),
-				1, 1.25, new Insets(0, 0, 0, 12));
-		addGridComponent(
-				resourcesGrid,
+				parallelConstraints);
+
+		GridBagConstraints capacityConstraints = new GridBagConstraints();
+		capacityConstraints.gridx = 0;
+		capacityConstraints.gridy = 2;
+		capacityConstraints.gridwidth = 2;
+		capacityConstraints.weightx = 1.0;
+		capacityConstraints.fill = GridBagConstraints.HORIZONTAL;
+		capacityConstraints.anchor = GridBagConstraints.NORTHWEST;
+		capacityConstraints.insets = new Insets(0, 0, 0, 0);
+		resourcesGrid.add(
 				createFieldBlock(
 						"Node capacity",
 						"Configure CPU, memory, queue, delay, and reliability for each node.",
 						capacityPanel),
-				2, 1.35, new Insets(0, 0, 0, 0));
+				capacityConstraints);
 		return createSetupSection("Runtime resources", resourcesGrid);
 	}
 
@@ -5448,7 +5944,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		private JPanel createUserGenHeader()
 		{
 			SurfacePanel userGenHeader = createSurfacePanel(new BorderLayout(16, 0), APP_SURFACE);
-			userGenHeader.setBorder(BorderFactory.createEmptyBorder(16, 18, 16, 18));
+			userGenHeader.setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 18));
 			JPanel userGenHeaderText = new JPanel();
 			userGenHeaderText.setOpaque(false);
 			userGenHeaderText.setLayout(new BoxLayout(userGenHeaderText, BoxLayout.Y_AXIS));
@@ -5456,15 +5952,16 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			JLabel studioTitle = createHeroTitle("User Generation Studio");
 			studioTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
 			studioTitle.setHorizontalAlignment(SwingConstants.LEFT);
+			userGenHeaderText.add(createHeroEyebrow("Studio"));
 			userGenHeaderText.add(studioTitle);
-			userGenHeaderText.add(Box.createRigidArea(new Dimension(0, 4)));
+			userGenHeaderText.add(Box.createRigidArea(new Dimension(0, 5)));
 			userGenHeaderText.add(createHeaderSubtitle("Collect users, load corpora, and generate artificial tweet datasets."));
 			userGenHeaderText.add(createAttributionBlock());
 
 			JPanel userGenIdentityPanel = new JPanel(new BorderLayout(18, 0));
 			userGenIdentityPanel.setOpaque(false);
 			userGenIdentityPanel.add(userGenHeaderText, BorderLayout.WEST);
-		userGenIdentityPanel.add(new SignalGraphPanel(APP_GREEN, new Color(128, 88, 216)), BorderLayout.CENTER);
+		userGenIdentityPanel.add(new SignalGraphPanel(NebulaDesign.INFO, NebulaDesign.PURPLE), BorderLayout.CENTER);
 
 		JPanel userGenHeaderActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
 		userGenHeaderActions.setOpaque(false);
@@ -5480,14 +5977,48 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JPanel workspace = new JPanel(new BorderLayout(16, 0));
 		workspace.setOpaque(false);
 
-		SurfacePanel userGenOptionsPanel = createSurfacePanel(new GridLayout(0, 1, 0, 10));
-		userGenOptionsPanel.setPreferredSize(new Dimension(310, 0));
-		userGenOptionsPanel.setBorder(BorderFactory.createCompoundBorder(createModernTitle("Actions"), BorderFactory.createEmptyBorder(16, 16, 16, 16)));
-		userGenOptionsPanel.add(helpUserSimButton);
-		userGenOptionsPanel.add(dataCollectionButton);
-		userGenOptionsPanel.add(loadCorpusButton);
-		userGenOptionsPanel.add(setSimulatedTweetsButton);
-		userGenOptionsPanel.add(startUserSimButton);
+		SurfacePanel userGenOptionsPanel = createSurfacePanel(new BorderLayout(0, 0));
+		userGenOptionsPanel.setPreferredSize(new Dimension(300, 0));
+		userGenOptionsPanel.setBorder(BorderFactory.createCompoundBorder(createModernTitle("Actions"), BorderFactory.createEmptyBorder(14, 16, 16, 16)));
+
+		JPanel userGenActions = new JPanel();
+		userGenActions.setOpaque(false);
+		userGenActions.setLayout(new BoxLayout(userGenActions, BoxLayout.Y_AXIS));
+		JButton[] studioActions = {
+				dataCollectionButton,
+				loadCorpusButton,
+				setSimulatedTweetsButton,
+				startUserSimButton,
+				helpUserSimButton
+		};
+		String[] studioSteps = {
+				"1  Collect tweets for the followees you name",
+				"2  Load a collected or formatted corpus",
+				"3  Choose how many artificial tweets to make",
+				"4  Generate the dataset and cluster it",
+				"Open the step-by-step studio guide"
+		};
+		for (int i = 0; i < studioActions.length; i++)
+		{
+			JLabel step = new TokenLabel(
+					studioSteps[i],
+					NebulaDesign.fontBody(11f),
+					NebulaDesign.TEXT_TERTIARY);
+			step.setAlignmentX(Component.LEFT_ALIGNMENT);
+			step.setBorder(BorderFactory.createEmptyBorder(0, 2, 5, 0));
+			studioActions[i].setAlignmentX(Component.LEFT_ALIGNMENT);
+			studioActions[i].setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+			studioActions[i].setPreferredSize(new Dimension(240, 40));
+			if (i == studioActions.length - 1)
+			{
+				userGenActions.add(Box.createRigidArea(new Dimension(0, 4)));
+			}
+			userGenActions.add(step);
+			userGenActions.add(studioActions[i]);
+			userGenActions.add(Box.createRigidArea(new Dimension(0, 14)));
+		}
+		userGenActions.add(Box.createVerticalGlue());
+		userGenOptionsPanel.add(userGenActions, BorderLayout.CENTER);
 
 		SurfacePanel userGenOutputPanel = createSurfacePanel(new BorderLayout(0, 10));
 		userGenOutputPanel.setBorder(BorderFactory.createCompoundBorder(createModernTitle("Studio Output"), BorderFactory.createEmptyBorder(16, 16, 16, 16)));
@@ -5868,7 +6399,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				"WAITING",
 				"Select a dataset file before loading users.",
 				StatusTone.WARNING);
-		JOptionPane.showMessageDialog(this,"No file was selected. Please select a file before proceeding in simulation!","No File Selected", JOptionPane.INFORMATION_MESSAGE);
+		NebulaDialogs.showWarning(this,"No file was selected. Please select a file before proceeding in simulation!","No File Selected");
 	}
 	
 	//performance measurement file chooser
@@ -5897,11 +6428,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					StatusTone.READY);
 			refreshSimulatorDoc2VecCacheStatus();
 			System.out.println("Selected file: " + selectedFile.getAbsolutePath());
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showSuccess(
 					this,
 					"Loaded File: " + selectedFile.getName(),
-					"File Selected",
-					JOptionPane.INFORMATION_MESSAGE);
+					"File Selected");
 		}
 		else
 		{
@@ -5970,11 +6500,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					StatusTone.SUCCESS,
 					selectedFile.getName());
 			System.out.println("Selected corpus file: " + selectedFile.getAbsolutePath());
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showSuccess(
 					this,
 					"Loaded File: " + selectedFile.getName(),
-					"File Selected",
-					JOptionPane.INFORMATION_MESSAGE);
+					"File Selected");
 		}
 		else
 		{
@@ -5988,22 +6517,22 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void selectNumFolloweesFollowers()
 	{
-		JTextField followeesField = new JTextField(5);
-		JTextField followersField = new JTextField(5);
-		JTextField tweetsGeneratedField = new JTextField(9);
+		JTextField followeesField = createFormField(6);
+		JTextField followersField = createFormField(6);
+		JTextField tweetsGeneratedField = createFormField(9);
 
-		JPanel myPanel = new JPanel();
-		myPanel.add(new JLabel("Number of Followees: "));
+		JPanel myPanel = new JPanel(new GridLayout(3, 2, 12, 10));
+		myPanel.add(createFormLabel("Number of followees"));
 		myPanel.add(followeesField);
-		myPanel.add(Box.createHorizontalStrut(15)); // a spacer
-		myPanel.add(new JLabel("Number of Followers: "));
+		myPanel.add(createFormLabel("Number of followers"));
 		myPanel.add(followersField);
-		myPanel.add(Box.createHorizontalStrut(15)); // a spacer
-		myPanel.add(new JLabel("Number of Tweets: "));
+		myPanel.add(createFormLabel("Number of tweets"));
 		myPanel.add(tweetsGeneratedField);
 
-		int result = JOptionPane.showConfirmDialog(null, myPanel, 
-				"Please Enter Followee, Follower, Total Tweets Values", JOptionPane.OK_CANCEL_OPTION);
+		int result = showFormDialog(
+				"Generated dataset",
+				"Enter followee, follower, and total tweet values.",
+				myPanel);
 		if (result == JOptionPane.OK_OPTION) {
 			System.out.println("Number of Followees: " + followeesField.getText());
 			System.out.println("Number of Followers: " + followersField.getText());
@@ -6037,19 +6566,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void selectTwitterOptions()
 	{
-		JTextField numFollowersToGrabField = new JTextField(5);
-		JTextField nameFolloweesToGrabField = new JTextField(30);
+		JTextField numFollowersToGrabField = createFormField(6);
+		JTextField nameFolloweesToGrabField = createFormField(26);
 
-		JPanel myPanel = new JPanel();
-		myPanel.add(new JLabel("Name of Followee(s): "));
+		JPanel myPanel = new JPanel(new GridLayout(2, 2, 12, 10));
+		myPanel.add(createFormLabel("Name of followee(s)"));
 		myPanel.add(nameFolloweesToGrabField);
-		myPanel.add(Box.createHorizontalStrut(15)); // a spacer
-		myPanel.add(new JLabel("Number of Followers: "));
+		myPanel.add(createFormLabel("Number of followers"));
 		myPanel.add(numFollowersToGrabField);
-	
 
-		int result = JOptionPane.showConfirmDialog(null, myPanel, 
-				"Please Enter Followee Name(s) separated by comma if more than 1, Number of Followers", JOptionPane.OK_CANCEL_OPTION);
+		int result = showFormDialog(
+				"Collect from Twitter",
+				"Separate several followee names with commas. Each followee "
+						+ "gets the same follower count.",
+				myPanel);
 		if (result == JOptionPane.OK_OPTION) {
 			System.out.println("Name of Followee(s): " + nameFolloweesToGrabField.getText());
 			System.out.println("Number of Followers: " + numFollowersToGrabField.getText());
@@ -6079,26 +6609,24 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void selectNumArtificialTweets()
 	{
-		JTextField numArtificialTweetsField = new JTextField(10);
+		JTextField numArtificialTweetsField = createFormField(10);
 		numArtificialTweetsField.setText(Integer.toString(numArtificialTweets));
-		JTextField randomSeedField = new JTextField(16);
+		JTextField randomSeedField = createFormField(16);
 		randomSeedField.setText(
 				userGenerationSeed == null
 						? ""
 						: Long.toString(userGenerationSeed.longValue()));
 
-		JPanel myPanel = new JPanel(new GridLayout(2, 2, 10, 8));
-		myPanel.add(new JLabel("Artificial tweet rows:"));
+		JPanel myPanel = new JPanel(new GridLayout(2, 2, 12, 10));
+		myPanel.add(createFormLabel("Artificial tweet rows"));
 		myPanel.add(numArtificialTweetsField);
-		myPanel.add(new JLabel("Random seed (optional):"));
+		myPanel.add(createFormLabel("Random seed (optional)"));
 		myPanel.add(randomSeedField);
 
-		int result = JOptionPane.showConfirmDialog(
-				this,
-				myPanel,
+		int result = showFormDialog(
 				"Configure Artificial Dataset",
-				JOptionPane.OK_CANCEL_OPTION,
-				JOptionPane.PLAIN_MESSAGE);
+				"0 rows keeps the usable source row count.",
+				myPanel);
 		if (result == JOptionPane.OK_OPTION) {
 			int requestedTweetCount;
 			Long requestedSeed;
@@ -6117,7 +6645,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			}
 			catch (NumberFormatException e)
 			{
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showError(
 						this,
 						"Enter a whole number from 0 to "
 						+ String.format(Locale.US, "%,d", Integer.MAX_VALUE)
@@ -6125,8 +6653,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						+ "The optional random seed must be a whole number from "
 						+ Long.MIN_VALUE + " to " + Long.MAX_VALUE + ".\n\n"
 						+ "0 rows means the same number of usable rows as the source corpus.",
-						"Invalid Generation Settings",
-						JOptionPane.ERROR_MESSAGE);
+						"Invalid Generation Settings");
 				setUserGenStatus(
 						"WAITING",
 						"The artificial dataset settings were not changed.",
@@ -6137,7 +6664,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 			numArtificialTweets = requestedTweetCount;
 			userGenerationSeed = requestedSeed;
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showInfo(
 					this,
 					(numArtificialTweets == 0
 							? "The generated dataset will match the usable source row count."
@@ -6150,8 +6677,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 									? "A fresh random seed will be used."
 									: "Reproducible random seed: "
 									+ userGenerationSeed.longValue()),
-					"Artificial Dataset Settings",
-					JOptionPane.INFORMATION_MESSAGE);
+					"Artificial Dataset Settings");
 
 			myAgent.setNumArtificialTweets(numArtificialTweets);
 			myAgent.setUserGenerationSeed(userGenerationSeed);
@@ -6293,12 +6819,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				+ "Recommended minimum: "
 				+ RuntimeResourceSettings.formatMegabytes(requiredHeapMb)
 				+ "\n\nApply the recommended heap and restart now?";
-		int choice = JOptionPane.showConfirmDialog(
+		int choice = NebulaDialogs.showConfirm(
 				this,
 				message,
 				"Increase Java Heap Before Loading Users",
-				JOptionPane.YES_NO_OPTION,
-				JOptionPane.WARNING_MESSAGE);
+				NebulaDialogs.TONE_WARNING);
 		if (choice == JOptionPane.YES_OPTION)
 		{
 			maxHeapField.setText(Integer.toString(requiredHeapMb));
@@ -6368,12 +6893,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			initializeButton.setEnabled(true);
 			return false;
 		}
-		int choice = JOptionPane.showConfirmDialog(
+		int choice = NebulaDialogs.showConfirm(
 				this,
 				message,
 				"Increase Java Heap Before Initializing",
-				JOptionPane.YES_NO_OPTION,
-				JOptionPane.WARNING_MESSAGE);
+				NebulaDialogs.TONE_WARNING);
 		if (choice == JOptionPane.YES_OPTION)
 		{
 			maxHeapField.setText(Integer.toString(requiredHeapMb));
@@ -6395,14 +6919,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	private void requestExperimentReset()
 	{
-		int choice = JOptionPane.showConfirmDialog(
+		int choice = NebulaDialogs.showConfirm(
 				this,
 				"Reset the current experiment?\n\n"
 						+ "Running experiment agents will stop and current on-screen results will be cleared.\n"
 						+ "Datasets, model caches, and archived results will be preserved.",
 				"Reset Experiment",
-				JOptionPane.YES_NO_OPTION,
-				JOptionPane.WARNING_MESSAGE);
+				NebulaDialogs.TONE_WARNING);
 		if (choice != JOptionPane.YES_OPTION)
 		{
 			return;
@@ -6547,11 +7070,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		changeCardPanel(CHANGE_TO_PERFORMANCE);
 		repaint();
 
-		JOptionPane.showMessageDialog(
+		NebulaDialogs.showSuccess(
 				this,
 				"Experiment reset. Select a dataset and press Get Users to begin.",
-				"New Experiment Ready",
-				JOptionPane.INFORMATION_MESSAGE);
+				"New Experiment Ready");
 	}
 
 	public void initializeAgents()
@@ -7011,14 +7533,14 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		int selectedAlgorithm = algorithmSelectionBox == null
 				? K_MEANS : algorithmSelectionBox.getSelectedIndex();
 		algorithmSettingsProfileLabel.setText(settings.profileLabel());
+		algorithmSettingsProfileLabel.accentColor = settings.isCustomEnabled()
+				? NebulaDesign.WARNING : NebulaDesign.SUCCESS;
 		algorithmSettingsProfileLabel.setForeground(settings.isCustomEnabled()
-				? new Color(110, 71, 0) : new Color(0, 93, 57));
-		algorithmSettingsProfileLabel.setBackground(settings.isCustomEnabled()
-				? StudioNightTheme.adaptiveColor(
-						new Color(255, 241, 210), StudioNightTheme.NIGHT_PANEL_INK)
-				: StudioNightTheme.adaptiveColor(
-						new Color(224, 246, 235), StudioNightTheme.NIGHT_PANEL_INK));
+				? NebulaDesign.WARNING : NebulaDesign.SUCCESS);
+		algorithmSettingsProfileLabel.repaint();
 		algorithmSettingsSummaryLabel.setText(
+				settings.summaryForAlgorithm(selectedAlgorithm));
+		algorithmSettingsSummaryLabel.setToolTipText(
 				settings.summaryForAlgorithm(selectedAlgorithm));
 	}
 
@@ -7049,17 +7571,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			return false;
 		}
 		StringBuilder builder = new StringBuilder(
-				"<html><b>Fix these algorithm parameters before initializing:</b><br>");
+				"Fix these algorithm parameters before initializing:");
 		for (String error : errors)
 		{
-			builder.append("&bull; ").append(error).append("<br>");
+			builder.append("\n\u2022 ").append(error);
 		}
-		builder.append("</html>");
-		JOptionPane.showMessageDialog(
+		NebulaDialogs.showWarning(
 				this,
 				builder.toString(),
-				"Invalid Algorithm Parameters",
-				JOptionPane.WARNING_MESSAGE);
+				"Invalid Algorithm Parameters");
 		return false;
 	}
 
@@ -7512,7 +8032,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				{
 					appendUserGenTweetsResult("[WARNING] " + warning);
 				}
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showSuccess(
 						ControllerAgentGui.this,
 						String.format(
 								Locale.US,
@@ -7521,8 +8041,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 								result.getGeneratedRows(),
 								result.getRandomSeed(),
 								result.getOutputFile().getAbsolutePath()),
-						"Artificial Dataset Ready",
-						JOptionPane.INFORMATION_MESSAGE);
+						"Artificial Dataset Ready");
 			}
 		};
 		if (SwingUtilities.isEventDispatchThread())
@@ -7547,12 +8066,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						StatusTone.ERROR,
 						message);
 				appendUserGenTweetsResult("[FAILED] " + message);
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showError(
 						ControllerAgentGui.this,
 						"Artificial dataset generation failed safely.\n\n" + message
 						+ "\n\nNo partial dataset was published.",
-						"Generation Failed",
-						JOptionPane.ERROR_MESSAGE);
+						"Generation Failed");
 			}
 		};
 		if (SwingUtilities.isEventDispatchThread())
@@ -7630,7 +8148,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			{
 				return;
 			}
-			JOptionPane.showMessageDialog(this,"Finished initializing with given parameters", "Finished Step 2", JOptionPane.INFORMATION_MESSAGE);
+			NebulaDialogs.showSuccess(this,"Finished initializing with given parameters", "Finished Step 2");
 		}
 		else if (phase.equals("get users"))
 		{
@@ -7638,7 +8156,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					"USERS READY",
 					"User discovery finished. Select targets and initialize the experiment.",
 					StatusTone.SUCCESS);
-			JOptionPane.showMessageDialog(this,"Finished getting users", "Finished Step 1", JOptionPane.INFORMATION_MESSAGE);
+			NebulaDialogs.showSuccess(this,"Finished getting users", "Finished Step 1");
 		}
 			else if (phase.equals("finished simulation"))
 			{
@@ -7670,15 +8188,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				{
 					return;
 				}
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showMessage(
 						this,
 						statusMessage,
 						noResults ? "Simulation Finished Without Results"
 								: partialResults ? "Simulation Finished With Warnings"
 								: "Finished Step 3",
 						noResults || partialResults
-								? JOptionPane.WARNING_MESSAGE
-								: JOptionPane.INFORMATION_MESSAGE);
+								? NebulaDialogs.TONE_WARNING
+								: NebulaDialogs.TONE_SUCCESS);
 			
 		}
 		else if (phase.equals("finished collecting tweets"))
@@ -7688,7 +8206,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					"Twitter collection finished successfully.",
 					StatusTone.SUCCESS,
 					"Collected dataset is ready");
-			JOptionPane.showMessageDialog(this,"Finished collecting tweets", "Finished Collection Step", JOptionPane.INFORMATION_MESSAGE);
+			NebulaDialogs.showSuccess(this,"Finished collecting tweets", "Finished Collection Step");
 		}
 		else if (phase.equals("finished user generated simulation"))
 		{
@@ -7697,7 +8215,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					"Artificial tweet generation and homophily validation finished.",
 					StatusTone.SUCCESS,
 					"Generated dataset is ready");
-			JOptionPane.showMessageDialog(this,"Finished user generated simulation", "Finished User Generation Simulation Step", JOptionPane.INFORMATION_MESSAGE);
+			NebulaDialogs.showSuccess(this,"Finished user generated simulation", "Finished User Generation Simulation Step");
 		}
 		
 		}
@@ -7718,11 +8236,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				{
 					return;
 				}
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showError(
 						ControllerAgentGui.this,
 						message,
-						"Simulation Start Failed",
-						JOptionPane.ERROR_MESSAGE);
+						"Simulation Start Failed");
 			}
 		});
 	}
@@ -7744,13 +8261,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				{
 					return;
 				}
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showError(
 						ControllerAgentGui.this,
 						message
 						+ "\n\nThe run was stopped before querying users, "
 						+ "updating edges, or generating a graph.",
-						"Recommendation Run Failed Safely",
-						JOptionPane.ERROR_MESSAGE);
+						"Recommendation Run Failed Safely");
 			}
 		});
 	}
@@ -7780,11 +8296,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				{
 					return;
 				}
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showError(
 						ControllerAgentGui.this,
 						message,
-						"Initialization Failed",
-						JOptionPane.ERROR_MESSAGE);
+						"Initialization Failed");
 			}
 		});
 	}
@@ -7963,12 +8478,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void helpUserSimText()
 	{
-		JOptionPane.showMessageDialog(this,"1. Collect Data from Twitter by entering followee name(s) separated by commas then enter the number of followers you want for them. All followees will get try to get the same number of followers. The collected data to be used in the simulator will be stored in Dataset/TwitterObtained/allFolloweeNames_yyyy-MM-dd HH-mm-ss/*_final.txt.\n***Skip if you already have a correctly-formatted corpus.\n2. Load a corpus that was collected by Step 1 or a correctly-formatted corpus.\n3. Set Number of Artificial Tweets. 0 is default which means use the number of original processed corpus tweets. A number bigger than the original corpus size will try to keep the same proportions in the generated corpus.\n4. Start User Gen Simulation. Generated tweets will be saved under Dataset/TwitterObtained/GENERATED/ORIGINALFILENAME_yyyy-MM-dd HH-mm-ss_GENERATED.txt. Clustering results will appear at the end after clustering the generated tweets", "How To Use", JOptionPane.INFORMATION_MESSAGE);
+		NebulaDialogs.showLongText(this, "How To Use", "1. Collect Data from Twitter by entering followee name(s) separated by commas then enter the number of followers you want for them. All followees will get try to get the same number of followers. The collected data to be used in the simulator will be stored in Dataset/TwitterObtained/allFolloweeNames_yyyy-MM-dd HH-mm-ss/*_final.txt.\n***Skip if you already have a correctly-formatted corpus.\n2. Load a corpus that was collected by Step 1 or a correctly-formatted corpus.\n3. Set Number of Artificial Tweets. 0 is default which means use the number of original processed corpus tweets. A number bigger than the original corpus size will try to keep the same proportions in the generated corpus.\n4. Start User Gen Simulation. Generated tweets will be saved under Dataset/TwitterObtained/GENERATED/ORIGINALFILENAME_yyyy-MM-dd HH-mm-ss_GENERATED.txt. Clustering results will appear at the end after clustering the generated tweets");
 	}
 	
 	public void helpPerformanceText()
 	{
-		JOptionPane.showMessageDialog(this,"1. Load a text file from the File Menu.\n2. Get Users after selecting a text file.\n3. Change any parameters then Initialize.\n4. Run simulation.\n5. If you want to run another simulation with different parameters, make sure to re-Initialize again before running the simulation.\n6. Press Reset Experiment before beginning a brand new experiment.", "How To Use", JOptionPane.INFORMATION_MESSAGE);
+		NebulaDialogs.showLongText(this, "How To Use", "1. Load a text file from the File Menu.\n2. Get Users after selecting a text file.\n3. Change any parameters then Initialize.\n4. Run simulation.\n5. If you want to run another simulation with different parameters, make sure to re-Initialize again before running the simulation.\n6. Press Reset Experiment before beginning a brand new experiment.");
 	}
 	
 	private void resetCurrentTiming()

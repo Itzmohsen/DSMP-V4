@@ -6,7 +6,6 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GradientPaint;
 import java.awt.Graphics;
@@ -15,7 +14,12 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.LayoutManager;
+import java.awt.RadialGradientPaint;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.geom.Point2D;
+import java.awt.geom.RoundRectangle2D;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.text.DecimalFormat;
@@ -44,6 +48,9 @@ import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
+import javax.swing.plaf.basic.BasicComboBoxUI;
+import javax.swing.plaf.basic.BasicProgressBarUI;
+import javax.swing.plaf.basic.BasicSliderUI;
 
 /**
  * Live control cockpit for safe scheduler boundaries. This panel is intentionally
@@ -53,28 +60,17 @@ import javax.swing.event.ChangeListener;
 final class LiveWorkloadAdjustmentPanel extends JPanel
 		implements NodeExecutionMonitor.Listener
 {
-	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
-			new Color(242, 246, 250), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-			Color.WHITE, StudioNightTheme.NIGHT_SURFACE);
-	private static final Color SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(248, 251, 253), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color BORDER = StudioNightTheme.adaptiveColor(
-			new Color(207, 216, 227), StudioNightTheme.NIGHT_BORDER);
-	private static final Color TEXT = StudioNightTheme.adaptiveColor(
-			new Color(24, 29, 36), StudioNightTheme.NIGHT_TEXT);
-	private static final Color MUTED = StudioNightTheme.adaptiveColor(
-			new Color(91, 101, 116), StudioNightTheme.NIGHT_MUTED);
-	private static final Color BLUE = StudioNightTheme.adaptiveColor(
-			new Color(83, 113, 220), StudioNightTheme.NIGHT_BLUE);
-	private static final Color GREEN = StudioNightTheme.adaptiveColor(
-			new Color(88, 154, 112), StudioNightTheme.NIGHT_GREEN);
-	private static final Color AMBER = StudioNightTheme.adaptiveColor(
-			new Color(190, 145, 66), StudioNightTheme.NIGHT_AMBER);
-	private static final Color PURPLE = StudioNightTheme.adaptiveColor(
-			new Color(129, 100, 211), StudioNightTheme.NIGHT_PURPLE);
-	private static final Color RED = StudioNightTheme.adaptiveColor(
-			new Color(202, 74, 63), StudioNightTheme.NIGHT_RED);
+	private static final Color BACKGROUND = NebulaDesign.CANVAS_TOP;
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+	private static final Color RED = NebulaDesign.DANGER;
 	private static final DecimalFormat DECIMAL = new DecimalFormat("0.##");
 
 	private final ControllerAgentGui owner;
@@ -83,29 +79,42 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 	private final JLabel policyMetric = metricValue("--");
 	private final JLabel queueMetric = metricValue("--");
 	private final JLabel nodeMetric = metricValue("--");
-	private final JLabel statusPill = new JLabel("READY");
-	private final JLabel statusLabel =
-			new JLabel("Start a simulator run to adjust pending live queue work.");
+	private final JLabel statusPill = new Pill("READY");
+	private final JLabel statusLabel = new LockedLabel(
+			"Start a simulator run to adjust pending live queue work.");
 	private final JComboBox<SchedulerLabEngine.SchedulingPolicy> policyBox =
 			new JComboBox<SchedulerLabEngine.SchedulingPolicy>(
-					SchedulerLabEngine.SchedulingPolicy.values());
+					SchedulerLabEngine.SchedulingPolicy.values())
+			{
+				protected void paintBorder(Graphics graphics)
+				{
+					// The Nebula combo delegate paints its own rounded border.
+				}
+			};
 	private final JComboBox<PacingChoice> pacingBox =
-			new JComboBox<PacingChoice>(PacingChoice.values());
+			new JComboBox<PacingChoice>(PacingChoice.values())
+			{
+				protected void paintBorder(Graphics graphics)
+				{
+					// The Nebula combo delegate paints its own rounded border.
+				}
+			};
 	private final JButton applyPolicyButton =
-			button("Apply policy to remaining work", BLUE, Color.WHITE);
+			button("Apply policy to remaining work", NebulaButton.NEUTRAL);
 	private final JButton applyPacingButton =
-			button("Set action window", AMBER, Color.WHITE);
+			button("Set action window", NebulaButton.NEUTRAL);
 	private final JButton armInteractiveButton =
-			button("Arm interactive run", GREEN, Color.WHITE);
+			button("Arm interactive run", NebulaButton.PRIMARY);
 	private final JButton restoreDefaultButton =
-			button("Restore DSMP default", SURFACE_ALT, TEXT);
+			button("Restore DSMP default", NebulaButton.NEUTRAL);
 	private final JButton resetButton =
-			button("Reset live controls", SURFACE_ALT, TEXT);
+			button("Reset live controls", NebulaButton.NEUTRAL);
 	private final JButton capacityButton =
-			button("Node capacity", SURFACE_ALT, TEXT);
-	private final JLabel phasePill = new JLabel("READY");
-	private final JLabel phaseTitle = new JLabel("Arm a live queue before running.");
-	private final JLabel phaseDetail = new JLabel(
+			button("Node capacity", NebulaButton.NEUTRAL);
+	private final JLabel phasePill = new Pill("READY");
+	private final JLabel phaseTitle =
+			new LockedLabel("Arm a live queue before running.");
+	private final JLabel phaseDetail = new LockedLabel(
 			"Choose an action window, arm the run, then start the simulator and use node cards while work is still waiting.");
 	private final QueueFlowPanel queueFlowPanel = new QueueFlowPanel();
 	private final JPanel nodeGrid = new JPanel(new GridLayout(0, 2, 12, 12));
@@ -131,6 +140,10 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		this.owner = owner;
 		setBackground(BACKGROUND);
 		setBorder(new EmptyBorder(14, 14, 14, 14));
+		policyBox.setUI(new NebulaComboUI());
+		pacingBox.setUI(new NebulaComboUI());
+		styleCombo(policyBox);
+		styleCombo(pacingBox);
 
 		add(createHeader(), BorderLayout.NORTH);
 		add(createWorkspace(), BorderLayout.CENTER);
@@ -200,25 +213,37 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 
 	private JComponent createHeader()
 	{
-		JPanel header = surface(new BorderLayout(18, 0));
-		header.setBorder(new EmptyBorder(18, 20, 18, 20));
+		HeroCard header = new HeroCard(new BorderLayout(18, 0));
+		header.setBorder(new EmptyBorder(14, 20, 16, 20));
 
 		JPanel titleStack = new JPanel();
 		titleStack.setOpaque(false);
 		titleStack.setLayout(new BoxLayout(titleStack, BoxLayout.Y_AXIS));
-		JLabel title = new JLabel("Live Workload Adjustment");
-		title.setFont(font(Font.BOLD, 28));
-		title.setForeground(TEXT);
-		JLabel subtitle = new JLabel(
-				"Pause, drain, redirect, throttle, and switch policies while safe queue work is still pending.");
-		subtitle.setFont(font(Font.PLAIN, 12));
-		subtitle.setForeground(MUTED);
+		LockedLabel eyebrow = new LockedLabel("Mission Control");
+		NebulaWidgets.styleSectionLabel(eyebrow);
+		eyebrow.setForeground(NebulaDesign.ACCENT);
+		eyebrow.lockForeground();
+		JLabel title = fixedLabel(
+				"Live Workload Adjustment",
+				NebulaDesign.fontSemiBold(23f),
+				TEXT);
+		JLabel subtitle = fixedLabel(
+				"Pause, drain, redirect, throttle, and switch policies while safe queue work is still pending.",
+				NebulaDesign.fontBody(12.5f),
+				MUTED);
+		eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		title.setAlignmentX(Component.LEFT_ALIGNMENT);
+		subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+		titleStack.add(eyebrow);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 3)));
 		titleStack.add(title);
-		titleStack.add(Box.createRigidArea(new Dimension(0, 4)));
+		titleStack.add(Box.createRigidArea(new Dimension(0, 3)));
 		titleStack.add(subtitle);
-		titleStack.add(createAttributionBlock());
+		JPanel credits = createAttributionBlock();
+		credits.setAlignmentX(Component.LEFT_ALIGNMENT);
+		titleStack.add(credits);
 
-		headerSignalPanel.setPreferredSize(new Dimension(650, 88));
+		headerSignalPanel.setPreferredSize(new Dimension(650, 84));
 		header.add(titleStack, BorderLayout.WEST);
 		header.add(headerSignalPanel, BorderLayout.CENTER);
 		return header;
@@ -251,8 +276,8 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 
 	private JComponent createControlStrip()
 	{
-		JPanel panel = surface(new BorderLayout(12, 12));
-		panel.setBorder(new EmptyBorder(12, 14, 12, 14));
+		JPanel panel = new CardPanel(new BorderLayout(12, 12));
+		panel.setBorder(new EmptyBorder(14, 16, 16, 16));
 
 		JPanel metrics = new JPanel(new GridLayout(1, 4, 10, 0));
 		metrics.setOpaque(false);
@@ -293,27 +318,27 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 
 	private JComponent createGuidanceCard()
 	{
-		JPanel card = new JPanel(new BorderLayout(10, 0));
-		card.setOpaque(true);
-		card.setBackground(SURFACE_ALT);
-		card.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER),
-				new EmptyBorder(10, 12, 10, 12)));
-		phasePill.setOpaque(true);
+		JPanel card = new AltCard(new BorderLayout(12, 0));
+		card.setBorder(new EmptyBorder(10, 14, 10, 14));
 		phasePill.setHorizontalAlignment(SwingConstants.CENTER);
-		phasePill.setFont(font(Font.BOLD, 11));
-		phasePill.setBorder(new EmptyBorder(5, 12, 5, 12));
+		phasePill.setBackground(NebulaDesign.SUCCESS_SOFT);
+		phasePill.setForeground(GREEN);
 		JPanel text = new JPanel();
 		text.setOpaque(false);
 		text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
-		phaseTitle.setFont(font(Font.BOLD, 15));
+		phaseTitle.setFont(NebulaDesign.fontSemiBold(13.5f));
 		phaseTitle.setForeground(TEXT);
-		phaseDetail.setFont(font(Font.PLAIN, 12));
+		((LockedLabel)phaseTitle).lockForeground();
+		phaseDetail.setFont(NebulaDesign.fontBody(12f));
 		phaseDetail.setForeground(MUTED);
+		((LockedLabel)phaseDetail).lockForeground();
 		text.add(phaseTitle);
 		text.add(Box.createRigidArea(new Dimension(0, 3)));
 		text.add(phaseDetail);
-		card.add(phasePill, BorderLayout.WEST);
+		JPanel pillHolder = new JPanel(new GridBagLayout());
+		pillHolder.setOpaque(false);
+		pillHolder.add(phasePill);
+		card.add(pillHolder, BorderLayout.WEST);
 		card.add(text, BorderLayout.CENTER);
 		return card;
 	}
@@ -321,24 +346,39 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 	private JComponent createNodeControlPanel()
 	{
 		JPanel panel = section("Live Node Controls");
-		JLabel help = new JLabel(
-				"Pause stops future claims; drain returns safe-boundary active work to the queue and moves remaining work to another node.");
-		help.setFont(font(Font.BOLD, 11));
-		help.setForeground(MUTED);
-		help.setBorder(new EmptyBorder(0, 2, 8, 2));
-		panel.add(help, BorderLayout.NORTH);
+		JPanel heading = new JPanel();
+		heading.setOpaque(false);
+		heading.setLayout(new BoxLayout(heading, BoxLayout.Y_AXIS));
+		JLabel headingTitle = fixedLabel(
+				"Live Node Controls",
+				NebulaDesign.fontSemiBold(15f),
+				TEXT);
+		JLabel help = fixedLabel(
+				"Pause stops future claims; drain returns safe-boundary active work to the queue and moves remaining work to another node.",
+				NebulaDesign.fontBody(11.5f),
+				MUTED);
+		headingTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+		help.setAlignmentX(Component.LEFT_ALIGNMENT);
+		heading.add(headingTitle);
+		heading.add(Box.createRigidArea(new Dimension(0, 3)));
+		heading.add(help);
+		heading.add(Box.createRigidArea(new Dimension(0, 8)));
+		panel.add(heading, BorderLayout.NORTH);
 
 		nodeGrid.setOpaque(false);
 		JPanel holder = new JPanel(new BorderLayout());
-		holder.setBackground(SURFACE_ALT);
+		holder.setOpaque(false);
 		holder.add(nodeGrid, BorderLayout.NORTH);
 
 		JScrollPane scrollPane = new JScrollPane(holder);
 		scrollPane.setBorder(BorderFactory.createEmptyBorder());
-		scrollPane.getViewport().setBackground(SURFACE_ALT);
+		scrollPane.setOpaque(false);
+		scrollPane.getViewport().setOpaque(false);
 		scrollPane.setHorizontalScrollBarPolicy(
 				ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 		scrollPane.getVerticalScrollBar().setUnitIncrement(18);
+		scrollPane.getVerticalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+		scrollPane.getVerticalScrollBar().setOpaque(false);
 		panel.add(scrollPane, BorderLayout.CENTER);
 		return panel;
 	}
@@ -348,34 +388,42 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		JPanel panel = section("Live Queue And Control Trace");
 		JPanel body = new JPanel(new BorderLayout(0, 12));
 		body.setOpaque(false);
-		queueFlowPanel.setPreferredSize(new Dimension(620, 440));
+		queueFlowPanel.setPreferredSize(new Dimension(620, 360));
 		body.add(queueFlowPanel, BorderLayout.NORTH);
 
 		eventLog.setEditable(false);
 		eventLog.setLineWrap(false);
 		eventLog.setWrapStyleWord(false);
-		eventLog.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-		eventLog.setForeground(new Color(230, 236, 247));
-		eventLog.setBackground(new Color(18, 24, 38));
-		eventLog.setBorder(new EmptyBorder(12, 12, 12, 12));
+		eventLog.setFont(NebulaDesign.fontMono(12f));
+		eventLog.setForeground(NebulaDesign.CONSOLE_TEXT);
+		eventLog.setBackground(NebulaDesign.CONSOLE);
+		eventLog.setOpaque(false);
+		eventLog.setBorder(new EmptyBorder(4, 6, 4, 6));
 		JScrollPane logScroll = new JScrollPane(eventLog);
 		logScroll.setBorder(BorderFactory.createEmptyBorder());
-		logScroll.setPreferredSize(new Dimension(620, 260));
-		body.add(logScroll, BorderLayout.CENTER);
+		logScroll.setOpaque(false);
+		logScroll.getViewport().setOpaque(false);
+		logScroll.getVerticalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+		logScroll.getVerticalScrollBar().setOpaque(false);
+		logScroll.getHorizontalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+		logScroll.getHorizontalScrollBar().setOpaque(false);
+		JPanel console = new ConsoleCard(new BorderLayout());
+		console.setBorder(new EmptyBorder(8, 8, 8, 8));
+		console.setPreferredSize(new Dimension(620, 210));
+		console.add(logScroll, BorderLayout.CENTER);
+		body.add(console, BorderLayout.CENTER);
 		panel.add(body, BorderLayout.CENTER);
 		return panel;
 	}
 
 	private JComponent createStatusBar()
 	{
-		JPanel bar = surface(new BorderLayout(10, 0));
-		bar.setBorder(new EmptyBorder(8, 12, 8, 12));
-		statusPill.setOpaque(true);
+		JPanel bar = new CardPanel(new BorderLayout(10, 0));
+		bar.setBorder(new EmptyBorder(8, 14, 10, 14));
 		statusPill.setHorizontalAlignment(SwingConstants.CENTER);
-		statusPill.setBorder(new EmptyBorder(4, 14, 4, 14));
-		statusPill.setFont(font(Font.BOLD, 11));
-		statusLabel.setFont(font(Font.BOLD, 12));
+		statusLabel.setFont(NebulaDesign.fontMedium(12.5f));
 		statusLabel.setForeground(TEXT);
+		((LockedLabel)statusLabel).lockForeground();
 		bar.add(statusPill, BorderLayout.WEST);
 		bar.add(statusLabel, BorderLayout.CENTER);
 		setStatus("READY",
@@ -742,14 +790,8 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		phaseTitle.setText(title == null ? "" : title);
 		phaseDetail.setText(detail == null ? "" : detail);
 		phasePill.setBackground(tone == StatusTone.ERROR
-				? themed(new Color(255, 232, 229), StudioNightTheme.NIGHT_PANEL_INK)
-				: themed(new Color(224, 244, 233), StudioNightTheme.NIGHT_PANEL_INK));
+				? NebulaDesign.DANGER_SOFT : NebulaDesign.SUCCESS_SOFT);
 		phasePill.setForeground(tone == StatusTone.ERROR ? RED : GREEN);
-		phasePill.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(tone == StatusTone.ERROR
-						? themed(new Color(241, 169, 159), RED)
-						: themed(new Color(174, 221, 194), GREEN)),
-				new EmptyBorder(5, 12, 5, 12)));
 	}
 
 	private void rebuildNodeCardsIfNeeded(boolean force)
@@ -958,22 +1000,24 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		{
 			return Math.max(1, snapshot.getNodes().size());
 		}
-		return Math.max(1, owner.currentNodeCountSetting());
+		return owner == null ? 1 : Math.max(1, owner.currentNodeCountSetting());
 	}
 
 	private int currentTargetCount()
 	{
-		return Math.max(1, owner.getRecommendationBatchUserCount());
+		return owner == null
+				? 1 : Math.max(1, owner.getRecommendationBatchUserCount());
 	}
 
 	private int currentCandidateCount()
 	{
-		return Math.max(1, owner.getCandidateUserCountEstimate());
+		return owner == null
+				? 1 : Math.max(1, owner.getCandidateUserCountEstimate());
 	}
 
 	private int currentAlgorithm()
 	{
-		return owner.algorithmSelectionBox == null
+		return owner == null || owner.algorithmSelectionBox == null
 				? ControllerAgent.K_MEANS
 				: owner.algorithmSelectionBox.getSelectedIndex();
 	}
@@ -1383,55 +1427,29 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		statusPill.setText(pill == null ? "READY" : pill);
 		statusLabel.setText(message == null ? "" : message);
 		statusPill.setBackground(tone == StatusTone.ERROR
-				? themed(new Color(255, 232, 229), StudioNightTheme.NIGHT_PANEL_INK)
-				: themed(new Color(224, 244, 233), StudioNightTheme.NIGHT_PANEL_INK));
+				? NebulaDesign.DANGER_SOFT : NebulaDesign.SUCCESS_SOFT);
 		statusPill.setForeground(tone == StatusTone.ERROR ? RED : GREEN);
-		statusPill.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(tone == StatusTone.ERROR
-						? themed(new Color(241, 169, 159), RED)
-						: themed(new Color(174, 221, 194), GREEN)),
-				new EmptyBorder(4, 14, 4, 14)));
 	}
 
 	private JPanel section(String title)
 	{
-		JPanel panel = surface(new BorderLayout(0, 10));
-		panel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER),
-				new EmptyBorder(12, 12, 12, 12)));
-		JLabel label = new JLabel(title);
-		label.setFont(font(Font.BOLD, 16));
-		label.setForeground(TEXT);
+		JPanel panel = new CardPanel(new BorderLayout(0, 10));
+		panel.setBorder(new EmptyBorder(14, 16, 16, 16));
+		JLabel label = fixedLabel(title, NebulaDesign.fontSemiBold(15f), TEXT);
 		panel.add(label, BorderLayout.NORTH);
-		return panel;
-	}
-
-	private JPanel surface(BorderLayout layout)
-	{
-		JPanel panel = new JPanel(layout);
-		panel.setOpaque(true);
-		panel.setBackground(SURFACE);
-		return panel;
-	}
-
-	private JPanel surface(GridLayout layout)
-	{
-		JPanel panel = new JPanel(layout);
-		panel.setOpaque(true);
-		panel.setBackground(SURFACE);
 		return panel;
 	}
 
 	private JComponent metricCard(String label, JLabel value, Color accent)
 	{
-		JPanel panel = new JPanel(new BorderLayout(8, 0));
-		panel.setBackground(SURFACE_ALT);
-		panel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createMatteBorder(0, 4, 0, 0, accent),
-				new EmptyBorder(9, 12, 9, 12)));
-		JLabel labelText = new JLabel(label);
-		labelText.setFont(font(Font.BOLD, 10));
-		labelText.setForeground(MUTED);
+		JPanel panel = new AltCard(new BorderLayout(8, 2));
+		panel.setBorder(new EmptyBorder(9, 14, 9, 12));
+		JLabel labelText = fixedLabel(
+				label,
+				NebulaDesign.fontSection(),
+				NebulaDesign.TEXT_TERTIARY);
+		labelText.setIcon(new DotIcon(accent));
+		labelText.setIconTextGap(7);
 		panel.add(labelText, BorderLayout.NORTH);
 		panel.add(value, BorderLayout.CENTER);
 		return panel;
@@ -1441,10 +1459,8 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 	{
 		JPanel panel = new JPanel(new BorderLayout(0, 4));
 		panel.setOpaque(false);
-		JLabel caption = new JLabel(label);
-		caption.setFont(font(Font.BOLD, 10));
-		caption.setForeground(MUTED);
-		field.setFont(font(Font.BOLD, 12));
+		JLabel caption = fixedLabel(label, NebulaDesign.fontMedium(11f), MUTED);
+		field.setFont(NebulaDesign.fontMedium(12.5f));
 		panel.add(caption, BorderLayout.NORTH);
 		panel.add(field, BorderLayout.CENTER);
 		return panel;
@@ -1452,59 +1468,51 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 
 	private static JLabel metricValue(String text)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(font(Font.BOLD, 18));
-		label.setForeground(TEXT);
+		return fixedLabel(text, NebulaDesign.fontSemiBold(18f), TEXT);
+	}
+
+	private static JLabel fixedLabel(String text, Font font, Color color)
+	{
+		LockedLabel label = new LockedLabel(text);
+		label.setFont(font);
+		label.setForeground(color);
+		label.lockForeground();
 		return label;
 	}
 
-	private static JButton button(String text, Color background, Color foreground)
+	private static JButton button(String text, int kind)
 	{
-		JButton button = new JButton(text);
-		button.setFocusPainted(false);
-		button.setOpaque(true);
-		button.setBackground(background);
-		button.setForeground(foreground);
-		button.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER),
-				new EmptyBorder(9, 12, 9, 12)));
-		button.setFont(font(Font.BOLD, 12));
-		button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		return button;
+		return new NebulaButton(text, kind);
+	}
+
+	private static void styleCombo(JComboBox<?> box)
+	{
+		box.setOpaque(false);
+		box.setFont(NebulaDesign.fontMedium(12.5f));
+		box.setForeground(TEXT);
+		box.setBackground(SURFACE_ALT);
+		box.setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 2));
+		box.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 	}
 
 	private static JPanel createAttributionBlock()
 	{
-		JPanel block = new JPanel();
+		JPanel block = new JPanel(new BorderLayout());
 		block.setOpaque(false);
-		block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
-		block.setBorder(new EmptyBorder(8, 0, 0, 0));
-		block.add(createAttributionLine(
-				"Faculty Advisor",
-				"Dr. Abdolreza Abhari"));
-		block.add(createAttributionLine("Developer", "Mohsen Alavi"));
+		block.setBorder(new EmptyBorder(7, 0, 0, 0));
+		JLabel credits = fixedLabel(
+				"Faculty advisor Dr. Abdolreza Abhari  ·  Developer Mohsen Alavi",
+				NebulaDesign.fontSmall(),
+				NebulaDesign.TEXT_TERTIARY);
+		block.add(credits, BorderLayout.WEST);
 		return block;
-	}
-
-	private static JPanel createAttributionLine(String role, String name)
-	{
-		JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-		row.setOpaque(false);
-		JLabel roleLabel = new JLabel(role.toUpperCase(Locale.US));
-		roleLabel.setFont(font(Font.BOLD, 8));
-		roleLabel.setForeground(MUTED);
-		JLabel nameLabel = new JLabel(name);
-		nameLabel.setFont(font(Font.BOLD, 10));
-		nameLabel.setForeground(TEXT);
-		row.add(roleLabel);
-		row.add(nameLabel);
-		row.setAlignmentX(Component.LEFT_ALIGNMENT);
-		return row;
 	}
 
 	private static Font font(int style, int size)
 	{
-		return new Font("SansSerif", style, size);
+		return style == Font.BOLD
+				? NebulaDesign.fontSemiBold(size)
+				: NebulaDesign.fontBody(size);
 	}
 
 	private static Color themed(Color day, Color night)
@@ -1515,16 +1523,15 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 	private static Color glass(int alpha)
 	{
 		return themed(
-				new Color(255, 255, 255, alpha),
-				StudioNightTheme.withAlpha(
-						StudioNightTheme.NIGHT_SURFACE_ALT,
+				NebulaDesign.withAlpha(NebulaDesign.DAY_SURFACE, alpha),
+				NebulaDesign.withAlpha(
+						NebulaDesign.NIGHT_SURFACE_RAISED,
 						Math.min(255, alpha + 16)));
 	}
 
 	private static Color track()
 	{
-		return themed(new Color(229, 235, 244),
-				StudioNightTheme.NIGHT_BACKGROUND_BOTTOM);
+		return NebulaDesign.INSET;
 	}
 
 	private static String shortText(String value, int limit)
@@ -1590,22 +1597,21 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 	private final class LiveNodeCard extends JPanel
 	{
 		private final int nodeIndex;
-		private final JLabel title = new JLabel();
-		private final JLabel role = new JLabel();
-		private final JLabel state = new JLabel();
-		private final JLabel metrics = new JLabel();
-		private final JLabel queueStats = new JLabel();
+		private final LockedLabel title = new LockedLabel("");
+		private final LockedLabel role = new LockedLabel("");
+		private final JLabel state = new Pill("");
+		private final LockedLabel metrics = new LockedLabel("");
+		private final LockedLabel queueStats = new LockedLabel("");
 		private final JProgressBar inputProgress = new JProgressBar(0, 100);
 		private final JProgressBar shardProgress = new JProgressBar(0, 100);
 		private final JButton pauseButton =
-				button("Pause", SURFACE_ALT, TEXT);
-	private final JButton offlineButton =
-				button("Unavailable", StudioNightTheme.adaptiveColor(
-						new Color(255, 236, 234), StudioNightTheme.NIGHT_PANEL_INK), RED);
+				button("Pause", NebulaButton.NEUTRAL);
+		private final JButton offlineButton =
+				button("Unavailable", NebulaButton.DANGER);
 		private final JButton drainButton =
-				button("Drain", AMBER, Color.WHITE);
+				button("Drain", NebulaButton.WARNING);
 		private final JButton redirectButton =
-				button("Move pending here", GREEN, Color.WHITE);
+				button("Move pending here", NebulaButton.SUCCESS);
 		private final JSlider capacitySlider = new JSlider(10, 200, 100);
 		private double pulse;
 		private boolean updating;
@@ -1615,35 +1621,43 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			super(new BorderLayout(10, 10));
 			this.nodeIndex = nodeIndex;
 			setOpaque(false);
-			setBorder(new EmptyBorder(12, 12, 12, 12));
-			setPreferredSize(new Dimension(330, 220));
+			setBorder(new EmptyBorder(14, 18, 14, 14));
+			setPreferredSize(new Dimension(330, 302));
 
 			JPanel top = new JPanel(new BorderLayout(8, 0));
 			top.setOpaque(false);
 			JPanel labels = new JPanel();
 			labels.setOpaque(false);
 			labels.setLayout(new BoxLayout(labels, BoxLayout.Y_AXIS));
-			title.setFont(font(Font.BOLD, 16));
+			title.setFont(NebulaDesign.fontSemiBold(14.5f));
 			title.setForeground(TEXT);
-			role.setFont(font(Font.BOLD, 11));
+			title.lockForeground();
+			role.setFont(NebulaDesign.fontMedium(10.5f));
 			role.setForeground(MUTED);
+			role.lockForeground();
 			labels.add(title);
 			labels.add(role);
-			state.setFont(font(Font.BOLD, 10));
+			state.setFont(NebulaDesign.fontMedium(9.5f));
 			state.setHorizontalAlignment(SwingConstants.CENTER);
-			state.setOpaque(true);
-			state.setBorder(new EmptyBorder(5, 8, 5, 8));
+			state.setBorder(new EmptyBorder(4, 10, 4, 10));
+			JPanel stateHolder = new JPanel(new GridBagLayout());
+			stateHolder.setOpaque(false);
+			stateHolder.add(state);
 			top.add(labels, BorderLayout.CENTER);
-			top.add(state, BorderLayout.EAST);
+			top.add(stateHolder, BorderLayout.EAST);
 
 			JPanel center = new JPanel(new GridLayout(4, 1, 0, 7));
 			center.setOpaque(false);
-			metrics.setFont(font(Font.PLAIN, 11));
+			metrics.setFont(NebulaDesign.fontBody(11f));
 			metrics.setForeground(MUTED);
-			queueStats.setFont(font(Font.BOLD, 11));
+			metrics.lockForeground();
+			queueStats.setFont(NebulaDesign.fontMedium(11f));
 			queueStats.setForeground(TEXT);
+			queueStats.lockForeground();
 			styleProgress(inputProgress, BLUE);
 			styleProgress(shardProgress, GREEN);
+			inputProgress.setPreferredSize(new Dimension(120, 24));
+			shardProgress.setPreferredSize(new Dimension(120, 24));
 			center.add(metrics);
 			center.add(inputProgress);
 			center.add(queueStats);
@@ -1652,6 +1666,10 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			capacitySlider.setOpaque(false);
 			capacitySlider.setMajorTickSpacing(50);
 			capacitySlider.setPaintTicks(false);
+			capacitySlider.setUI(new GaugeSliderUI(capacitySlider));
+			capacitySlider.setPreferredSize(new Dimension(140, 30));
+			capacitySlider.setCursor(
+					Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 			capacitySlider.addChangeListener(new ChangeListener()
 			{
 				public void stateChanged(ChangeEvent event)
@@ -1738,15 +1756,8 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 					accent.getRed(),
 					accent.getGreen(),
 					accent.getBlue(),
-					32));
+					StudioNightTheme.isNightMode() ? 46 : 30));
 			state.setForeground(accent);
-			state.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(new Color(
-							accent.getRed(),
-							accent.getGreen(),
-							accent.getBlue(),
-							88)),
-					new EmptyBorder(5, 8, 5, 8)));
 
 			int inputPercent = node == null ? 0 : node.getProgressPercent();
 			inputProgress.setValue(inputPercent);
@@ -1837,9 +1848,7 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int w = getWidth();
 			int h = getHeight();
 			LiveWorkloadAdjustmentRegistry.NodeControl control =
@@ -1848,22 +1857,30 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 					: control.isDraining() ? AMBER
 							: control.isPaused() ? AMBER
 							: control.getCapacityScale() > 1.05 ? GREEN : BLUE;
-			float glow = (float)(0.08 + 0.07 * (1.0 + Math.sin(pulse)));
+			boolean night = StudioNightTheme.isNightMode();
+			if (!night)
+			{
+				g.setColor(new Color(23, 35, 60, 14));
+				g.fillRoundRect(1, 3, w - 2, h - 3, 15, 15);
+			}
+			int radius = NebulaDesign.RADIUS_CARD;
+			float glow = (float)(0.030 + 0.030 * (1.0 + Math.sin(pulse)));
+			g.setColor(SURFACE);
+			g.fillRoundRect(0, 0, w - 1, h - 2, radius, radius);
 			g.setPaint(new GradientPaint(
 					0,
 					0,
-					SURFACE,
+					NebulaDesign.withAlpha(accent, 0),
 					w,
 					h,
-					new Color(accent.getRed(), accent.getGreen(),
-							accent.getBlue(), Math.round(255 * glow))));
-			g.fillRoundRect(0, 0, w - 1, h - 1, 16, 16);
-			g.setColor(new Color(accent.getRed(), accent.getGreen(),
-					accent.getBlue(), 150));
-			g.setStroke(new BasicStroke(2f));
-			g.drawRoundRect(0, 0, w - 1, h - 1, 16, 16);
+					NebulaDesign.withAlpha(accent,
+							Math.round(255 * glow) + (night ? 14 : 0))));
+			g.fillRoundRect(0, 0, w - 1, h - 2, radius, radius);
+			g.setColor(NebulaDesign.withAlpha(accent, night ? 130 : 100));
+			g.setStroke(new BasicStroke(1.2f));
+			g.drawRoundRect(0, 0, w - 1, h - 2, radius, radius);
 			g.setColor(accent);
-			g.fillRoundRect(0, 0, 6, h, 16, 16);
+			g.fillRoundRect(0, 6, 4, h - 14, 4, 4);
 			g.dispose();
 			super.paintComponent(graphics);
 		}
@@ -1885,7 +1902,6 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		QueueFlowPanel()
 		{
 			setOpaque(false);
-			setBorder(BorderFactory.createLineBorder(BORDER));
 		}
 
 		void setContext(
@@ -1921,17 +1937,25 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int w = getWidth();
 			int h = getHeight();
+			int radius = NebulaDesign.RADIUS_CARD;
+			boolean night = StudioNightTheme.isNightMode();
 			Color queueEnd = themed(
-					new Color(236, 247, 242),
 					StudioNightTheme.blend(
-							StudioNightTheme.NIGHT_SURFACE,
-							StudioNightTheme.NIGHT_GREEN,
-							0.13f));
+							NebulaDesign.DAY_SURFACE,
+							NebulaDesign.DAY_SUCCESS,
+							0.05f),
+					StudioNightTheme.blend(
+							NebulaDesign.NIGHT_SURFACE,
+							NebulaDesign.NIGHT_SUCCESS,
+							0.08f));
+			if (!night)
+			{
+				g.setColor(new Color(23, 35, 60, 14));
+				g.fillRoundRect(1, 3, w - 2, h - 3, radius + 1, radius + 1);
+			}
 			g.setPaint(new GradientPaint(
 					0,
 					0,
@@ -1939,9 +1963,9 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 					w,
 					h,
 					queueEnd));
-			g.fillRoundRect(0, 0, w - 1, h - 1, 18, 18);
+			g.fillRoundRect(0, 0, w - 1, h - 2, radius, radius);
 			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, w - 1, h - 1, 18, 18);
+			g.drawRoundRect(0, 0, w - 1, h - 2, radius, radius);
 			drawTitle(g, w);
 			drawMetrics(g, w);
 			drawFlow(g, w, h);
@@ -1951,16 +1975,16 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		private void drawTitle(Graphics2D g, int width)
 		{
 			g.setColor(TEXT);
-			g.setFont(font(Font.BOLD, 19));
-			g.drawString("Safe-Boundary Work Queue", 22, 34);
+			g.setFont(NebulaDesign.fontSemiBold(16f));
+			g.drawString("Safe-Boundary Work Queue", 22, 32);
 			g.setColor(MUTED);
-			g.setFont(font(Font.PLAIN, 12));
+			g.setFont(NebulaDesign.fontBody(11.5f));
 			String detail = RecommendationModeSupport.algorithmName(algorithm)
 					+ " | " + plan.getMode().getLabel()
 					+ " | " + (live.hasActiveControls()
 							? live.compactSummary()
 							: "no live overrides");
-			g.drawString(shortText(detail, Math.max(24, width / 9)), 22, 54);
+			g.drawString(shortText(detail, Math.max(24, width / 8)), 22, 52);
 		}
 
 		private void drawMetrics(Graphics2D g, int width)
@@ -1968,25 +1992,49 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			int x = 22;
 			int y = 72;
 			int gap = 10;
-			int mw = Math.max(76, (width - 44 - gap * 3) / 4);
-			drawMetric(g, x, y, mw, "waiting",
-					String.valueOf(queue.getWaitingCount()), PURPLE);
-			drawMetric(g, x + (mw + gap), y, mw, "active",
-					String.valueOf(queue.getActiveCount()), AMBER);
-			drawMetric(g, x + (mw + gap) * 2, y, mw, "done",
-					queue.getCompletedCount() + "/" + queue.getTotalShards(),
-					GREEN);
-			drawMetric(g, x + (mw + gap) * 3, y, mw, "policy",
-					live.getPolicyOverride() == null
-							? plan.getPolicy().getLabel()
-							: live.getPolicyOverride().getLabel(),
-					BLUE);
+			String policy = live.getPolicyOverride() == null
+					? plan.getPolicy().getLabel()
+					: live.getPolicyOverride().getLabel();
+			String done = queue.getCompletedCount() + "/" + queue.getTotalShards();
+			int columns = width < 580 ? 2 : 4;
+			int mw = Math.max(76, (width - 44 - gap * (columns - 1)) / columns);
+			int rowHeight = 54;
+			for (int i = 0; i < 4; i++)
+			{
+				int column = i % columns;
+				int row = i / columns;
+				int cellX = x + (mw + gap) * column;
+				int cellY = y + row * rowHeight;
+				if (i == 0)
+				{
+					drawMetric(g, cellX, cellY, mw, "waiting",
+							String.valueOf(queue.getWaitingCount()), PURPLE);
+				}
+				else if (i == 1)
+				{
+					drawMetric(g, cellX, cellY, mw, "active",
+							String.valueOf(queue.getActiveCount()), AMBER);
+				}
+				else if (i == 2)
+				{
+					drawMetric(g, cellX, cellY, mw, "done", done, GREEN);
+				}
+				else
+				{
+					drawMetric(g, cellX, cellY, mw, "policy", policy, BLUE);
+				}
+			}
 		}
 
 		private void drawFlow(Graphics2D g, int width, int height)
 		{
-			int top = 138;
+			int top = width < 580 ? 192 : 138;
 			int bottom = height - 20;
+			if (width < 580)
+			{
+				drawStackedFlow(g, width, top, Math.max(150, bottom - top));
+				return;
+			}
 			int queueX = 24;
 			int queueW = Math.max(124, width / 4);
 			int mergeW = 104;
@@ -2007,6 +2055,35 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			drawPacket(g, nodeX + nodeW + 18, top + areaH / 2,
 					mergeX - 18, top + areaH / 2, GREEN,
 					(animation + 0.45) % 1.0);
+		}
+
+		/**
+		 * Narrow columns cannot fit queue, node lanes, and merge side by side,
+		 * so the same three stages stack vertically with downward flow arrows.
+		 */
+		private void drawStackedFlow(Graphics2D g, int width, int top, int areaH)
+		{
+			int x = 24;
+			int w = Math.max(120, width - 48);
+			int gap = 16;
+			int mergeH = 88;
+			int remaining = Math.max(180, areaH - mergeH - gap * 2);
+			int queueH = Math.max(104, Math.round(remaining * 0.46f));
+			int nodeH = Math.max(104, remaining - queueH);
+			int centerX = x + w / 2;
+
+			drawQueueBucket(g, x, top, w, queueH);
+			int nodeY = top + queueH + gap;
+			drawNodeLanes(g, x, nodeY, w, nodeH);
+			int mergeY = nodeY + nodeH + gap;
+			drawMerge(g, x, mergeY, w, mergeH);
+
+			drawArrow(g, centerX, top + queueH + 2, centerX, nodeY - 5, BLUE);
+			drawArrow(g, centerX, nodeY + nodeH + 2, centerX, mergeY - 5, GREEN);
+			drawPacket(g, centerX, top + queueH + 3, centerX, nodeY - 7,
+					BLUE, animation);
+			drawPacket(g, centerX, nodeY + nodeH + 3, centerX, mergeY - 7,
+					GREEN, (animation + 0.45) % 1.0);
 		}
 
 		private void drawQueueBucket(
@@ -2114,11 +2191,11 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			int claimed = countFor(queue.getClaimedByNode(), node);
 			int done = countFor(queue.getCompletedByNode(), node);
 			g.setColor(TEXT);
-			g.setFont(font(Font.BOLD, 10));
+			g.setFont(NebulaDesign.fontMono(9.5f));
 			String claimText = claimed + " claimed / " + done + " done";
 			if (w < 210)
 			{
-				g.drawString(shortText(claimText, Math.max(9, w / 9)),
+				g.drawString(done + "/" + claimed + " done",
 						x + 14,
 						y + 53);
 			}
@@ -2135,21 +2212,21 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 
 		private void drawMerge(Graphics2D g, int x, int y, int w, int h)
 		{
-			g.setColor(themed(new Color(229, 244, 235), StudioNightTheme.NIGHT_PANEL_INK));
-			g.fillRoundRect(x, y, w, h, 30, 30);
-			g.setColor(GREEN);
-			g.setStroke(new BasicStroke(2f));
-			g.drawRoundRect(x, y, w, h, 30, 30);
-			g.setFont(font(Font.BOLD, 15));
-			g.setColor(TEXT);
-			g.drawString("MERGE", x + 24, y + 34);
-			g.setFont(font(Font.BOLD, 20));
+			g.setColor(NebulaDesign.SUCCESS_SOFT);
+			g.fillRoundRect(x, y, w, h, 16, 16);
+			g.setColor(NebulaDesign.withAlpha(GREEN, 130));
+			g.setStroke(new BasicStroke(1.4f));
+			g.drawRoundRect(x, y, w, h, 16, 16);
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(MUTED);
+			g.drawString("MERGE", x + 20, y + 26);
+			g.setFont(NebulaDesign.fontSemiBold(18f));
 			g.setColor(GREEN);
 			g.drawString(queue.getCompletedCount() + "/"
-					+ queue.getTotalShards(), x + 20, y + 62);
-			g.setFont(font(Font.BOLD, 10));
+					+ queue.getTotalShards(), x + 18, y + 56);
+			g.setFont(NebulaDesign.fontSmall());
 			g.setColor(MUTED);
-			g.drawString("complete work", x + 18, y + 79);
+			g.drawString("complete work", x + 18, y + 76);
 		}
 	}
 
@@ -2159,7 +2236,9 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		bar.setForeground(color);
 		bar.setBackground(track());
 		bar.setBorder(BorderFactory.createEmptyBorder());
-		bar.setFont(font(Font.BOLD, 10));
+		bar.setFont(NebulaDesign.fontMono(9.5f));
+		bar.setOpaque(false);
+		bar.setUI(new MeterUI());
 	}
 
 	private static int countFor(Map<Integer,Integer> counts, int nodeIndex)
@@ -2171,7 +2250,7 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 	private static void drawTitle(Graphics2D g, String text, int x, int y)
 	{
 		g.setColor(TEXT);
-		g.setFont(font(Font.BOLD, 14));
+		g.setFont(NebulaDesign.fontSemiBold(14f));
 		g.drawString(text, x, y);
 	}
 
@@ -2184,17 +2263,22 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			String label,
 			Color accent)
 	{
-		g.setColor(glass(220));
-		g.fillRoundRect(x, y, w, h, 16, 16);
-		g.setColor(new Color(accent.getRed(), accent.getGreen(),
-				accent.getBlue(), 80));
-		g.drawRoundRect(x, y, w, h, 16, 16);
-		g.setColor(new Color(accent.getRed(), accent.getGreen(),
-				accent.getBlue(), 38));
-		g.fillRoundRect(x, y, w, 28, 16, 16);
+		g.setColor(glass(216));
+		g.fillRoundRect(x, y, w, h, 12, 12);
+		g.setColor(NebulaDesign.withAlpha(accent, 70));
+		g.drawRoundRect(x, y, w, h, 12, 12);
+		g.setColor(NebulaDesign.withAlpha(accent,
+				StudioNightTheme.isNightMode() ? 40 : 26));
+		g.fillRoundRect(x, y, w, 28, 12, 12);
 		g.setColor(MUTED);
-		g.setFont(font(Font.BOLD, 10));
-		g.drawString(label.toUpperCase(Locale.US), x + 14, y + 19);
+		g.setFont(NebulaDesign.fontSection());
+		String caption = label.toUpperCase(Locale.US);
+		while (caption.length() > 4
+				&& g.getFontMetrics().stringWidth(caption) > w - 26)
+		{
+			caption = caption.substring(0, caption.length() - 2) + "…";
+		}
+		g.drawString(caption, x + 14, y + 19);
 	}
 
 	private static void drawMetric(
@@ -2206,24 +2290,28 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			String value,
 			Color accent)
 	{
-		g.setColor(themed(
-				new Color(250, 252, 255),
-				StudioNightTheme.blend(
-						StudioNightTheme.NIGHT_PANEL_INK,
-						accent,
-						0.08f)));
+		g.setColor(SURFACE_ALT);
 		g.fillRoundRect(x, y, w, 52, 12, 12);
-		g.setColor(new Color(accent.getRed(), accent.getGreen(),
-				accent.getBlue(), 120));
+		g.setColor(BORDER);
 		g.drawRoundRect(x, y, w, 52, 12, 12);
-		g.setColor(MUTED);
-		g.setFont(font(Font.BOLD, 10));
-		g.drawString(label.toUpperCase(Locale.US), x + 11, y + 18);
+		g.setColor(accent);
+		g.fillOval(x + 12, y + 12, 7, 7);
+		g.setColor(NebulaDesign.TEXT_TERTIARY);
+		g.setFont(NebulaDesign.fontSection());
+		g.drawString(label.toUpperCase(Locale.US), x + 25, y + 19);
 		g.setColor(TEXT);
-		g.setFont(font(Font.BOLD, 18));
-		g.drawString(shortText(value, Math.max(8, w / 11)),
-				x + 11,
-				y + 41);
+		g.setFont(NebulaDesign.fontSemiBold(16f));
+		if (g.getFontMetrics().stringWidth(value) > w - 22)
+		{
+			g.setFont(NebulaDesign.fontSemiBold(12.5f));
+		}
+		String shown = value;
+		while (shown.length() > 4
+				&& g.getFontMetrics().stringWidth(shown) > w - 22)
+		{
+			shown = shown.substring(0, shown.length() - 2) + "…";
+		}
+		g.drawString(shown, x + 12, y + 41);
 	}
 
 	private static void drawToken(
@@ -2233,12 +2321,13 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			String text,
 			Color accent)
 	{
-		g.setColor(new Color(accent.getRed(), accent.getGreen(),
-				accent.getBlue(), 35));
-		g.fillRoundRect(x, y, 26, 23, 6, 6);
+		g.setColor(NebulaDesign.withAlpha(accent,
+				StudioNightTheme.isNightMode() ? 48 : 32));
+		g.fillRoundRect(x, y, 26, 23, 8, 8);
+		g.setColor(NebulaDesign.withAlpha(accent, 150));
+		g.drawRoundRect(x, y, 26, 23, 8, 8);
 		g.setColor(accent);
-		g.drawRoundRect(x, y, 26, 23, 6, 6);
-		g.setFont(font(Font.BOLD, 10));
+		g.setFont(NebulaDesign.fontMono(9.5f));
 		g.drawString(shortText(text, 3), x + 8, y + 15);
 	}
 
@@ -2252,9 +2341,9 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 	{
 		double p = Math.max(0.0, Math.min(1.0, progress));
 		g.setColor(track());
-		g.fillRoundRect(x, y, w, 6, 8, 8);
+		g.fillRoundRect(x, y, w, 6, 6, 6);
 		g.setColor(accent);
-		g.fillRoundRect(x, y, (int)Math.round(w * p), 6, 8, 8);
+		g.fillRoundRect(x, y, (int)Math.round(w * p), 6, 6, 6);
 	}
 
 	private static void drawArrow(
@@ -2367,7 +2456,7 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 				g.setColor(glass(190));
 				g.fillOval(xs[i] - 4, ys[i] - 4, 8, 8);
 			}
-			g.setFont(font(Font.BOLD, 11));
+			g.setFont(NebulaDesign.fontMedium(10.5f));
 			g.setColor(MUTED);
 			String label = RecommendationModeSupport.algorithmName(algorithm)
 					+ " live controls | "
@@ -2375,6 +2464,465 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 					+ queue.getTotalShards() + " queue work complete";
 			g.drawString(shortText(label, Math.max(24, w / 9)), 24, h - 12);
 			g.dispose();
+		}
+	}
+
+	/** Rounded Nebula card: surface fill, soft day shadow, subtle border. */
+	private static class CardPanel extends JPanel
+	{
+		CardPanel(LayoutManager layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaWidgets.paintCard(
+					g2, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Hero card with the Nebula aurora wash. */
+	private static final class HeroCard extends JPanel
+	{
+		HeroCard(LayoutManager layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int w = getWidth();
+			int h = getHeight();
+			boolean night = StudioNightTheme.isNightMode();
+			if (!night)
+			{
+				g2.setColor(new Color(23, 35, 60, 14));
+				g2.fillRoundRect(1, 3, w - 2, h - 3,
+						NebulaDesign.RADIUS_CARD + 1, NebulaDesign.RADIUS_CARD + 1);
+			}
+			RoundRectangle2D shape = new RoundRectangle2D.Float(
+					0, 0, w - 1, h - 2,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+			g2.setColor(SURFACE);
+			g2.fill(shape);
+			java.awt.Shape oldClip = g2.getClip();
+			g2.clip(shape);
+			int accentAlpha = night ? 26 : 15;
+			int purpleAlpha = night ? 24 : 13;
+			g2.setPaint(new RadialGradientPaint(
+					new Point2D.Float(w * 0.22f, 0f),
+					Math.max(1f, w * 0.42f),
+					new float[] { 0f, 1f },
+					new Color[] {
+							NebulaDesign.withAlpha(NebulaDesign.ACCENT, accentAlpha),
+							NebulaDesign.withAlpha(NebulaDesign.ACCENT, 0)
+					}));
+			g2.fillRect(0, 0, w, h);
+			g2.setPaint(new RadialGradientPaint(
+					new Point2D.Float(w * 0.85f, h),
+					Math.max(1f, w * 0.5f),
+					new float[] { 0f, 1f },
+					new Color[] {
+							NebulaDesign.withAlpha(NebulaDesign.PURPLE, purpleAlpha),
+							NebulaDesign.withAlpha(NebulaDesign.PURPLE, 0)
+					}));
+			g2.fillRect(0, 0, w, h);
+			g2.setClip(oldClip);
+			g2.setColor(BORDER);
+			g2.draw(shape);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Rounded secondary-surface card (guidance, KPI tiles). */
+	private static final class AltCard extends JPanel
+	{
+		AltCard(LayoutManager layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(SURFACE_ALT);
+			g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+			g2.setColor(BORDER);
+			g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Rounded console well for the event log. */
+	private static final class ConsoleCard extends JPanel
+	{
+		ConsoleCard(LayoutManager layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(NebulaDesign.CONSOLE);
+			g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+					NebulaDesign.RADIUS_CONSOLE, NebulaDesign.RADIUS_CONSOLE);
+			g2.setColor(BORDER);
+			g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+					NebulaDesign.RADIUS_CONSOLE, NebulaDesign.RADIUS_CONSOLE);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Soft-tint status pill label; colors come from set background/foreground. */
+	private static final class Pill extends JLabel
+	{
+		Pill(String text)
+		{
+			super(text);
+			setOpaque(false);
+			setFont(NebulaDesign.fontSmall());
+			setBorder(new EmptyBorder(4, 12, 4, 12));
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			if (isBackgroundSet())
+			{
+				g2.setColor(getBackground());
+				int h = getHeight();
+				g2.fillRoundRect(0, 0, getWidth(), h, h, h);
+			}
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Label that keeps its adaptive foreground through theme-walk repaints. */
+	private static final class LockedLabel extends JLabel
+	{
+		private boolean locked;
+
+		LockedLabel(String text)
+		{
+			super(text);
+		}
+
+		void lockForeground()
+		{
+			locked = true;
+		}
+
+		public void setForeground(Color color)
+		{
+			if (!locked)
+			{
+				super.setForeground(color);
+			}
+		}
+	}
+
+	/** Leading 8px hue dot for KPI tile eyebrows. */
+	private static final class DotIcon implements javax.swing.Icon
+	{
+		private final Color hue;
+
+		DotIcon(Color hue)
+		{
+			this.hue = hue;
+		}
+
+		public int getIconWidth()
+		{
+			return 8;
+		}
+
+		public int getIconHeight()
+		{
+			return 8;
+		}
+
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(hue);
+			g2.fillOval(x, y, 8, 8);
+			g2.dispose();
+		}
+	}
+
+	/** Nebula button: primary accent, neutral outline, or soft semantic tint. */
+	private static final class NebulaButton extends JButton
+	{
+		static final int PRIMARY = 0;
+		static final int NEUTRAL = 1;
+		static final int DANGER = 2;
+		static final int WARNING = 3;
+		static final int SUCCESS = 4;
+
+		private final int kind;
+
+		NebulaButton(String text, int kind)
+		{
+			super(text);
+			this.kind = kind;
+			setContentAreaFilled(false);
+			setFocusPainted(false);
+			setBorderPainted(false);
+			setOpaque(false);
+			setRolloverEnabled(true);
+			setFont(NebulaDesign.fontMedium(12.5f));
+			setBorder(new EmptyBorder(8, 14, 8, 14));
+			setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int w = getWidth();
+			int h = getHeight();
+			boolean night = StudioNightTheme.isNightMode();
+			boolean pressed = getModel().isArmed() && getModel().isPressed();
+			boolean hover = getModel().isRollover();
+			Color fill;
+			Color textColor;
+			Color outline = null;
+			if (!isEnabled())
+			{
+				fill = SURFACE_ALT;
+				textColor = NebulaDesign.TEXT_TERTIARY;
+				outline = BORDER;
+			}
+			else if (kind == PRIMARY)
+			{
+				fill = pressed ? NebulaDesign.ACCENT_PRESS
+						: hover ? NebulaDesign.ACCENT_HOVER : NebulaDesign.ACCENT;
+				textColor = NebulaDesign.TEXT_ON_ACCENT;
+			}
+			else if (kind == NEUTRAL)
+			{
+				fill = hover || pressed
+						? NebulaDesign.SURFACE_RAISED
+						: (night ? NebulaDesign.NIGHT_SURFACE_RAISED : SURFACE);
+				textColor = TEXT;
+				outline = hover || pressed
+						? NebulaDesign.withAlpha(NebulaDesign.ACCENT, 110)
+						: NebulaDesign.BORDER_STRONG;
+			}
+			else
+			{
+				Color hue = kind == DANGER ? RED
+						: kind == WARNING ? AMBER : GREEN;
+				int fillAlpha = night
+						? (hover || pressed ? 62 : 40)
+						: (hover || pressed ? 44 : 26);
+				fill = NebulaDesign.withAlpha(hue, fillAlpha);
+				textColor = hue;
+				outline = NebulaDesign.withAlpha(hue, hover || pressed ? 170 : 100);
+			}
+			g2.setColor(fill);
+			g2.fillRoundRect(0, 0, w - 1, h - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			if (kind == PRIMARY && hover && isEnabled())
+			{
+				g2.setColor(NebulaDesign.withAlpha(NebulaDesign.ACCENT, 60));
+				g2.setStroke(new BasicStroke(2.4f));
+				g2.drawRoundRect(-1, -1, w + 1, h + 1,
+						NebulaDesign.RADIUS_CONTROL + 2, NebulaDesign.RADIUS_CONTROL + 2);
+				g2.setStroke(new BasicStroke(1f));
+			}
+			if (outline != null)
+			{
+				g2.setColor(outline);
+				g2.drawRoundRect(0, 0, w - 1, h - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			}
+			g2.setColor(textColor);
+			g2.setFont(getFont());
+			java.awt.FontMetrics metrics = g2.getFontMetrics();
+			String label = getText();
+			int available = w - 12;
+			if (metrics.stringWidth(label) > available)
+			{
+				while (label.length() > 3
+						&& metrics.stringWidth(label + "…") > available)
+				{
+					label = label.substring(0, label.length() - 1);
+				}
+				label = label + "…";
+			}
+			int textX = (w - metrics.stringWidth(label)) / 2;
+			int textY = (h - metrics.getHeight()) / 2 + metrics.getAscent();
+			g2.drawString(label, textX, textY);
+			g2.dispose();
+		}
+	}
+
+	/** Rounded surface-alt combo with a stroked chevron. */
+	private static final class NebulaComboUI extends BasicComboBoxUI
+	{
+		protected JButton createArrowButton()
+		{
+			JButton arrow = new JButton()
+			{
+				protected void paintComponent(Graphics graphics)
+				{
+					Graphics2D g2 = (Graphics2D)graphics.create();
+					NebulaWidgets.paintChevron(
+							g2,
+							getWidth() / 2 - 1,
+							getHeight() / 2 - 1,
+							7,
+							MUTED);
+					g2.dispose();
+				}
+			};
+			arrow.setPreferredSize(new Dimension(24, 24));
+			arrow.setBorder(BorderFactory.createEmptyBorder());
+			arrow.setContentAreaFilled(false);
+			arrow.setFocusable(false);
+			arrow.setOpaque(false);
+			return arrow;
+		}
+
+		public void paint(Graphics graphics, JComponent component)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int w = component.getWidth();
+			int h = component.getHeight();
+			g2.setColor(SURFACE_ALT);
+			g2.fillRoundRect(0, 0, w - 1, h - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.setColor(comboBox.isPopupVisible()
+					? NebulaDesign.withAlpha(NebulaDesign.ACCENT, 140)
+					: NebulaDesign.BORDER_STRONG);
+			g2.drawRoundRect(0, 0, w - 1, h - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.dispose();
+			Rectangle bounds = rectangleForCurrentValue();
+			paintCurrentValue(graphics, bounds, false);
+		}
+
+		public void paintCurrentValueBackground(
+				Graphics graphics,
+				Rectangle bounds,
+				boolean hasFocus)
+		{
+			// The rounded fill is painted in paint().
+		}
+	}
+
+	/** Slim rounded meter with a mono caption above the track. */
+	private static final class MeterUI extends BasicProgressBarUI
+	{
+		public void paint(Graphics graphics, JComponent component)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			JProgressBar bar = (JProgressBar)component;
+			int w = component.getWidth();
+			int h = component.getHeight();
+			int trackHeight = 6;
+			int trackY = h - trackHeight - 1;
+			String text = bar.isStringPainted() ? bar.getString() : null;
+			if (text != null && text.length() > 0)
+			{
+				g2.setFont(bar.getFont());
+				g2.setColor(MUTED);
+				g2.drawString(text, 0, Math.max(9, trackY - 4));
+			}
+			g2.setColor(track());
+			g2.fillRoundRect(0, trackY, w, trackHeight, trackHeight, trackHeight);
+			int fillWidth = (int)Math.round(w * bar.getPercentComplete());
+			if (fillWidth > 0)
+			{
+				g2.setColor(bar.getForeground());
+				g2.fillRoundRect(0, trackY, Math.max(trackHeight, fillWidth),
+						trackHeight, trackHeight, trackHeight);
+			}
+			g2.dispose();
+		}
+	}
+
+	/** Capacity gauge slider: pill track, accent fill, live % readout. */
+	private static final class GaugeSliderUI extends BasicSliderUI
+	{
+		GaugeSliderUI(JSlider slider)
+		{
+			super(slider);
+		}
+
+		public void paint(Graphics graphics, JComponent component)
+		{
+			super.paint(graphics, component);
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setFont(NebulaDesign.fontMono(9.5f));
+			g2.setColor(NebulaDesign.TEXT_TERTIARY);
+			String readout = slider.getValue() + "%";
+			int textWidth = g2.getFontMetrics().stringWidth(readout);
+			g2.drawString(readout, component.getWidth() - textWidth - 2, 10);
+			g2.dispose();
+		}
+
+		public void paintTrack(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int cy = trackRect.y + trackRect.height / 2;
+			g2.setColor(track());
+			g2.fillRoundRect(trackRect.x, cy - 3, trackRect.width, 6, 6, 6);
+			int fillWidth = thumbRect.x + thumbRect.width / 2 - trackRect.x;
+			if (fillWidth > 0)
+			{
+				g2.setColor(slider.isEnabled()
+						? NebulaDesign.ACCENT
+						: NebulaDesign.BORDER_STRONG);
+				g2.fillRoundRect(trackRect.x, cy - 3,
+						Math.min(trackRect.width, fillWidth), 6, 6, 6);
+			}
+			g2.dispose();
+		}
+
+		public void paintThumb(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int cx = thumbRect.x + thumbRect.width / 2;
+			int cy = thumbRect.y + thumbRect.height / 2;
+			g2.setColor(slider.isEnabled()
+					? NebulaDesign.ACCENT
+					: NebulaDesign.BORDER_STRONG);
+			g2.fillOval(cx - 7, cy - 7, 14, 14);
+			g2.setColor(SURFACE);
+			g2.fillOval(cx - 3, cy - 3, 6, 6);
+			g2.dispose();
+		}
+
+		public void paintFocus(Graphics graphics)
+		{
+			// The accent thumb carries focus emphasis.
 		}
 	}
 }

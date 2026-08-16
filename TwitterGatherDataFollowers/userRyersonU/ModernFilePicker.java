@@ -6,9 +6,9 @@ import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.GridLayout;
-import java.awt.Insets;
 import java.awt.Window;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.dnd.DropTarget;
@@ -59,34 +59,33 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
-import javax.swing.UIManager;
 import javax.swing.WindowConstants;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
-import javax.swing.filechooser.FileSystemView;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableCellRenderer;
-import javax.swing.plaf.basic.BasicButtonUI;
 
 final class ModernFilePicker
 {
-	private static final Color BACKGROUND = new Color(244, 247, 251);
-	private static final Color SURFACE = Color.WHITE;
-	private static final Color SURFACE_ALT = new Color(248, 250, 253);
-	private static final Color BORDER = new Color(207, 216, 227);
-	private static final Color TEXT = new Color(24, 29, 36);
-	private static final Color MUTED = new Color(91, 101, 116);
-	private static final Color BLUE = new Color(0, 113, 227);
-	private static final Color BLUE_HOVER = new Color(38, 139, 236);
-	private static final Color GREEN = new Color(20, 150, 105);
-	private static final Color WARNING = new Color(185, 96, 18);
-	private static final Color SELECTION = new Color(217, 236, 255);
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color FAINT = NebulaDesign.TEXT_TERTIARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color WARNING = NebulaDesign.WARNING;
+	private static final Color SELECTION = NebulaDesign.SELECTION;
+	private static final String HOVER_KEY = "nebula.hoverIndex";
+	private static final Icon FOLDER_ICON = new GlyphIcon(Glyphs.FOLDER, 15, true);
+	private static final Icon FILE_ICON = new GlyphIcon(Glyphs.FILE, 15, false);
 	private static final int MAX_SEARCHED_ENTRIES = 20000;
 	private static final int MAX_SEARCH_RESULTS = 1000;
-	private static final String FILTER_DATASETS = "Dataset files (.txt, .csv, .tsv, .xlsx)";
+	private static final String FILTER_DATASETS = "Datasets (.txt .csv .tsv .xlsx)";
 	private static final String FILTER_ALL = "All files";
 	private static final String RECENTS_KEY = "recentDatasetFiles";
 	private static final String LAST_DIRECTORY_KEY = "lastDatasetDirectory";
@@ -130,17 +129,48 @@ final class ModernFilePicker
 				new DefaultListModel<Location>();
 		private final JList<Location> locationsList = new JList<Location>(locationsModel);
 		private final FileTableModel tableModel = new FileTableModel();
-		private final JTable filesTable = new JTable(tableModel);
+		private final JTable filesTable = new JTable(tableModel)
+		{
+			private static final long serialVersionUID = 1L;
+
+			protected void paintComponent(Graphics graphics)
+			{
+				super.paintComponent(graphics);
+				if (getRowCount() > 0)
+				{
+					return;
+				}
+				Graphics2D g2 = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(g2);
+				int centerX = getWidth() / 2;
+				int centerY = Math.min(getHeight() / 2, 190);
+				Glyphs.paint(g2, Glyphs.FOLDER, centerX - 15, centerY - 46, 30,
+						NebulaDesign.withAlpha(NebulaDesign.currentBorderStrong(), 190));
+				g2.setFont(NebulaDesign.fontSemiBold(13.5f));
+				g2.setColor(MUTED);
+				java.awt.FontMetrics metrics = g2.getFontMetrics();
+				g2.drawString(emptyTitle,
+						centerX - metrics.stringWidth(emptyTitle) / 2, centerY);
+				g2.setFont(NebulaDesign.fontBody(12f));
+				g2.setColor(FAINT);
+				metrics = g2.getFontMetrics();
+				g2.drawString(emptyDetail,
+						centerX - metrics.stringWidth(emptyDetail) / 2, centerY + 20);
+				g2.dispose();
+			}
+		};
 		private final JTextField searchField = new JTextField();
 		private final JTextField pathField = new JTextField();
 		private final JLabel statusLabel = new JLabel(" ");
 		private final JLabel selectedNameLabel = new JLabel("No file selected");
 		private final JLabel selectedInfoLabel = new JLabel("Choose a readable file to continue.");
-		private final JLabel compatibilityLabel = new JLabel(" ");
-		private final JButton backButton = createButton("Back", false);
-		private final JButton upButton = createButton("Up", false);
-		private final JButton homeButton = createButton("Home", false);
-		private final JButton refreshButton = createButton("Refresh", false);
+		private final PillLabel compatibilityLabel = new PillLabel();
+		private final JButton backButton = createNavButton("Back", Glyphs.BACK);
+		private final JButton upButton = createNavButton("Up", Glyphs.UP);
+		private final JButton homeButton = createNavButton("Home", Glyphs.HOME);
+		private final JButton refreshButton = createNavButton("Refresh", Glyphs.REFRESH);
+		private String emptyTitle = "Loading files";
+		private String emptyDetail = "Reading this folder…";
 		private final JButton cancelButton = createButton("Cancel", false);
 		private final JButton openButton = createButton("Open", true);
 		private final JComboBox<String> filterBox =
@@ -204,9 +234,9 @@ final class ModernFilePicker
 
 		private void buildInterface()
 		{
-			JPanel root = new JPanel(new BorderLayout(0, 0));
-			root.setBackground(BACKGROUND);
-			root.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+			JPanel root = new CanvasPanel();
+			root.setLayout(new BorderLayout(0, 12));
+			root.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
 
 			root.add(createHeader(), BorderLayout.NORTH);
 			root.add(createBrowser(), BorderLayout.CENTER);
@@ -217,83 +247,102 @@ final class ModernFilePicker
 
 		private JComponent createHeader()
 		{
-			JPanel header = new JPanel(new BorderLayout(24, 0));
-			header.setBackground(SURFACE);
-			header.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER),
-					BorderFactory.createEmptyBorder(18, 22, 18, 22)));
+			JPanel header = new HeroPanel(new BorderLayout(24, 0));
+			header.setBorder(BorderFactory.createEmptyBorder(15, 20, 15, 18));
 
 			JPanel identity = new JPanel();
 			identity.setOpaque(false);
 			identity.setLayout(new javax.swing.BoxLayout(
 					identity, javax.swing.BoxLayout.Y_AXIS));
-			JLabel title = new JLabel(inspectDataset ? "Open a dataset" : "Open a text file");
-			title.setFont(font(Font.BOLD, 20));
+			JLabel eyebrow = new JLabel(
+					inspectDataset ? "Dataset library" : "Corpus library");
+			NebulaWidgets.styleSectionLabel(eyebrow);
+			eyebrow.setForeground(BLUE);
+			eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
+			JLabel title = new JLabel(
+					inspectDataset ? "Open a dataset" : "Open a text file");
+			title.setFont(NebulaDesign.fontSemiBold(20f));
 			title.setForeground(TEXT);
+			title.setAlignmentX(Component.LEFT_ALIGNMENT);
 			JLabel subtitle = new JLabel(inspectDataset
-					? "Browse or search your folders. Dataset structure is checked before loading."
+					? "Browse or search your folders. Structure is checked before loading."
 					: "Browse or search your folders for a corpus file.");
-			subtitle.setFont(font(Font.PLAIN, 12));
+			subtitle.setFont(NebulaDesign.fontBody(12.5f));
 			subtitle.setForeground(MUTED);
+			subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+			identity.add(eyebrow);
+			identity.add(javax.swing.Box.createRigidArea(new Dimension(0, 4)));
 			identity.add(title);
 			identity.add(javax.swing.Box.createRigidArea(new Dimension(0, 4)));
 			identity.add(subtitle);
 
-			JPanel searchPanel = new JPanel(new BorderLayout(8, 0));
-			searchPanel.setOpaque(false);
-			searchPanel.setPreferredSize(new Dimension(350, 38));
-			JLabel searchLabel = new JLabel("Search");
-			searchLabel.setFont(font(Font.BOLD, 12));
-			searchLabel.setForeground(MUTED);
-			searchField.setFont(font(Font.PLAIN, 13));
+			searchField.setFont(NebulaDesign.fontBody(13f));
 			searchField.setToolTipText(
 					"Search file and folder names inside the current location");
-			searchField.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER, 1),
-					BorderFactory.createEmptyBorder(8, 10, 8, 10)));
-			searchPanel.add(searchLabel, BorderLayout.WEST);
-			searchPanel.add(searchField, BorderLayout.CENTER);
+			FieldWell searchWell = new FieldWell(
+					searchField, Glyphs.SEARCH, "Search this folder");
+			searchWell.setPreferredSize(new Dimension(292, 36));
+
+			JLabel shortcuts = new JLabel("Ctrl-F to search  ·  Esc to close");
+			shortcuts.setFont(NebulaDesign.fontMedium(10.5f));
+			shortcuts.setForeground(FAINT);
+			shortcuts.setHorizontalAlignment(SwingConstants.RIGHT);
+
+			JPanel searchColumn = new JPanel(new BorderLayout(0, 7));
+			searchColumn.setOpaque(false);
+			searchColumn.add(searchWell, BorderLayout.NORTH);
+			searchColumn.add(shortcuts, BorderLayout.CENTER);
+
+			JPanel searchHolder = new JPanel(new BorderLayout());
+			searchHolder.setOpaque(false);
+			searchHolder.add(searchColumn, BorderLayout.NORTH);
 
 			header.add(identity, BorderLayout.CENTER);
-			header.add(searchPanel, BorderLayout.EAST);
+			header.add(searchHolder, BorderLayout.EAST);
 			return header;
 		}
 
 		private JComponent createBrowser()
 		{
-			JPanel browser = new JPanel(new BorderLayout(0, 0));
-			browser.setBackground(BACKGROUND);
+			BrowserCard browser = new BrowserCard();
 
 			locationsList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 			locationsList.setCellRenderer(new LocationRenderer());
-			locationsList.setBackground(SURFACE_ALT);
-			locationsList.setBorder(BorderFactory.createEmptyBorder(12, 8, 12, 8));
+			locationsList.setOpaque(false);
+			locationsList.setBorder(BorderFactory.createEmptyBorder(12, 10, 12, 10));
 			JScrollPane locationsScroll = new JScrollPane(locationsList);
-			locationsScroll.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, BORDER));
-			locationsScroll.setPreferredSize(new Dimension(190, 100));
+			locationsScroll.setBorder(BorderFactory.createEmptyBorder());
+			locationsScroll.setOpaque(false);
+			locationsScroll.getViewport().setOpaque(false);
+			locationsScroll.setPreferredSize(new Dimension(198, 100));
+			polishScroll(locationsScroll);
 
 			JPanel fileBrowser = new JPanel(new BorderLayout(0, 0));
-			fileBrowser.setBackground(SURFACE);
+			fileBrowser.setOpaque(false);
 			fileBrowser.add(createNavigationBar(), BorderLayout.NORTH);
 			fileBrowser.add(createFileTable(), BorderLayout.CENTER);
 
 			JSplitPane splitPane = new JSplitPane(
 					JSplitPane.HORIZONTAL_SPLIT, locationsScroll, fileBrowser);
 			splitPane.setDividerSize(1);
-			splitPane.setDividerLocation(190);
+			splitPane.setDividerLocation(198);
 			splitPane.setResizeWeight(0.0);
 			splitPane.setBorder(null);
+			splitPane.setOpaque(false);
+			splitPane.setContinuousLayout(true);
+			browser.setLayout(new BorderLayout());
 			browser.add(splitPane, BorderLayout.CENTER);
+			browser.trackRail(splitPane);
 			return browser;
 		}
 
 		private JComponent createNavigationBar()
 		{
-			JPanel toolbar = new JPanel(new BorderLayout(10, 0));
-			toolbar.setBackground(SURFACE);
+			JPanel toolbar = new JPanel(new BorderLayout(12, 0));
+			toolbar.setOpaque(false);
 			toolbar.setBorder(BorderFactory.createCompoundBorder(
 					BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER),
-					BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+					BorderFactory.createEmptyBorder(11, 14, 11, 14)));
 
 			JPanel navigationButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
 			navigationButtons.setOpaque(false);
@@ -302,90 +351,126 @@ final class ModernFilePicker
 			navigationButtons.add(homeButton);
 			navigationButtons.add(refreshButton);
 
-			pathField.setFont(font(Font.PLAIN, 12));
-			pathField.setForeground(TEXT);
-			pathField.setBackground(SURFACE_ALT);
+			pathField.setFont(NebulaDesign.fontMono(11.5f));
 			pathField.setToolTipText("Type a folder path and press Enter");
-			pathField.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER, 1),
-					BorderFactory.createEmptyBorder(7, 9, 7, 9)));
+			FieldWell pathWell = new FieldWell(pathField, Glyphs.FOLDER, null);
 
 			toolbar.add(navigationButtons, BorderLayout.WEST);
-			toolbar.add(pathField, BorderLayout.CENTER);
+			toolbar.add(pathWell, BorderLayout.CENTER);
 			return toolbar;
+		}
+
+		private static void polishScroll(JScrollPane scroll)
+		{
+			scroll.getVerticalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+			scroll.getVerticalScrollBar().setOpaque(false);
+			scroll.getHorizontalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+			scroll.getHorizontalScrollBar().setOpaque(false);
+			scroll.getVerticalScrollBar().setUnitIncrement(20);
 		}
 
 		private JComponent createFileTable()
 		{
 			filesTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-			filesTable.setRowHeight(30);
+			filesTable.setRowHeight(32);
 			filesTable.setShowHorizontalLines(false);
 			filesTable.setShowVerticalLines(false);
 			filesTable.setIntercellSpacing(new Dimension(0, 0));
 			filesTable.setFillsViewportHeight(true);
-			filesTable.setBackground(SURFACE);
+			filesTable.setOpaque(false);
 			filesTable.setForeground(TEXT);
-			filesTable.setSelectionBackground(SELECTION);
+			filesTable.setSelectionBackground(NebulaDesign.ACCENT_SOFT);
 			filesTable.setSelectionForeground(TEXT);
-			filesTable.setFont(font(Font.PLAIN, 12));
-			filesTable.getTableHeader().setFont(font(Font.BOLD, 11));
-			filesTable.getTableHeader().setBackground(SURFACE_ALT);
-			filesTable.getTableHeader().setForeground(MUTED);
-			filesTable.getTableHeader().setReorderingAllowed(false);
+			filesTable.setFont(NebulaDesign.fontBody(12.5f));
 			filesTable.setAutoCreateRowSorter(true);
 
-			filesTable.getColumnModel().getColumn(0).setPreferredWidth(330);
-			filesTable.getColumnModel().getColumn(1).setPreferredWidth(100);
-			filesTable.getColumnModel().getColumn(2).setPreferredWidth(95);
-			filesTable.getColumnModel().getColumn(3).setPreferredWidth(155);
-			filesTable.getColumnModel().getColumn(4).setPreferredWidth(280);
-			filesTable.getColumnModel().getColumn(0).setCellRenderer(new FileNameRenderer());
-			filesTable.getColumnModel().getColumn(2).setCellRenderer(new FileSizeRenderer());
-			filesTable.getColumnModel().getColumn(3).setCellRenderer(new DateRenderer());
+			javax.swing.table.JTableHeader header = filesTable.getTableHeader();
+			header.setFont(NebulaDesign.fontMedium(11f));
+			header.setBackground(NebulaDesign.SURFACE_RAISED);
+			header.setForeground(MUTED);
+			header.setReorderingAllowed(false);
+			header.setBorder(BorderFactory.createEmptyBorder());
+			header.setPreferredSize(new Dimension(10, 34));
+			header.setDefaultRenderer(new FileHeaderRenderer());
+
+			filesTable.getColumnModel().getColumn(0).setPreferredWidth(322);
+			filesTable.getColumnModel().getColumn(1).setPreferredWidth(76);
+			filesTable.getColumnModel().getColumn(2).setPreferredWidth(80);
+			filesTable.getColumnModel().getColumn(3).setPreferredWidth(146);
+			filesTable.getColumnModel().getColumn(4).setPreferredWidth(190);
+			filesTable.getColumnModel().getColumn(0).setMinWidth(150);
+			filesTable.getColumnModel().getColumn(1).setMinWidth(58);
+			filesTable.getColumnModel().getColumn(2).setMinWidth(72);
+			filesTable.getColumnModel().getColumn(3).setMinWidth(140);
+			filesTable.getColumnModel().getColumn(4).setMinWidth(70);
+			FileCellRenderer cells = new FileCellRenderer();
+			for (int column = 0; column < 5; column++)
+			{
+				filesTable.getColumnModel().getColumn(column).setCellRenderer(cells);
+			}
 
 			JScrollPane tableScroll = new JScrollPane(filesTable);
-			tableScroll.setBorder(null);
-			tableScroll.getViewport().setBackground(SURFACE);
+			tableScroll.setBorder(BorderFactory.createEmptyBorder());
+			tableScroll.setOpaque(false);
+			tableScroll.getViewport().setOpaque(false);
+			polishScroll(tableScroll);
 			return tableScroll;
 		}
 
 		private JComponent createFooter()
 		{
-			JPanel footer = new JPanel(new BorderLayout(16, 0));
-			footer.setBackground(SURFACE);
-			footer.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createMatteBorder(1, 0, 0, 0, BORDER),
-					BorderFactory.createEmptyBorder(12, 18, 14, 18)));
+			JPanel footer = new CardPanel(new BorderLayout(18, 0));
+			footer.setBorder(BorderFactory.createEmptyBorder(13, 18, 15, 16));
 
 			JPanel selectedPanel = new JPanel();
 			selectedPanel.setOpaque(false);
 			selectedPanel.setLayout(new javax.swing.BoxLayout(
 					selectedPanel, javax.swing.BoxLayout.Y_AXIS));
-			selectedNameLabel.setFont(font(Font.BOLD, 13));
+			selectedNameLabel.setFont(NebulaDesign.fontSemiBold(13.5f));
 			selectedNameLabel.setForeground(TEXT);
-			selectedInfoLabel.setFont(font(Font.PLAIN, 11));
+			selectedNameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+			selectedInfoLabel.setFont(NebulaDesign.fontBody(11.5f));
 			selectedInfoLabel.setForeground(MUTED);
-			compatibilityLabel.setFont(font(Font.BOLD, 11));
+			selectedInfoLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+			compatibilityLabel.setFont(NebulaDesign.fontMedium(11f));
 			compatibilityLabel.setForeground(MUTED);
+			statusLabel.setFont(NebulaDesign.fontMedium(11f));
+			statusLabel.setForeground(FAINT);
+
+			JPanel metaRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+			metaRow.setOpaque(false);
+			metaRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+			metaRow.add(compatibilityLabel);
+			metaRow.add(javax.swing.Box.createRigidArea(new Dimension(9, 1)));
+			metaRow.add(statusLabel);
+
 			selectedPanel.add(selectedNameLabel);
 			selectedPanel.add(javax.swing.Box.createRigidArea(new Dimension(0, 3)));
 			selectedPanel.add(selectedInfoLabel);
-			selectedPanel.add(javax.swing.Box.createRigidArea(new Dimension(0, 3)));
-			selectedPanel.add(compatibilityLabel);
+			selectedPanel.add(javax.swing.Box.createRigidArea(new Dimension(0, 6)));
+			selectedPanel.add(metaRow);
 
-			JPanel controls = new JPanel(new GridLayout(2, 1, 0, 8));
+			JPanel controls = new JPanel(new GridLayout(2, 1, 0, 9));
 			controls.setOpaque(false);
-			JPanel options = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+			JPanel options = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
 			options.setOpaque(false);
-			filterBox.setFont(font(Font.PLAIN, 11));
-			filterBox.setPreferredSize(new Dimension(210, 28));
+			filterBox.setUI(new NebulaComboUI());
+			filterBox.setFont(NebulaDesign.fontMedium(11.5f));
+			filterBox.setForeground(TEXT);
+			filterBox.setOpaque(false);
+			filterBox.setRenderer(new ComboItemRenderer());
+			filterBox.setBorder(BorderFactory.createEmptyBorder());
+			filterBox.setPreferredSize(new Dimension(226, 32));
 			hiddenFilesBox.setOpaque(false);
 			hiddenFilesBox.setForeground(MUTED);
-			hiddenFilesBox.setFont(font(Font.PLAIN, 11));
+			hiddenFilesBox.setFont(NebulaDesign.fontMedium(11.5f));
+			hiddenFilesBox.setIcon(new CheckBoxIcon());
+			hiddenFilesBox.setIconTextGap(8);
+			NebulaWidgets.polishButton(hiddenFilesBox);
 			options.add(hiddenFilesBox);
 			options.add(filterBox);
 
-			JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+			JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
 			actions.setOpaque(false);
 			actions.add(cancelButton);
 			actions.add(openButton);
@@ -394,10 +479,7 @@ final class ModernFilePicker
 
 			JPanel footerCenter = new JPanel(new BorderLayout(12, 0));
 			footerCenter.setOpaque(false);
-			statusLabel.setFont(font(Font.PLAIN, 11));
-			statusLabel.setForeground(MUTED);
 			footerCenter.add(selectedPanel, BorderLayout.CENTER);
-			footerCenter.add(statusLabel, BorderLayout.SOUTH);
 
 			footer.add(footerCenter, BorderLayout.CENTER);
 			footer.add(controls, BorderLayout.EAST);
@@ -532,6 +614,30 @@ final class ModernFilePicker
 						openSelection();
 					}
 				}
+
+				public void mouseExited(MouseEvent event)
+				{
+					setHover(filesTable, -1);
+				}
+			});
+			filesTable.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
+				public void mouseMoved(MouseEvent event)
+				{
+					setHover(filesTable, filesTable.rowAtPoint(event.getPoint()));
+				}
+			});
+			locationsList.addMouseListener(new MouseAdapter() {
+				public void mouseExited(MouseEvent event)
+				{
+					setHover(locationsList, -1);
+				}
+			});
+			locationsList.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
+				public void mouseMoved(MouseEvent event)
+				{
+					setHover(locationsList, locationsList.locationToIndex(
+							event.getPoint()));
+				}
 			});
 
 			InputMap inputMap = getRootPane().getInputMap(
@@ -601,35 +707,55 @@ final class ModernFilePicker
 		private void populateLocations()
 		{
 			locationsModel.clear();
-			locationsModel.addElement(new Location("Recent files", null, true));
+			locationsModel.addElement(
+					new Location("Recent files", null, true, "Pinned", Glyphs.CLOCK));
 
 			File project = new File(System.getProperty("user.dir"));
-			addLocation("Project", project);
-			addLocation("Dataset", new File(project, "Dataset"));
-			addLocation("Tested datasets", new File(project, "TestedDataset"));
+			addLocation("Project", project, "Workspace", Glyphs.FOLDER);
+			addLocation("Dataset", new File(project, "Dataset"),
+					"Workspace", Glyphs.FOLDER);
+			addLocation("Tested datasets", new File(project, "TestedDataset"),
+					"Workspace", Glyphs.FOLDER);
 
 			File home = new File(System.getProperty("user.home"));
-			addLocation("Home", home);
-			addLocation("Downloads", new File(home, "Downloads"));
-			addLocation("Desktop", new File(home, "Desktop"));
-			addLocation("Documents", new File(home, "Documents"));
+			addLocation("Home", home, "Places", Glyphs.HOME);
+			addLocation("Downloads", new File(home, "Downloads"),
+					"Places", Glyphs.DOWNLOAD);
+			addLocation("Desktop", new File(home, "Desktop"),
+					"Places", Glyphs.FOLDER);
+			addLocation("Documents", new File(home, "Documents"),
+					"Places", Glyphs.FOLDER);
 
 			File[] roots = File.listRoots();
 			if (roots != null)
 			{
 				for (File root : roots)
 				{
-					addLocation(root.getPath(), root);
+					addLocation(root.getPath(), root, "Drives", Glyphs.DRIVE);
 				}
 			}
 		}
 
-		private void addLocation(String name, File directory)
+		private void addLocation(String name, File directory, String group, int glyph)
 		{
 			if (directory != null && directory.isDirectory())
 			{
-				locationsModel.addElement(new Location(name, directory, false));
+				locationsModel.addElement(
+						new Location(name, directory, false, group, glyph));
 			}
+		}
+
+		private void setHover(JComponent component, int index)
+		{
+			Object current = component.getClientProperty(HOVER_KEY);
+			int previous = current instanceof Integer
+					? ((Integer)current).intValue() : -1;
+			if (previous == index)
+			{
+				return;
+			}
+			component.putClientProperty(HOVER_KEY, Integer.valueOf(index));
+			component.repaint();
 		}
 
 		private File determineInitialDirectory(
@@ -753,9 +879,13 @@ final class ModernFilePicker
 			final boolean showHidden = hiddenFilesBox.isSelected();
 			final boolean datasetFilter = FILTER_DATASETS.equals(filterBox.getSelectedItem());
 
-			statusLabel.setForeground(MUTED);
+			statusLabel.setForeground(FAINT);
 			statusLabel.setText(recursive ? "Searching this folder and its subfolders..."
 					: "Loading files...");
+			emptyTitle = recursive ? "Searching" : "Loading files";
+			emptyDetail = recursive
+					? "Looking through this folder and its subfolders…"
+					: "Reading this folder…";
 			setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 
 			loadWorker = new SwingWorker<List<FileEntry>,Void>() {
@@ -778,7 +908,11 @@ final class ModernFilePicker
 						tableModel.setEntries(entries);
 						String suffix = recursive ? " search result(s)" : " item(s)";
 						statusLabel.setText(entries.size() + suffix);
-						statusLabel.setForeground(MUTED);
+						statusLabel.setForeground(FAINT);
+						emptyTitle = recursive ? "No matches" : "This folder is empty";
+						emptyDetail = recursive
+								? "Try a shorter search term or a different filter."
+								: "Try another filter, or show hidden files.";
 					}
 					catch (Exception exception)
 					{
@@ -786,6 +920,8 @@ final class ModernFilePicker
 						statusLabel.setText("Files could not be loaded: "
 								+ exception.getMessage());
 						statusLabel.setForeground(WARNING);
+						emptyTitle = "Files could not be loaded";
+						emptyDetail = "Check the folder permissions and try again.";
 					}
 					finally
 					{
@@ -951,7 +1087,9 @@ final class ModernFilePicker
 			}
 			tableModel.setEntries(entries);
 			statusLabel.setText(entries.size() + " recent file(s)");
-			statusLabel.setForeground(MUTED);
+			statusLabel.setForeground(FAINT);
+			emptyTitle = "No recent files yet";
+			emptyDetail = "Files you open here show up in this list.";
 			clearSelectionDetails();
 		}
 
@@ -970,11 +1108,10 @@ final class ModernFilePicker
 					: formatBytes(file.length()) + "  |  "
 							+ formatDate(file.lastModified()) + "  |  "
 							+ file.getParent());
-			openButton.setText(file.isDirectory() ? "Open Folder" : "Open");
+			openButton.setText(file.isDirectory() ? "Open folder" : "Open");
 			openButton.setEnabled(file.isDirectory()
 					? file.canRead() : file.isFile() && file.canRead());
-			compatibilityLabel.setText(" ");
-			compatibilityLabel.setForeground(MUTED);
+			compatibilityLabel.setTone(" ", MUTED, null);
 			if (inspectDataset && file.isFile() && file.canRead())
 			{
 				inspectDataset(file);
@@ -986,7 +1123,7 @@ final class ModernFilePicker
 			filesTable.clearSelection();
 			selectedNameLabel.setText("No file selected");
 			selectedInfoLabel.setText("Choose a readable file to continue.");
-			compatibilityLabel.setText(" ");
+			compatibilityLabel.setTone(" ", MUTED, null);
 			openButton.setText("Open");
 			openButton.setEnabled(false);
 		}
@@ -1031,8 +1168,8 @@ final class ModernFilePicker
 			{
 				inspectionWorker.cancel(true);
 			}
-			compatibilityLabel.setText("Checking dataset structure...");
-			compatibilityLabel.setForeground(MUTED);
+			compatibilityLabel.setTone("Checking structure…", MUTED,
+					NebulaDesign.SURFACE_ALT);
 			inspectionWorker = new SwingWorker<String,Void>() {
 				protected String doInBackground() throws Exception
 				{
@@ -1073,13 +1210,16 @@ final class ModernFilePicker
 					{
 						String result = get();
 						boolean ready = result.startsWith("READY\t");
-						compatibilityLabel.setText(result.substring(result.indexOf('\t') + 1));
-						compatibilityLabel.setForeground(ready ? GREEN : WARNING);
+						compatibilityLabel.setTone(
+								result.substring(result.indexOf('\t') + 1),
+								ready ? GREEN : WARNING,
+								ready ? NebulaDesign.SUCCESS_SOFT
+										: NebulaDesign.WARNING_SOFT);
 					}
 					catch (Exception exception)
 					{
-						compatibilityLabel.setText("The file could not be inspected.");
-						compatibilityLabel.setForeground(WARNING);
+						compatibilityLabel.setTone("The file could not be inspected.",
+								NebulaDesign.DANGER, NebulaDesign.DANGER_SOFT);
 					}
 				}
 			};
@@ -1151,35 +1291,107 @@ final class ModernFilePicker
 		final String name;
 		final File directory;
 		final boolean recent;
+		final String group;
+		final int glyph;
 
-		Location(String name, File directory, boolean recent)
+		Location(String name, File directory, boolean recent, String group, int glyph)
 		{
 			this.name = name;
 			this.directory = directory;
 			this.recent = recent;
+			this.group = group;
+			this.glyph = glyph;
 		}
 	}
 
-	private static final class LocationRenderer extends DefaultListCellRenderer
+	/**
+	 * Sidebar item: grouped section eyebrow, vector glyph, and an accent
+	 * selection pill with a rounded left bar.
+	 */
+	private static final class LocationRenderer extends JComponent
+			implements javax.swing.ListCellRenderer<Location>
 	{
 		private static final long serialVersionUID = 1L;
+		private static final int ITEM_HEIGHT = 32;
+		private static final int GROUP_SPACE = 26;
+		private Location location;
+		private boolean selected;
+		private boolean hovered;
+		private boolean startsGroup;
 
 		public Component getListCellRendererComponent(
-				JList<?> list,
-				Object value,
+				JList<? extends Location> list,
+				Location value,
 				int index,
 				boolean isSelected,
 				boolean cellHasFocus)
 		{
-			JLabel label = (JLabel) super.getListCellRendererComponent(
-					list, value, index, isSelected, cellHasFocus);
-			Location location = (Location) value;
-			label.setText(location.name);
-			label.setFont(font(Font.BOLD, 12));
-			label.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
-			label.setForeground(isSelected ? BLUE : TEXT);
-			label.setBackground(isSelected ? SELECTION : SURFACE_ALT);
-			return label;
+			location = value;
+			selected = isSelected;
+			Object hover = list.getClientProperty(HOVER_KEY);
+			hovered = !isSelected && hover instanceof Integer
+					&& ((Integer)hover).intValue() == index;
+			startsGroup = index == 0
+					|| !list.getModel().getElementAt(index - 1).group.equals(value.group);
+			return this;
+		}
+
+		public Dimension getPreferredSize()
+		{
+			return new Dimension(160,
+					ITEM_HEIGHT + 3 + (startsGroup ? GROUP_SPACE : 0));
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			if (location == null)
+			{
+				return;
+			}
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int top = startsGroup ? GROUP_SPACE : 0;
+			int width = getWidth();
+			if (startsGroup)
+			{
+				NebulaDesign.paintEyebrow(g2, location.group, 8, 15, FAINT);
+			}
+			if (selected)
+			{
+				g2.setColor(NebulaDesign.ACCENT_SOFT);
+				g2.fillRoundRect(0, top, width, ITEM_HEIGHT, 10, 10);
+				g2.setColor(BLUE);
+				g2.fillRoundRect(0, top + 7, 3, ITEM_HEIGHT - 14, 3, 3);
+			}
+			else if (hovered)
+			{
+				g2.setColor(NebulaDesign.withAlpha(
+						NebulaDesign.currentSurfaceRaised(), 190));
+				g2.fillRoundRect(0, top, width, ITEM_HEIGHT, 10, 10);
+			}
+			Color tone = selected ? BLUE : MUTED;
+			Glyphs.paint(g2, location.glyph, 11, top + (ITEM_HEIGHT - 15) / 2, 15, tone);
+			g2.setFont(selected
+					? NebulaDesign.fontSemiBold(12.5f)
+					: NebulaDesign.fontMedium(12.5f));
+			g2.setColor(selected ? TEXT : NebulaDesign.currentTextSecondary());
+			java.awt.FontMetrics metrics = g2.getFontMetrics();
+			int textX = 34;
+			int baseline = top + (ITEM_HEIGHT - metrics.getHeight()) / 2
+					+ metrics.getAscent();
+			String label = location.name;
+			int available = width - textX - 8;
+			if (metrics.stringWidth(label) > available)
+			{
+				while (label.length() > 2
+						&& metrics.stringWidth(label + "…") > available)
+				{
+					label = label.substring(0, label.length() - 1);
+				}
+				label = label + "…";
+			}
+			g2.drawString(label, textX, baseline);
+			g2.dispose();
 		}
 	}
 
@@ -1193,18 +1405,7 @@ final class ModernFilePicker
 		{
 			this.file = file;
 			this.searchRoot = searchRoot;
-			Icon systemIcon;
-			try
-			{
-				systemIcon = FileSystemView.getFileSystemView().getSystemIcon(file);
-			}
-			catch (RuntimeException exception)
-			{
-				systemIcon = file.isDirectory()
-						? UIManager.getIcon("FileView.directoryIcon")
-						: UIManager.getIcon("FileView.fileIcon");
-			}
-			icon = systemIcon;
+			icon = file.isDirectory() ? FOLDER_ICON : FILE_ICON;
 		}
 
 		public int compareTo(FileEntry other)
@@ -1222,7 +1423,7 @@ final class ModernFilePicker
 	{
 		private static final long serialVersionUID = 1L;
 		private final String[] columns =
-				{"Name", "Kind", "Size", "Modified", "Location"};
+				{"Name", "Kind", "Size", "Modified", "Folder"};
 		private List<FileEntry> entries = Collections.emptyList();
 
 		void setEntries(List<FileEntry> entries)
@@ -1289,16 +1490,22 @@ final class ModernFilePicker
 		}
 	}
 
-	private static final class FileNameRenderer extends JLabel
+	/**
+	 * One renderer for every file column: transparent rows, accent-soft hover
+	 * and selection, monospace numerals, and a leading accent bar on the
+	 * selected row.
+	 */
+	private static final class FileCellRenderer extends JLabel
 			implements TableCellRenderer
 	{
 		private static final long serialVersionUID = 1L;
+		private boolean selected;
+		private boolean hovered;
+		private boolean leading;
 
-		FileNameRenderer()
+		FileCellRenderer()
 		{
-			setOpaque(true);
-			setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 6));
-			setFont(font(Font.PLAIN, 12));
+			setOpaque(false);
 		}
 
 		public Component getTableCellRendererComponent(
@@ -1309,91 +1516,760 @@ final class ModernFilePicker
 				int row,
 				int column)
 		{
-			FileEntry entry = (FileEntry) value;
-			setText(entry == null ? "" : entry.file.getName());
-			setIcon(entry == null ? null : entry.icon);
-			setIconTextGap(8);
-			setForeground(TEXT);
-			setBackground(isSelected ? SELECTION
-					: row % 2 == 0 ? SURFACE : SURFACE_ALT);
+			Object hover = table.getClientProperty(HOVER_KEY);
+			selected = isSelected;
+			hovered = !isSelected && hover instanceof Integer
+					&& ((Integer)hover).intValue() == row;
+			leading = column == 0;
+			setIcon(null);
+			setHorizontalAlignment(column == 2
+					? SwingConstants.RIGHT : SwingConstants.LEFT);
+			setBorder(BorderFactory.createEmptyBorder(
+					0, column == 0 ? 12 : 10, 0, column == 2 ? 14 : 10));
+			switch (column)
+			{
+				case 0:
+					FileEntry entry = value instanceof FileEntry
+							? (FileEntry)value : null;
+					setText(entry == null ? "" : entry.file.getName());
+					setIcon(entry == null ? null : entry.icon);
+					setIconTextGap(9);
+					setFont(NebulaDesign.fontMedium(12.5f));
+					setForeground(TEXT);
+					break;
+				case 1:
+					setText(value == null ? "" : String.valueOf(value));
+					setFont(NebulaDesign.fontMedium(11f));
+					setForeground(MUTED);
+					break;
+				case 2:
+					setText(value instanceof Long
+							? formatBytes(((Long)value).longValue()) : "");
+					setFont(NebulaDesign.fontMono(11f));
+					setForeground(MUTED);
+					break;
+				case 3:
+					setText(value instanceof Date
+							? formatDate(((Date)value).getTime()) : "");
+					setFont(NebulaDesign.fontMono(11f));
+					setForeground(MUTED);
+					break;
+				default:
+					setText(relativeLocation(table, row,
+							value == null ? "" : String.valueOf(value)));
+					setFont(NebulaDesign.fontBody(11.5f));
+					setForeground(FAINT);
+					break;
+			}
 			return this;
 		}
-	}
 
-	private static final class FileSizeRenderer extends DefaultTableCellRenderer
-	{
-		private static final long serialVersionUID = 1L;
-
-		FileSizeRenderer()
+		/** Shows the folder a row came from relative to the browsed root. */
+		private static String relativeLocation(JTable table, int row, String path)
 		{
-			setHorizontalAlignment(SwingConstants.RIGHT);
-		}
-
-		protected void setValue(Object value)
-		{
-			setText(value instanceof Long ? formatBytes(((Long) value).longValue()) : "");
-		}
-	}
-
-	private static final class DateRenderer extends DefaultTableCellRenderer
-	{
-		private static final long serialVersionUID = 1L;
-
-		protected void setValue(Object value)
-		{
-			setText(value instanceof Date ? formatDate(((Date) value).getTime()) : "");
-		}
-	}
-
-	private static JButton createButton(String text, final boolean primary)
-	{
-		final JButton button = new JButton(text);
-		button.setUI(new BasicButtonUI());
-		button.setFont(font(Font.BOLD, 12));
-		button.setFocusPainted(false);
-		button.setOpaque(true);
-		button.setContentAreaFilled(true);
-		button.setBorderPainted(true);
-		button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		button.setMargin(new Insets(7, 13, 7, 13));
-		button.setForeground(primary ? Color.WHITE : TEXT);
-		button.setBackground(primary ? BLUE : new Color(239, 243, 248));
-		button.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(primary ? BLUE : BORDER, 1),
-				BorderFactory.createEmptyBorder(2, 4, 2, 4)));
-		button.addPropertyChangeListener("enabled", event ->
-				applyButtonState(button, primary));
-		button.addMouseListener(new MouseAdapter() {
-			public void mouseEntered(MouseEvent event)
+			Object first = table.getValueAt(row, 0);
+			if (!(first instanceof FileEntry))
 			{
-				if (button.isEnabled())
+				return path;
+			}
+			File root = ((FileEntry)first).searchRoot;
+			if (root == null)
+			{
+				return path;
+			}
+			String rootPath = root.getAbsolutePath();
+			if (!path.equals(rootPath)
+					&& path.startsWith(rootPath + File.separator))
+			{
+				return path.substring(rootPath.length() + 1);
+			}
+			File parent = new File(path);
+			String name = parent.getName();
+			return name.length() > 0 ? name : path;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			if (selected)
+			{
+				g2.setColor(NebulaDesign.ACCENT_SOFT);
+				g2.fillRect(0, 0, getWidth(), getHeight());
+				if (leading)
 				{
-					button.setBackground(primary ? BLUE_HOVER : new Color(228, 235, 244));
+					g2.setColor(BLUE);
+					g2.fillRect(0, 0, 2, getHeight());
 				}
 			}
-
-			public void mouseExited(MouseEvent event)
+			else if (hovered)
 			{
-				applyButtonState(button, primary);
+				g2.setColor(NebulaDesign.withAlpha(
+						NebulaDesign.currentSurfaceRaised(), 170));
+				g2.fillRect(0, 0, getWidth(), getHeight());
 			}
-		});
+			g2.setColor(BORDER);
+			g2.fillRect(0, getHeight() - 1, getWidth(), 1);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Table header: raised surface, caps-style label, single bottom rule. */
+	private static final class FileHeaderRenderer extends DefaultTableCellRenderer
+	{
+		private static final long serialVersionUID = 1L;
+
+		public Component getTableCellRendererComponent(
+				JTable table,
+				Object value,
+				boolean isSelected,
+				boolean hasFocus,
+				int row,
+				int column)
+		{
+			JLabel label = (JLabel)super.getTableCellRendererComponent(
+					table, value, false, false, row, column);
+			label.setOpaque(true);
+			label.setBackground(NebulaDesign.SURFACE_RAISED);
+			label.setForeground(MUTED);
+			label.setFont(NebulaDesign.fontMedium(11f));
+			label.setHorizontalAlignment(column == 2
+					? SwingConstants.RIGHT : SwingConstants.LEFT);
+			label.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createMatteBorder(0, 0, 1, 0, NebulaDesign.BORDER_STRONG),
+					BorderFactory.createEmptyBorder(
+							0, column == 0 ? 12 : 10, 0, column == 2 ? 14 : 10)));
+			return label;
+		}
+	}
+
+	private static JButton createButton(String text, boolean primary)
+	{
+		PickerButton button = new PickerButton(text, primary);
+		NebulaWidgets.polishButton(button);
 		return button;
 	}
 
-	private static void applyButtonState(JButton button, boolean primary)
+	private static JButton createNavButton(String text, int glyph)
 	{
-		boolean enabled = button.isEnabled();
-		button.setForeground(enabled && primary ? Color.WHITE
-				: enabled ? TEXT : new Color(139, 149, 163));
-		button.setBackground(enabled && primary ? BLUE : new Color(239, 243, 248));
-		button.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(enabled && primary ? BLUE : BORDER, 1),
-				BorderFactory.createEmptyBorder(2, 4, 2, 4)));
+		PickerButton button = new PickerButton(text, false);
+		button.setGlyph(glyph);
+		NebulaWidgets.polishButton(button);
+		return button;
 	}
 
-	private static Font font(int style, int size)
+	/** Nebula button: accent primary or neutral outline, painted per mode. */
+	private static final class PickerButton extends JButton
 	{
-		return new Font("SansSerif", style, size);
+		private static final long serialVersionUID = 1L;
+		private final boolean primary;
+		private int glyph = -1;
+
+		PickerButton(String text, boolean primary)
+		{
+			super(text);
+			this.primary = primary;
+			setFont(NebulaDesign.fontMedium(12.5f));
+			setFocusPainted(false);
+			setRolloverEnabled(true);
+			setOpaque(false);
+			setContentAreaFilled(false);
+			setBorderPainted(false);
+			setBorder(BorderFactory.createEmptyBorder(8, 16, 8, 16));
+		}
+
+		void setGlyph(int glyph)
+		{
+			this.glyph = glyph;
+			setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 13));
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int width = getWidth();
+			int height = getHeight();
+			boolean hover = getModel().isRollover();
+			boolean pressed = getModel().isPressed();
+			Color fill;
+			Color label;
+			Color outline = null;
+			if (!isEnabled())
+			{
+				fill = NebulaDesign.SURFACE_ALT;
+				label = FAINT;
+				outline = BORDER;
+			}
+			else if (primary)
+			{
+				fill = pressed ? NebulaDesign.ACCENT_PRESS
+						: hover ? NebulaDesign.ACCENT_HOVER : BLUE;
+				label = NebulaDesign.TEXT_ON_ACCENT;
+			}
+			else
+			{
+				fill = hover || pressed
+						? NebulaDesign.SURFACE_RAISED : NebulaDesign.SURFACE;
+				label = TEXT;
+				outline = hover
+						? NebulaDesign.withAlpha(NebulaDesign.currentAccent(), 120)
+						: NebulaDesign.BORDER_STRONG;
+			}
+			g2.setColor(fill);
+			g2.fillRoundRect(0, 0, width - 1, height - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			if (outline != null)
+			{
+				g2.setColor(outline);
+				g2.drawRoundRect(0, 0, width - 1, height - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			}
+			g2.setFont(getFont());
+			java.awt.FontMetrics metrics = g2.getFontMetrics();
+			int glyphSpan = glyph < 0 ? 0 : 22;
+			int textWidth = metrics.stringWidth(getText());
+			int startX = (width - textWidth - glyphSpan) / 2;
+			int baseline = (height - metrics.getHeight()) / 2 + metrics.getAscent();
+			if (glyph >= 0)
+			{
+				Glyphs.paint(g2, glyph, startX, (height - 14) / 2, 14, label);
+			}
+			g2.setColor(label);
+			g2.drawString(getText(), startX + glyphSpan, baseline);
+			g2.dispose();
+		}
+	}
+
+	/** Dialog canvas: the Nebula vertical wash behind the floating cards. */
+	private static final class CanvasPanel extends JPanel
+	{
+		private static final long serialVersionUID = 1L;
+
+		CanvasPanel()
+		{
+			setOpaque(true);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int width = getWidth();
+			int height = getHeight();
+			g2.setPaint(new java.awt.GradientPaint(
+					0, 0, NebulaDesign.CANVAS_TOP,
+					0, Math.max(1, height), NebulaDesign.CANVAS_BOTTOM));
+			g2.fillRect(0, 0, width, height);
+			g2.dispose();
+		}
+	}
+
+	/** Hero card: surface fill, faint aurora glows, rounded border. */
+	private static final class HeroPanel extends JPanel
+	{
+		private static final long serialVersionUID = 1L;
+
+		HeroPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			int width = getWidth();
+			int height = getHeight();
+			java.awt.Shape round = new java.awt.geom.RoundRectangle2D.Float(
+					0, 0, width - 1, height - 1,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+			g2.setColor(NebulaDesign.SURFACE);
+			g2.fill(round);
+			java.awt.Shape oldClip = g2.getClip();
+			g2.clip(round);
+			boolean night = NebulaDesign.night();
+			Color accent = night
+					? NebulaDesign.NIGHT_ACCENT : NebulaDesign.DAY_ACCENT;
+			Color purple = night
+					? NebulaDesign.NIGHT_PURPLE : NebulaDesign.DAY_PURPLE;
+			int glowAlpha = night ? 26 : 15;
+			paintGlow(g2, width * 0.16f, 0f, Math.max(width, height) * 0.45f,
+					NebulaDesign.withAlpha(accent, glowAlpha));
+			paintGlow(g2, width * 0.88f, height, Math.max(width, height) * 0.40f,
+					NebulaDesign.withAlpha(purple, Math.max(6, glowAlpha - 3)));
+			g2.setClip(oldClip);
+			g2.setColor(BORDER);
+			g2.draw(round);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+
+		private static void paintGlow(
+				Graphics2D g2,
+				float centerX,
+				float centerY,
+				float radius,
+				Color color)
+		{
+			java.awt.RadialGradientPaint paint = new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(centerX, centerY),
+					Math.max(1f, radius),
+					new float[] {0f, 1f},
+					new Color[] {color, NebulaDesign.withAlpha(color, 0)});
+			g2.setPaint(paint);
+			g2.fillRect(
+					Math.round(centerX - radius),
+					Math.round(centerY - radius),
+					Math.round(radius * 2),
+					Math.round(radius * 2));
+		}
+	}
+
+	/** Rounded Nebula card with day shadow / night surface lift. */
+	private static class CardPanel extends JPanel
+	{
+		private static final long serialVersionUID = 1L;
+
+		CardPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/**
+	 * Browser card: paints the sidebar rail band inside the card shape and
+	 * clips its contents so the split pane keeps rounded corners.
+	 */
+	private static final class BrowserCard extends CardPanel
+	{
+		private static final long serialVersionUID = 1L;
+		private JSplitPane rail;
+
+		BrowserCard()
+		{
+			super(new BorderLayout());
+		}
+
+		void trackRail(JSplitPane splitPane)
+		{
+			rail = splitPane;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			super.paintComponent(graphics);
+			if (rail == null)
+			{
+				return;
+			}
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.clip(cardShape());
+			int width = Math.max(0, rail.getDividerLocation());
+			g2.setColor(NebulaDesign.RAIL);
+			g2.fillRect(0, 0, width, getHeight());
+			g2.setColor(BORDER);
+			g2.fillRect(width, 0, 1, getHeight());
+			g2.dispose();
+		}
+
+		protected void paintChildren(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			g2.clip(cardShape());
+			super.paintChildren(g2);
+			g2.dispose();
+			Graphics2D outline = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(outline);
+			outline.setColor(BORDER);
+			outline.draw(cardShape());
+			outline.dispose();
+		}
+
+		private java.awt.Shape cardShape()
+		{
+			return new java.awt.geom.RoundRectangle2D.Float(
+					0, 0, getWidth() - 1, getHeight() - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+		}
+	}
+
+	/** Rounded input well hosting a transparent text field plus a glyph. */
+	private static final class FieldWell extends JPanel
+	{
+		private static final long serialVersionUID = 1L;
+		private final JTextField field;
+		private final int glyph;
+		private final String placeholder;
+
+		FieldWell(JTextField field, int glyph, String placeholder)
+		{
+			super(new BorderLayout());
+			this.field = field;
+			this.glyph = glyph;
+			this.placeholder = placeholder;
+			setOpaque(false);
+			setBorder(BorderFactory.createEmptyBorder(
+					0, glyph < 0 ? 12 : 33, 0, 12));
+			field.setOpaque(false);
+			field.setBorder(BorderFactory.createEmptyBorder(8, 0, 8, 0));
+			field.setForeground(TEXT);
+			field.setCaretColor(BLUE);
+			field.setSelectionColor(SELECTION);
+			field.setSelectedTextColor(TEXT);
+			add(field, BorderLayout.CENTER);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(SURFACE_ALT);
+			g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.setColor(field.hasFocus()
+					? NebulaDesign.withAlpha(NebulaDesign.currentAccent(), 170)
+					: BORDER);
+			g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			if (glyph >= 0)
+			{
+				Glyphs.paint(g2, glyph, 11, (getHeight() - 15) / 2, 15, FAINT);
+			}
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+
+		protected void paintChildren(Graphics graphics)
+		{
+			super.paintChildren(graphics);
+			if (placeholder == null || field.getText().length() > 0
+					|| field.hasFocus())
+			{
+				return;
+			}
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setFont(field.getFont());
+			g2.setColor(FAINT);
+			java.awt.FontMetrics metrics = g2.getFontMetrics();
+			g2.drawString(placeholder, getInsets().left,
+					(getHeight() - metrics.getHeight()) / 2 + metrics.getAscent());
+			g2.dispose();
+		}
+	}
+
+	/** Status pill: soft tint capsule behind a strong hue label. */
+	private static final class PillLabel extends JLabel
+	{
+		private static final long serialVersionUID = 1L;
+		private Color tint;
+
+		PillLabel()
+		{
+			super(" ");
+			setOpaque(false);
+			setBorder(BorderFactory.createEmptyBorder(3, 10, 3, 10));
+		}
+
+		void setTone(String text, Color foreground, Color tint)
+		{
+			this.tint = tint;
+			boolean blank = text == null || text.trim().length() == 0;
+			setBorder(blank
+					? BorderFactory.createEmptyBorder()
+					: BorderFactory.createEmptyBorder(3, 10, 3, 10));
+			setText(blank ? "" : text);
+			setForeground(foreground);
+			revalidate();
+			repaint();
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			if (tint != null && getText().trim().length() > 0)
+			{
+				Graphics2D g2 = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(g2);
+				g2.setColor(tint);
+				g2.fillRoundRect(0, 0, getWidth(), getHeight(),
+						getHeight(), getHeight());
+				g2.dispose();
+			}
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** 16px custom checkbox: rounded well, accent fill and tick when on. */
+	private static final class CheckBoxIcon implements Icon
+	{
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			javax.swing.AbstractButton button =
+					(javax.swing.AbstractButton)component;
+			boolean on = button.isSelected();
+			boolean enabled = button.isEnabled();
+			int size = getIconWidth();
+			if (on && enabled)
+			{
+				g2.setColor(BLUE);
+				g2.fillRoundRect(x, y, size, size, 5, 5);
+			}
+			else
+			{
+				g2.setColor(enabled ? SURFACE_ALT : NebulaDesign.INSET);
+				g2.fillRoundRect(x, y, size, size, 5, 5);
+				g2.setColor(enabled ? NebulaDesign.BORDER_STRONG : BORDER);
+				g2.drawRoundRect(x, y, size - 1, size - 1, 5, 5);
+			}
+			if (on)
+			{
+				g2.setColor(enabled ? NebulaDesign.TEXT_ON_ACCENT : FAINT);
+				g2.setStroke(new java.awt.BasicStroke(2f,
+						java.awt.BasicStroke.CAP_ROUND,
+						java.awt.BasicStroke.JOIN_ROUND));
+				g2.drawLine(x + 4, y + 8, x + 7, y + 11);
+				g2.drawLine(x + 7, y + 11, x + 12, y + 5);
+			}
+			g2.dispose();
+		}
+
+		public int getIconWidth()
+		{
+			return 16;
+		}
+
+		public int getIconHeight()
+		{
+			return 16;
+		}
+	}
+
+	/** Combo delegate: rounded field, chevron, no bevelled arrow button. */
+	private static final class NebulaComboUI
+			extends javax.swing.plaf.basic.BasicComboBoxUI
+	{
+		protected JButton createArrowButton()
+		{
+			JButton button = new JButton()
+			{
+				private static final long serialVersionUID = 1L;
+
+				protected void paintComponent(Graphics graphics)
+				{
+					Graphics2D g2 = (Graphics2D)graphics.create();
+					NebulaWidgets.paintChevron(g2, getWidth() / 2,
+							getHeight() / 2 - 1, 9, MUTED);
+					g2.dispose();
+				}
+			};
+			button.setOpaque(false);
+			button.setContentAreaFilled(false);
+			button.setBorderPainted(false);
+			button.setFocusable(false);
+			button.setPreferredSize(new Dimension(26, 26));
+			return button;
+		}
+
+		public void paint(Graphics graphics, JComponent component)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(SURFACE_ALT);
+			g2.fillRoundRect(0, 0, component.getWidth() - 1,
+					component.getHeight() - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.setColor(NebulaDesign.BORDER_STRONG);
+			g2.drawRoundRect(0, 0, component.getWidth() - 1,
+					component.getHeight() - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.dispose();
+			super.paint(graphics, component);
+		}
+
+		public void paintCurrentValueBackground(
+				Graphics graphics,
+				java.awt.Rectangle bounds,
+				boolean hasFocus)
+		{
+			// The rounded field fill is painted once in paint().
+		}
+	}
+
+	/** Popup + closed-state renderer for the filter combo. */
+	private static final class ComboItemRenderer extends DefaultListCellRenderer
+	{
+		private static final long serialVersionUID = 1L;
+
+		public Component getListCellRendererComponent(
+				JList<?> list,
+				Object value,
+				int index,
+				boolean isSelected,
+				boolean cellHasFocus)
+		{
+			JLabel label = (JLabel)super.getListCellRendererComponent(
+					list, value, index, isSelected, cellHasFocus);
+			label.setFont(NebulaDesign.fontMedium(11.5f));
+			if (index < 0)
+			{
+				label.setOpaque(false);
+				label.setBorder(BorderFactory.createEmptyBorder(0, 11, 0, 4));
+				label.setForeground(TEXT);
+			}
+			else
+			{
+				label.setOpaque(true);
+				label.setBorder(BorderFactory.createEmptyBorder(7, 12, 7, 12));
+				label.setBackground(isSelected
+						? NebulaDesign.ACCENT_SOFT : SURFACE);
+				label.setForeground(isSelected ? BLUE : TEXT);
+			}
+			return label;
+		}
+	}
+
+	/** Icon wrapper so table cells and lists can use the vector glyphs. */
+	private static final class GlyphIcon implements Icon
+	{
+		private final int kind;
+		private final int size;
+		private final boolean accent;
+
+		GlyphIcon(int kind, int size, boolean accent)
+		{
+			this.kind = kind;
+			this.size = size;
+			this.accent = accent;
+		}
+
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Glyphs.paint((Graphics2D)graphics, kind, x, y, size,
+					accent ? BLUE : FAINT);
+		}
+
+		public int getIconWidth()
+		{
+			return size;
+		}
+
+		public int getIconHeight()
+		{
+			return size;
+		}
+	}
+
+	/** Small stroked vector glyphs used by the sidebar, toolbar, and fields. */
+	private static final class Glyphs
+	{
+		static final int SEARCH = 0;
+		static final int FOLDER = 1;
+		static final int CLOCK = 2;
+		static final int HOME = 3;
+		static final int DRIVE = 4;
+		static final int DOWNLOAD = 5;
+		static final int BACK = 6;
+		static final int UP = 7;
+		static final int REFRESH = 8;
+		static final int FILE = 9;
+
+		private Glyphs()
+		{
+		}
+
+		static void paint(
+				Graphics2D graphics,
+				int kind,
+				int x,
+				int y,
+				int size,
+				Color color)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.translate(x, y);
+			g2.setColor(color);
+			g2.setStroke(new java.awt.BasicStroke(
+					Math.max(1.4f, size / 10f),
+					java.awt.BasicStroke.CAP_ROUND,
+					java.awt.BasicStroke.JOIN_ROUND));
+			int span = size;
+			int mid = span / 2;
+			switch (kind)
+			{
+				case SEARCH:
+					g2.drawOval(1, 1, span - 6, span - 6);
+					g2.drawLine(span - 5, span - 5, span - 1, span - 1);
+					break;
+				case FOLDER:
+					g2.drawLine(1, span - 2, span - 2, span - 2);
+					g2.draw(new java.awt.geom.RoundRectangle2D.Float(
+							1, 3.5f, span - 3, span - 6, 3f, 3f));
+					g2.drawLine(1, 3, mid - 1, 3);
+					break;
+				case CLOCK:
+					g2.drawOval(1, 1, span - 3, span - 3);
+					g2.drawLine(mid, mid - 3, mid, mid);
+					g2.drawLine(mid, mid, mid + 3, mid + 1);
+					break;
+				case HOME:
+					g2.drawLine(1, mid, mid, 1);
+					g2.drawLine(mid, 1, span - 2, mid);
+					g2.drawLine(3, mid, 3, span - 2);
+					g2.drawLine(span - 4, mid, span - 4, span - 2);
+					g2.drawLine(3, span - 2, span - 4, span - 2);
+					break;
+				case DRIVE:
+					g2.draw(new java.awt.geom.RoundRectangle2D.Float(
+							1, 3f, span - 3, span - 7, 3f, 3f));
+					g2.fillOval(span - 6, mid - 1, 2, 2);
+					break;
+				case DOWNLOAD:
+					g2.drawLine(mid, 1, mid, span - 5);
+					g2.drawLine(mid - 3, span - 8, mid, span - 5);
+					g2.drawLine(mid + 3, span - 8, mid, span - 5);
+					g2.drawLine(1, span - 2, span - 2, span - 2);
+					break;
+				case BACK:
+					g2.drawLine(mid + 2, 2, mid - 3, mid);
+					g2.drawLine(mid - 3, mid, mid + 2, span - 2);
+					break;
+				case UP:
+					g2.drawLine(mid, span - 2, mid, 2);
+					g2.drawLine(mid - 4, 6, mid, 2);
+					g2.drawLine(mid + 4, 6, mid, 2);
+					break;
+				case FILE:
+					g2.drawLine(2, 2, span - 5, 2);
+					g2.drawLine(2, 2, 2, span - 2);
+					g2.drawLine(2, span - 2, span - 3, span - 2);
+					g2.drawLine(span - 3, span - 2, span - 3, 5);
+					g2.drawLine(span - 5, 2, span - 3, 5);
+					break;
+				default:
+					g2.drawArc(1, 1, span - 3, span - 3, 45, 260);
+					g2.drawLine(span - 3, 1, span - 3, 5);
+					g2.drawLine(span - 3, 1, span - 7, 1);
+					break;
+			}
+			g2.dispose();
+		}
 	}
 
 	private static String fileType(File file)
@@ -1428,7 +2304,7 @@ final class ModernFilePicker
 
 	private static String formatDate(long timestamp)
 	{
-		DateFormat format = new SimpleDateFormat("MMM d, yyyy  h:mm a", Locale.US);
+		DateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
 		return format.format(new Date(timestamp));
 	}
 }

@@ -12,11 +12,7 @@ import java.awt.FontMetrics;
 import java.awt.FlowLayout;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
-import java.awt.Insets;
 import java.awt.Rectangle;
-import java.awt.RenderingHints;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.HierarchyEvent;
@@ -42,13 +38,13 @@ import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.Scrollable;
-import javax.swing.JSeparator;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
@@ -66,30 +62,22 @@ import javax.swing.table.JTableHeader;
 final class UciRetailImportPanel extends JPanel {
     private static final long serialVersionUID = 1L;
 
-    private static final Color INK = StudioNightTheme.adaptiveColor(
-            new Color(31, 41, 55), StudioNightTheme.NIGHT_TEXT);
-    private static final Color MUTED = StudioNightTheme.adaptiveColor(
-            new Color(100, 116, 139), StudioNightTheme.NIGHT_MUTED);
-    private static final Color LINE = StudioNightTheme.adaptiveColor(
-            new Color(203, 213, 225), StudioNightTheme.NIGHT_BORDER);
-    private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-            new Color(248, 250, 252), StudioNightTheme.NIGHT_BACKGROUND);
-    private static final Color CARD = StudioNightTheme.adaptiveColor(
-            Color.WHITE, StudioNightTheme.NIGHT_SURFACE);
-    private static final Color BLUE = StudioNightTheme.adaptiveColor(
-            new Color(82, 113, 224), StudioNightTheme.NIGHT_BLUE);
+    private static final Color INK = NebulaDesign.TEXT_PRIMARY;
+    private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+    private static final Color LINE = NebulaDesign.BORDER_SUBTLE;
+    private static final Color SURFACE = NebulaDesign.SURFACE_ALT;
+    private static final Color CARD = NebulaDesign.SURFACE;
+    private static final Color BLUE = NebulaDesign.ACCENT;
     private static final Color BLUE_DARK = StudioNightTheme.adaptiveColor(
-            new Color(58, 82, 181), new Color(130, 183, 255));
-    private static final Color GREEN = StudioNightTheme.adaptiveColor(
-            new Color(74, 145, 107), StudioNightTheme.NIGHT_GREEN);
-    private static final Color AMBER = StudioNightTheme.adaptiveColor(
-            new Color(177, 112, 37), StudioNightTheme.NIGHT_AMBER);
-    private static final Color SOFT_BLUE = StudioNightTheme.adaptiveColor(
-            new Color(238, 243, 255), StudioNightTheme.NIGHT_SURFACE_ALT);
-    private static final Color SOFT_GREEN = StudioNightTheme.adaptiveColor(
-            new Color(237, 248, 242), StudioNightTheme.NIGHT_PANEL_INK);
-    private static final Color SOFT_AMBER = StudioNightTheme.adaptiveColor(
-            new Color(255, 248, 232), StudioNightTheme.NIGHT_PANEL_INK);
+            NebulaDesign.DAY_ACCENT_PRESS, NebulaDesign.NIGHT_ACCENT_HOVER);
+    private static final Color GREEN = NebulaDesign.SUCCESS;
+    private static final Color AMBER = NebulaDesign.WARNING;
+    private static final Color RED = NebulaDesign.DANGER;
+    private static final Color TEAL = NebulaDesign.INFO;
+    private static final Color PURPLE = NebulaDesign.PURPLE;
+    private static final int BTN_PRIMARY = 0;
+    private static final int BTN_SUCCESS = 1;
+    private static final int BTN_NEUTRAL = 2;
 
     private final ControllerAgentGui owner;
 
@@ -186,7 +174,7 @@ final class UciRetailImportPanel extends JPanel {
     UciRetailImportPanel(ControllerAgentGui owner) {
         this.owner = owner;
         setLayout(new BorderLayout());
-        setBackground(SURFACE);
+        setOpaque(false);
         add(buildContent(), BorderLayout.CENTER);
         setIdleState();
     }
@@ -220,16 +208,15 @@ final class UciRetailImportPanel extends JPanel {
 
         JPanel footer = new JPanel(new BorderLayout(12, 0));
         footer.setOpaque(false);
-        statusBadge = badge("READY", SOFT_GREEN, GREEN);
+        statusBadge = badge("READY", GREEN);
         footer.add(statusBadge, BorderLayout.WEST);
         progressBar = new JProgressBar(0, 100);
         progressBar.setStringPainted(true);
         progressBar.setString("Choose a source file to inspect.");
-        progressBar.setOpaque(true);
-        progressBar.setBackground(CARD);
-        progressBar.setForeground(BLUE);
-        progressBar.setFont(progressBar.getFont().deriveFont(Font.BOLD, 12f));
-        progressBar.setBorder(BorderFactory.createLineBorder(LINE));
+        progressBar.setOpaque(false);
+        progressBar.setFont(NebulaDesign.fontMedium(11.5f));
+        progressBar.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+        progressBar.setUI(new NebulaProgressUI());
         footer.add(progressBar, BorderLayout.CENTER);
         root.add(footer, BorderLayout.SOUTH);
         return root;
@@ -238,56 +225,39 @@ final class UciRetailImportPanel extends JPanel {
     private JPanel createHero() {
         JPanel hero = new NetworkHeroPanel();
         hero.setLayout(new BorderLayout());
-        hero.setBorder(new EmptyBorder(18, 20, 18, 20));
-        hero.setPreferredSize(new Dimension(1000, 126));
+        hero.setBorder(new EmptyBorder(13, 20, 14, 20));
+        hero.setPreferredSize(new Dimension(1000, 120));
 
         JPanel titleBlock = new JPanel();
         titleBlock.setOpaque(false);
         titleBlock.setLayout(new BoxLayout(titleBlock, BoxLayout.Y_AXIS));
-        JLabel title = new JLabel("DSMP Data Preprocessing Lab");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 28f));
-        title.setForeground(INK);
-        JLabel subtitle = new JLabel("Convert, augment, balance, and audit DSMP-ready six-column datasets.");
-        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 13f));
-        subtitle.setForeground(MUTED);
+        JLabel eyebrow = themedLabel("DATA", BLUE, NebulaDesign.fontSection());
+        eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel title = themedLabel("Data Preprocessing Lab", INK, NebulaDesign.fontDisplay());
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel subtitle = themedLabel(
+                "Convert, augment, balance, and audit DSMP-ready six-column datasets.",
+                MUTED, NebulaDesign.fontBody(12.5f));
+        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        titleBlock.add(eyebrow);
+        titleBlock.add(Box.createVerticalStrut(2));
         titleBlock.add(title);
-        titleBlock.add(Box.createVerticalStrut(5));
+        titleBlock.add(Box.createVerticalStrut(2));
         titleBlock.add(subtitle);
+        titleBlock.add(Box.createVerticalStrut(6));
         titleBlock.add(createAttributionBlock());
 
         hero.add(titleBlock, BorderLayout.WEST);
         return hero;
     }
 
-    private static JPanel createAttributionBlock() {
-        JPanel block = new JPanel();
-        block.setOpaque(false);
-        block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
-        block.setAlignmentX(Component.LEFT_ALIGNMENT);
-        block.setBorder(BorderFactory.createEmptyBorder(5, 1, 0, 0));
-        block.add(createAttributionLine("Faculty Advisor", "Dr. Abdolreza Abhari"));
-        block.add(Box.createRigidArea(new Dimension(0, 3)));
-        block.add(createAttributionLine("Developer", "Mohsen Alavi"));
-        return block;
-    }
-
-    private static JPanel createAttributionLine(String role, String name) {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 7, 0));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel roleLabel = new JLabel(role.toUpperCase(Locale.US));
-        roleLabel.setFont(roleLabel.getFont().deriveFont(Font.BOLD, 9f));
-        roleLabel.setForeground(MUTED);
-        roleLabel.setBorder(BorderFactory.createEmptyBorder(1, 0, 0, 0));
-
-        JLabel nameLabel = new JLabel(name);
-        nameLabel.setFont(nameLabel.getFont().deriveFont(Font.BOLD, 12f));
-        nameLabel.setForeground(INK);
-
-        row.add(roleLabel);
-        row.add(nameLabel);
-        return row;
+    private static Component createAttributionBlock() {
+        JLabel credits = themedLabel(
+                "Faculty advisor Dr. Abdolreza Abhari   ·   Developer Mohsen Alavi",
+                NebulaDesign.TEXT_TERTIARY,
+                NebulaDesign.fontMedium(11f));
+        credits.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return credits;
     }
 
     private JPanel createWorkflowPanel() {
@@ -306,13 +276,13 @@ final class UciRetailImportPanel extends JPanel {
         sourceCard.add(Box.createVerticalStrut(8));
         fileField = textField("Choose a retail, journal, tweet, or custom source file");
         fileField.setEditable(false);
-        JButton chooseButton = button("Choose Dataset", BLUE, Color.WHITE);
+        JButton chooseButton = button("Choose Dataset", BTN_PRIMARY);
         chooseButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 chooseFile();
             }
         });
-        inspectButton = button("Inspect Dataset", GREEN, Color.WHITE);
+        inspectButton = button("Inspect Dataset", BTN_SUCCESS);
         inspectButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 inspectSelectedFile();
@@ -328,6 +298,7 @@ final class UciRetailImportPanel extends JPanel {
 
         RoundedPanel profileCard = card("2. Mapping Profile");
         profileCombo = new JComboBox<UciRetailDatasetImporter.MappingProfile>();
+        styleCombo(profileCombo);
         profileCombo.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 updateProfileGuide();
@@ -383,8 +354,7 @@ final class UciRetailImportPanel extends JPanel {
         RoundedPanel balanceCard = card("5. Class Balance");
         balanceModeCombo = new JComboBox<UciRetailDatasetImporter.DatasetBalanceMode>(
                 UciRetailDatasetImporter.DatasetBalanceMode.values());
-        balanceModeCombo.setFont(balanceModeCombo.getFont().deriveFont(Font.BOLD, 12f));
-        balanceModeCombo.setBackground(CARD);
+        styleCombo(balanceModeCombo);
         balanceModeCombo.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 applyRecommendedBalanceTargetPolicyIfUnpinned();
@@ -401,8 +371,7 @@ final class UciRetailImportPanel extends JPanel {
                                 UciRetailDatasetImporter.DatasetBalanceTargetPolicy.BOUNDED_AUGMENTATION,
                                 UciRetailDatasetImporter.DatasetBalanceTargetPolicy.MANUAL
                         });
-        balanceTargetPolicyCombo.setFont(balanceTargetPolicyCombo.getFont().deriveFont(Font.BOLD, 12f));
-        balanceTargetPolicyCombo.setBackground(CARD);
+        styleCombo(balanceTargetPolicyCombo);
         balanceTargetPolicyCombo.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 if (!suppressBalancePolicyEvents) {
@@ -453,19 +422,19 @@ final class UciRetailImportPanel extends JPanel {
         shell.add(workflowScroll, BorderLayout.CENTER);
 
         RoundedPanel actionCard = card("7. Build and Use");
-        buildButton = button("Build DSMP Dataset", BLUE, Color.WHITE);
+        buildButton = button("Build DSMP Dataset", BTN_PRIMARY);
         buildButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 buildDataset();
             }
         });
-        useOutputButton = button("Use Output in Simulator", GREEN, Color.WHITE);
+        useOutputButton = button("Use Output in Simulator", BTN_SUCCESS);
         useOutputButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 useOutputInSimulator();
             }
         });
-        resetButton = button("Reset Defaults", SURFACE, INK);
+        resetButton = button("Reset Defaults", BTN_NEUTRAL);
         resetButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 applyDefaultsFromSource();
@@ -484,11 +453,11 @@ final class UciRetailImportPanel extends JPanel {
 
         JPanel metrics = new JPanel(new java.awt.GridLayout(1, 5, 10, 0));
         metrics.setOpaque(false);
-        rowsMetric = new MetricCard("Rows", "-", "Data rows detected");
-        columnsMetric = new MetricCard("Columns", "-", "Detected fields");
-        recognitionMetric = new MetricCard("Format", "-", "Dataset type");
-        usersMetric = new MetricCard("User signal", "-", "Customer/user column");
-        outputMetric = new MetricCard("Output", "-", "Rows written");
+        rowsMetric = new MetricCard("Rows", "-", "detected", BLUE);
+        columnsMetric = new MetricCard("Columns", "-", "found", PURPLE);
+        recognitionMetric = new MetricCard("Format", "-", "type", TEAL);
+        usersMetric = new MetricCard("Users", "-", "column", AMBER);
+        outputMetric = new MetricCard("Output", "-", "written", GREEN);
         metrics.add(rowsMetric);
         metrics.add(columnsMetric);
         metrics.add(recognitionMetric);
@@ -497,21 +466,19 @@ final class UciRetailImportPanel extends JPanel {
         panel.add(metrics, BorderLayout.NORTH);
 
         JTabbedPane tabs = new JTabbedPane();
-        tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
-        tabs.setFont(tabs.getFont().deriveFont(Font.BOLD, 12f));
         previewModel = new DefaultTableModel();
         JTable previewTable = styledTable(previewModel);
-        tabs.addTab("Source Snapshot", new JScrollPane(previewTable));
+        tabs.addTab("Snapshot", tableScroll(previewTable));
 
         columnModel = new DefaultTableModel(new Object[] { "Column", "Non-empty", "Numeric", "Date-like", "Distinct", "Samples" }, 0);
         JTable columnTable = styledTable(columnModel);
-        tabs.addTab("Column Intelligence", new JScrollPane(columnTable));
+        tabs.addTab("Columns", tableScroll(columnTable));
 
         outputPreviewModel = new DefaultTableModel(new Object[] {
                 "Followee", "Post id", "Date", "User id", "User name", "Text"
         }, 0);
         JTable outputTable = styledTable(outputPreviewModel);
-        tabs.addTab("DSMP Output Preview", new JScrollPane(outputTable));
+        tabs.addTab("Output", tableScroll(outputTable));
 
         tabs.addTab("Imbalance", createImbalancePanel());
 
@@ -529,12 +496,10 @@ final class UciRetailImportPanel extends JPanel {
         JPanel titleBlock = new JPanel();
         titleBlock.setOpaque(false);
         titleBlock.setLayout(new BoxLayout(titleBlock, BoxLayout.Y_AXIS));
-        JLabel title = new JLabel("Class Imbalance Diagnosis");
-        title.setForeground(INK);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 16f));
-        JLabel subtitle = new JLabel("Full-dataset followee distribution before build, then exact post-build balance reporting.");
-        subtitle.setForeground(MUTED);
-        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 12f));
+        JLabel title = themedLabel("Class Imbalance Diagnosis", INK, NebulaDesign.fontTitle());
+        JLabel subtitle = themedLabel(
+                "Full-dataset followee distribution before build, then exact post-build balance reporting.",
+                NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontBody(11.5f));
         titleBlock.add(title);
         titleBlock.add(Box.createVerticalStrut(3));
         titleBlock.add(subtitle);
@@ -542,8 +507,8 @@ final class UciRetailImportPanel extends JPanel {
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         actions.setOpaque(false);
-        imbalanceStatusBadge = badge("WAITING", SOFT_AMBER, AMBER);
-        refreshImbalanceButton = button("Refresh Diagnosis", BLUE, Color.WHITE);
+        imbalanceStatusBadge = badge("WAITING", AMBER);
+        refreshImbalanceButton = button("Refresh Diagnosis", BTN_PRIMARY);
         refreshImbalanceButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent event) {
                 refreshImbalanceDiagnosis(true);
@@ -578,7 +543,7 @@ final class UciRetailImportPanel extends JPanel {
         table.getColumnModel().getColumn(4).setPreferredWidth(80);
         table.getColumnModel().getColumn(5).setPreferredWidth(70);
         table.getColumnModel().getColumn(6).setPreferredWidth(220);
-        panel.add(new JScrollPane(table), BorderLayout.CENTER);
+        panel.add(tableScroll(table), BorderLayout.CENTER);
         return panel;
     }
 
@@ -599,7 +564,7 @@ final class UciRetailImportPanel extends JPanel {
     }
 
     private RoundedPanel createImportConsolePanel() {
-        RoundedPanel console = new RoundedPanel(new Color(8, 13, 28));
+        RoundedPanel console = new RoundedPanel(NebulaDesign.CONSOLE);
         console.setLayout(new BorderLayout(10, 10));
         console.setBorder(new EmptyBorder(14, 14, 14, 14));
         console.setPreferredSize(new Dimension(420, 245));
@@ -609,20 +574,15 @@ final class UciRetailImportPanel extends JPanel {
         JPanel titleBlock = new JPanel();
         titleBlock.setOpaque(false);
         titleBlock.setLayout(new BoxLayout(titleBlock, BoxLayout.Y_AXIS));
-        JLabel title = new JLabel("Import Console");
-        title.setForeground(new Color(248, 250, 252));
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 15f));
-        JLabel subtitle = new JLabel("Timestamped conversion events, generated-output paths, and audit stats.");
-        subtitle.setForeground(new Color(148, 163, 184));
-        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 11.5f));
+        JLabel title = themedLabel("Import Console", NebulaDesign.CONSOLE_TEXT,
+                NebulaDesign.fontSemiBold(14f));
+        JLabel subtitle = themedLabel("Timestamped conversion events and audit stats.",
+                NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontBody(11f));
         titleBlock.add(title);
         titleBlock.add(Box.createVerticalStrut(2));
         titleBlock.add(subtitle);
         header.add(titleBlock, BorderLayout.WEST);
-        consoleEventValue = badge("0 EVENTS", new Color(30, 41, 59), new Color(191, 219, 254));
-        consoleEventValue.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(96, 165, 250, 110)),
-                new EmptyBorder(6, 9, 6, 9)));
+        consoleEventValue = badge("0 EVENTS", TEAL);
         header.add(consoleEventValue, BorderLayout.EAST);
         console.add(header, BorderLayout.NORTH);
 
@@ -643,14 +603,14 @@ final class UciRetailImportPanel extends JPanel {
         logArea.setLineWrap(true);
         logArea.setWrapStyleWord(true);
         logArea.setRows(7);
-        logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
-        logArea.setBackground(new Color(2, 6, 23));
-        logArea.setForeground(new Color(226, 232, 240));
-        logArea.setCaretColor(new Color(147, 197, 253));
+        logArea.setFont(NebulaDesign.fontMono(11.5f));
+        logArea.setBackground(NebulaDesign.CONSOLE);
+        logArea.setForeground(NebulaDesign.CONSOLE_TEXT);
+        logArea.setCaretColor(BLUE);
         logArea.setBorder(new EmptyBorder(10, 12, 10, 12));
         JScrollPane scroll = new JScrollPane(logArea);
-        scroll.setBorder(BorderFactory.createLineBorder(new Color(51, 65, 85)));
-        scroll.getViewport().setBackground(new Color(2, 6, 23));
+        scroll.setBorder(BorderFactory.createLineBorder(LINE));
+        scroll.getViewport().setBackground(NebulaDesign.CONSOLE);
         scroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
         middle.add(scroll, BorderLayout.CENTER);
         console.add(middle, BorderLayout.CENTER);
@@ -659,19 +619,31 @@ final class UciRetailImportPanel extends JPanel {
         return console;
     }
 
+    /** Inset stat tile that sits on the console surface in both modes. */
     private static JPanel consoleTile(String label, JLabel value, String initial) {
-        JPanel tile = new JPanel(new BorderLayout(3, 2));
-        tile.setOpaque(true);
-        tile.setBackground(new Color(15, 23, 42));
-        tile.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(51, 65, 85)),
-                new EmptyBorder(7, 8, 7, 8)));
-        JLabel title = new JLabel(label.toUpperCase(Locale.US));
-        title.setForeground(new Color(148, 163, 184));
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 9.5f));
+        JPanel tile = new JPanel(new BorderLayout(3, 2)) {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                NebulaDesign.prepare(g2);
+                g2.setColor(StudioNightTheme.isNightMode()
+                        ? NebulaDesign.NIGHT_SURFACE : NebulaDesign.DAY_INSET);
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+                g2.setColor(NebulaDesign.currentBorderSubtle());
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        tile.setOpaque(false);
+        tile.setBorder(new EmptyBorder(7, 9, 7, 8));
+        JLabel title = themedLabel(label.toUpperCase(Locale.US),
+                NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontSection());
         value.setText(initial);
-        value.setForeground(new Color(241, 245, 249));
-        value.setFont(value.getFont().deriveFont(Font.BOLD, 11f));
+        value.setForeground(NebulaDesign.CONSOLE_TEXT);
+        value.setFont(NebulaDesign.fontMonoMedium(11f));
         tile.add(title, BorderLayout.NORTH);
         tile.add(value, BorderLayout.CENTER);
         return tile;
@@ -682,27 +654,21 @@ final class UciRetailImportPanel extends JPanel {
         live.setLayout(new BorderLayout(12, 12));
         live.setBorder(new EmptyBorder(16, 16, 16, 16));
 
-        JPanel header = new JPanel(new BorderLayout(10, 0));
+        JPanel header = new JPanel();
         header.setOpaque(false);
-        JPanel titleBlock = new JPanel();
-        titleBlock.setOpaque(false);
-        titleBlock.setLayout(new BoxLayout(titleBlock, BoxLayout.Y_AXIS));
-        JLabel title = new JLabel("Live DSMP Snapshot");
-        title.setForeground(INK);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 17f));
-        JLabel subtitle = new JLabel("Real-time six-column output preview from the current mapping.");
-        subtitle.setForeground(MUTED);
-        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 12f));
-        titleBlock.add(title);
-        titleBlock.add(Box.createVerticalStrut(3));
-        titleBlock.add(subtitle);
-        header.add(titleBlock, BorderLayout.WEST);
-
-        JPanel chips = new JPanel(new java.awt.GridLayout(1, 2, 6, 0));
-        chips.setOpaque(false);
-        chips.add(badge("LIVE", SOFT_GREEN, GREEN));
-        chips.add(badge("5 ROWS", SOFT_BLUE, BLUE_DARK));
-        header.add(chips, BorderLayout.EAST);
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        JPanel titleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 9, 0));
+        titleRow.setOpaque(false);
+        titleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        titleRow.add(themedLabel("Live DSMP Snapshot", INK, NebulaDesign.fontTitle()));
+        titleRow.add(badge("LIVE", GREEN));
+        JLabel subtitle = themedLabel(
+                "Six-column output preview from the current mapping.",
+                NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontBody(11.5f));
+        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(titleRow);
+        header.add(Box.createVerticalStrut(3));
+        header.add(subtitle);
         live.add(header, BorderLayout.NORTH);
 
         JPanel body = new JPanel(new BorderLayout(8, 9));
@@ -723,7 +689,7 @@ final class UciRetailImportPanel extends JPanel {
                 "Followee", "Post id", "Date", "User id", "User name", "Text"
         }, 0);
         JTable table = styledTable(livePreviewModel);
-        table.setFont(table.getFont().deriveFont(Font.PLAIN, 11f));
+        table.setFont(NebulaDesign.fontBody(11f));
         table.setRowHeight(30);
         table.setFillsViewportHeight(true);
         table.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
@@ -733,14 +699,14 @@ final class UciRetailImportPanel extends JPanel {
         table.getColumnModel().getColumn(3).setPreferredWidth(88);
         table.getColumnModel().getColumn(4).setPreferredWidth(120);
         table.getColumnModel().getColumn(5).setPreferredWidth(280);
-        JScrollPane scroll = new JScrollPane(table);
+        JScrollPane scroll = tableScroll(table);
         scroll.setPreferredSize(new Dimension(440, 260));
         tableStack.add(scroll, BorderLayout.CENTER);
         body.add(tableStack, BorderLayout.CENTER);
         live.add(body, BorderLayout.CENTER);
 
         livePreviewNote = helpText("Inspect a source file to see the live DSMP shape.");
-        livePreviewNote.setFont(livePreviewNote.getFont().deriveFont(Font.BOLD, 12f));
+        livePreviewNote.setFont(NebulaDesign.fontMedium(11.5f));
         livePreviewNote.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(1, 0, 0, 0, LINE),
                 new EmptyBorder(9, 0, 0, 0)));
@@ -760,18 +726,13 @@ final class UciRetailImportPanel extends JPanel {
                 "Followee", "Post id", "Date", "User id", "User name", "Text"
         };
         for (int i = 0; i < fields.length; i++) {
-            JPanel tile = new JPanel(new BorderLayout(4, 2));
-            tile.setOpaque(true);
-            tile.setBackground(SURFACE);
-            tile.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(LINE),
-                    new EmptyBorder(7, 8, 7, 8)));
-            JLabel field = new JLabel((i + 1) + " " + fields[i]);
-            field.setForeground(BLUE_DARK);
-            field.setFont(field.getFont().deriveFont(Font.BOLD, 10.5f));
+            JPanel tile = wellPanel(new BorderLayout(4, 2));
+            tile.setBorder(new EmptyBorder(7, 9, 7, 8));
+            JLabel field = themedLabel((i + 1) + " " + fields[i], BLUE_DARK,
+                    NebulaDesign.fontMedium(10.5f));
             JLabel value = new JLabel("Inspect first");
             value.setForeground(INK);
-            value.setFont(value.getFont().deriveFont(Font.PLAIN, 10.5f));
+            value.setFont(NebulaDesign.fontBody(10.5f));
             liveMappingLabels[i] = value;
             tile.add(field, BorderLayout.NORTH);
             tile.add(value, BorderLayout.CENTER);
@@ -789,17 +750,38 @@ final class UciRetailImportPanel extends JPanel {
                 "1 Followee", "2 Post id", "3 Date", "4 User id", "5 User", "6 Text"
         };
         for (String name : names) {
-            JLabel label = new JLabel(name, SwingConstants.CENTER);
-            label.setOpaque(true);
-            label.setBackground(SOFT_BLUE);
-            label.setForeground(BLUE_DARK);
-            label.setFont(label.getFont().deriveFont(Font.BOLD, 10f));
-            label.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(BLUE_DARK.getRed(), BLUE_DARK.getGreen(), BLUE_DARK.getBlue(), 55)),
-                    new EmptyBorder(5, 4, 5, 4)));
-            strip.add(label);
+            strip.add(columnChip(name));
         }
         return strip;
+    }
+
+    /** Small accent chip marking one of the six DSMP output columns. */
+    private static JLabel columnChip(String text) {
+        JLabel label = new JLabel(text, SwingConstants.CENTER) {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                NebulaDesign.prepare(g2);
+                g2.setColor(tint(BLUE, 0.86f));
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+                g2.setColor(NebulaDesign.withAlpha(BLUE, 70));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+                g2.setColor(deep(BLUE));
+                g2.setFont(getFont());
+                FontMetrics metrics = g2.getFontMetrics();
+                String value = getText();
+                g2.drawString(value,
+                        (getWidth() - metrics.stringWidth(value)) / 2,
+                        (getHeight() - metrics.getHeight()) / 2 + metrics.getAscent());
+                g2.dispose();
+            }
+        };
+        label.setOpaque(false);
+        label.setFont(NebulaDesign.fontMedium(10f));
+        label.setBorder(new EmptyBorder(5, 4, 5, 4));
+        return label;
     }
 
     private JPanel createDatasetKindSelector() {
@@ -1312,7 +1294,7 @@ final class UciRetailImportPanel extends JPanel {
         try {
             options = collectOptions();
         } catch (Exception ex) {
-            setImbalanceStatus("WAITING", SOFT_AMBER, AMBER);
+            setImbalanceStatus("WAITING", AMBER);
             imbalanceSummary.setText("Balance diagnosis is waiting for a valid mapping: " + rootMessage(ex));
             return;
         }
@@ -1320,7 +1302,7 @@ final class UciRetailImportPanel extends JPanel {
         if (imbalanceWorker != null && !imbalanceWorker.isDone()) {
             imbalanceWorker.cancel(true);
         }
-        setImbalanceStatus("SCANNING", SOFT_BLUE, BLUE_DARK);
+        setImbalanceStatus("SCANNING", BLUE);
         refreshImbalanceButton.setEnabled(false);
         if (userRequested || lastBalanceDiagnosis == null) {
             imbalanceSummary.setText("Scanning the full accepted dataset with the current mapping and balance mode...");
@@ -1341,9 +1323,7 @@ final class UciRetailImportPanel extends JPanel {
                     lastBalanceDiagnosis = get();
                     renderImbalanceReport(lastBalanceDiagnosis, false);
                 } catch (Exception ex) {
-                    setImbalanceStatus("FAILED", StudioNightTheme.adaptiveColor(
-                            new Color(254, 226, 226), StudioNightTheme.NIGHT_PANEL_INK),
-                            StudioNightTheme.adaptiveColor(new Color(185, 28, 28), StudioNightTheme.NIGHT_RED));
+                    setImbalanceStatus("FAILED", RED);
                     imbalanceSummary.setText("Balance diagnosis failed: " + rootMessage(ex));
                 }
             }
@@ -1412,8 +1392,7 @@ final class UciRetailImportPanel extends JPanel {
         }
 
         setImbalanceStatus(postBuild ? "BUILT" : "READY",
-                postBuild ? SOFT_GREEN : SOFT_BLUE,
-                postBuild ? GREEN : BLUE_DARK);
+                postBuild ? GREEN : BLUE);
         StringBuilder sb = new StringBuilder();
         sb.append(postBuild ? "POST-BUILD BALANCE REPORT" : "PRE-BUILD FULL-DATASET DIAGNOSIS");
         sb.append("\nSelected mode: ").append(report.balanceMode);
@@ -1458,7 +1437,7 @@ final class UciRetailImportPanel extends JPanel {
         if (sourceProfile == null || imbalanceSummary == null) {
             return;
         }
-        setImbalanceStatus("REFRESH", SOFT_AMBER, AMBER);
+        setImbalanceStatus("REFRESH", AMBER);
         if (lastBalanceDiagnosis == null && lastReport == null) {
             imbalanceSummary.setText("Click Refresh Diagnosis to scan the full accepted dataset with the current mapping and balance mode.");
         } else {
@@ -1474,21 +1453,19 @@ final class UciRetailImportPanel extends JPanel {
             imbalanceSummary.setText(message);
         }
         if (imbalanceStatusBadge != null) {
-            setImbalanceStatus("WAITING", SOFT_AMBER, AMBER);
+            setImbalanceStatus("WAITING", AMBER);
         }
         lastBalanceDiagnosis = null;
     }
 
-    private void setImbalanceStatus(String text, Color background, Color foreground) {
+    private void setImbalanceStatus(String text, Color tone) {
         if (imbalanceStatusBadge == null) {
             return;
         }
         imbalanceStatusBadge.setText(text);
-        imbalanceStatusBadge.setBackground(background);
-        imbalanceStatusBadge.setForeground(foreground);
-        imbalanceStatusBadge.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(foreground.getRed(), foreground.getGreen(), foreground.getBlue(), 70)),
-                new EmptyBorder(5, 9, 5, 9)));
+        imbalanceStatusBadge.putClientProperty("nebula.tone", tone);
+        imbalanceStatusBadge.revalidate();
+        imbalanceStatusBadge.repaint();
     }
 
     private static long mapLong(Map<String, Long> values, String key) {
@@ -1937,18 +1914,17 @@ final class UciRetailImportPanel extends JPanel {
 
     private void setStatus(String state, String message, int progress) {
         statusBadge.setText(state);
+        Color tone;
         if ("FAILED".equals(state)) {
-            statusBadge.setBackground(StudioNightTheme.adaptiveColor(
-                    new Color(254, 226, 226), StudioNightTheme.NIGHT_PANEL_INK));
-            statusBadge.setForeground(StudioNightTheme.adaptiveColor(
-                    new Color(185, 28, 28), StudioNightTheme.NIGHT_RED));
+            tone = RED;
         } else if ("BUILDING".equals(state) || "INSPECTING".equals(state)) {
-            statusBadge.setBackground(SOFT_BLUE);
-            statusBadge.setForeground(BLUE_DARK);
+            tone = BLUE;
         } else {
-            statusBadge.setBackground(SOFT_GREEN);
-            statusBadge.setForeground(GREEN);
+            tone = GREEN;
         }
+        statusBadge.putClientProperty("nebula.tone", tone);
+        statusBadge.revalidate();
+        statusBadge.repaint();
         progressBar.setValue(Math.max(0, Math.min(100, progress)));
         progressBar.setString(message);
         updateConsoleStats(state, null, null);
@@ -2099,53 +2075,203 @@ final class UciRetailImportPanel extends JPanel {
 
     private static JTextField textField(String text) {
         JTextField field = new JTextField(text);
-        field.setFont(field.getFont().deriveFont(Font.BOLD, 12f));
+        field.setFont(NebulaDesign.fontBody(12f));
         field.setForeground(INK);
+        field.setBackground(SURFACE);
+        field.setCaretColor(BLUE);
         field.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(LINE),
-                new EmptyBorder(8, 10, 8, 10)));
+                new EmptyBorder(7, 10, 7, 10)));
         return field;
     }
 
     private static JComboBox<String> combo() {
         JComboBox<String> combo = new JComboBox<String>();
-        combo.setFont(combo.getFont().deriveFont(Font.BOLD, 12f));
-        combo.setBackground(CARD);
+        styleCombo(combo);
         return combo;
+    }
+
+    private static void styleCombo(JComboBox<?> combo) {
+        combo.setUI(new FlatComboUI());
+        combo.setFont(NebulaDesign.fontBody(12f));
+        combo.setBackground(SURFACE);
+        combo.setForeground(INK);
+        combo.setBorder(BorderFactory.createLineBorder(LINE));
+        combo.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
     }
 
     private static JCheckBox check(String label, boolean selected) {
         JCheckBox box = new JCheckBox(label, selected);
         box.setOpaque(false);
         box.setForeground(INK);
-        box.setFont(box.getFont().deriveFont(Font.BOLD, 12f));
+        box.setFont(NebulaDesign.fontBody(12f));
+        box.setIcon(new CheckIcon());
+        box.setIconTextGap(8);
+        box.setFocusPainted(false);
+        box.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         return box;
     }
 
-    private static JButton button(String label, Color bg, Color fg) {
-        JButton button = new JButton(label);
+    private static JButton button(String label, final int kind) {
+        JButton button = new JButton(label) {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                NebulaDesign.prepare(g2);
+                int w = getWidth();
+                int h = getHeight();
+                boolean hover = getModel().isRollover() && isEnabled();
+                boolean pressed = getModel().isPressed() && isEnabled();
+                int radius = NebulaDesign.RADIUS_CONTROL;
+                if (!isEnabled()) {
+                    g2.setColor(SURFACE);
+                    g2.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+                    g2.setColor(LINE);
+                    g2.drawRoundRect(1, 1, w - 3, h - 3, radius, radius);
+                    g2.setColor(NebulaDesign.TEXT_TERTIARY);
+                } else if (kind == BTN_PRIMARY || kind == BTN_SUCCESS) {
+                    Color base = kind == BTN_PRIMARY ? BLUE : GREEN;
+                    Color fill;
+                    if (kind == BTN_PRIMARY) {
+                        fill = pressed ? NebulaDesign.ACCENT_PRESS
+                                : hover ? NebulaDesign.ACCENT_HOVER : NebulaDesign.ACCENT;
+                    } else {
+                        fill = pressed ? StudioNightTheme.blend(base, Color.BLACK, 0.14f)
+                                : hover ? StudioNightTheme.blend(base, Color.WHITE, 0.12f) : base;
+                    }
+                    if (hover) {
+                        g2.setColor(NebulaDesign.withAlpha(base, 55));
+                        g2.fillRoundRect(0, 0, w, h, radius + 3, radius + 3);
+                    }
+                    g2.setColor(fill);
+                    g2.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+                    g2.setColor(kind == BTN_PRIMARY
+                            ? NebulaDesign.TEXT_ON_ACCENT
+                            : (StudioNightTheme.isNightMode()
+                                    ? NebulaDesign.NIGHT_TEXT_ON_ACCENT : Color.WHITE));
+                } else {
+                    g2.setColor(hover ? NebulaDesign.SURFACE_RAISED : CARD);
+                    g2.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+                    g2.setColor(hover
+                            ? NebulaDesign.withAlpha(BLUE, 120)
+                            : NebulaDesign.BORDER_STRONG);
+                    g2.drawRoundRect(1, 1, w - 3, h - 3, radius, radius);
+                    g2.setColor(INK);
+                }
+                g2.setFont(getFont());
+                FontMetrics metrics = g2.getFontMetrics();
+                String value = getText();
+                g2.drawString(value,
+                        (w - metrics.stringWidth(value)) / 2,
+                        (h - metrics.getHeight()) / 2 + metrics.getAscent());
+                g2.dispose();
+            }
+        };
+        button.setFont(NebulaDesign.fontMedium(12.5f));
+        button.setContentAreaFilled(false);
+        button.setOpaque(false);
+        button.setRolloverEnabled(true);
         button.setFocusPainted(false);
-        button.setOpaque(true);
-        button.setBackground(bg);
-        button.setForeground(fg);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(0, 0, 0, 20)),
-                new EmptyBorder(11, 14, 11, 14)));
-        button.setFont(button.getFont().deriveFont(Font.BOLD, 12f));
+        button.setBorder(new EmptyBorder(9, 14, 9, 14));
         return button;
     }
 
-    private static JLabel badge(String text, Color bg, Color fg) {
-        JLabel label = new JLabel(text);
-        label.setOpaque(true);
-        label.setBackground(bg);
-        label.setForeground(fg);
-        label.setFont(label.getFont().deriveFont(Font.BOLD, 11f));
-        label.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 70)),
-                new EmptyBorder(5, 9, 5, 9)));
+    /**
+     * Self-painting status pill: soft tint capsule + strong hue label. The
+     * tone lives in the "nebula.tone" client property so it survives theme
+     * walks and status changes.
+     */
+    private static JLabel badge(String text, Color tone) {
+        JLabel label = new JLabel(text, SwingConstants.CENTER) {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                NebulaDesign.prepare(g2);
+                Object tone = getClientProperty("nebula.tone");
+                Color hue = tone instanceof Color ? (Color) tone : BLUE;
+                int w = getWidth();
+                int h = getHeight();
+                g2.setColor(tint(hue, 0.84f));
+                g2.fillRoundRect(0, 0, w, h, h, h);
+                g2.setColor(NebulaDesign.withAlpha(hue, 84));
+                g2.drawRoundRect(0, 0, w - 1, h - 1, h - 1, h - 1);
+                g2.setColor(deep(hue));
+                g2.setFont(getFont());
+                FontMetrics metrics = g2.getFontMetrics();
+                String value = getText();
+                g2.drawString(value,
+                        (w - metrics.stringWidth(value)) / 2,
+                        (h - metrics.getHeight()) / 2 + metrics.getAscent());
+                g2.dispose();
+            }
+        };
+        label.setOpaque(false);
+        label.setFont(NebulaDesign.fontMedium(11f));
+        label.setBorder(new EmptyBorder(5, 12, 5, 12));
+        label.putClientProperty("nebula.tone", tone);
         return label;
+    }
+
+    private static JLabel themedLabel(String text, final Color color, Font font) {
+        JLabel label = new JLabel(text) {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public Color getForeground() {
+                return color;
+            }
+        };
+        label.setFont(font);
+        return label;
+    }
+
+    /** Emphasis tone: deepened in day mode, kept bright in night mode. */
+    private static Color deep(Color color) {
+        if (StudioNightTheme.isNightMode()) {
+            return new Color(color.getRed(), color.getGreen(), color.getBlue());
+        }
+        return color.darker();
+    }
+
+    /** Soft chip tint: day = toward white, night = toward the dark surface. */
+    private static Color tint(Color color, float amount) {
+        if (StudioNightTheme.isNightMode()) {
+            float accentAmount = Math.max(0.10f, Math.min(0.42f, 1.0f - amount));
+            Color base = amount > 0.70f
+                    ? NebulaDesign.NIGHT_SURFACE
+                    : StudioNightTheme.NIGHT_PANEL_INK;
+            return StudioNightTheme.blend(base, color, accentAmount);
+        }
+        int r = (int) (color.getRed() + (255 - color.getRed()) * amount);
+        int g = (int) (color.getGreen() + (255 - color.getGreen()) * amount);
+        int b = (int) (color.getBlue() + (255 - color.getBlue()) * amount);
+        return new Color(Math.min(255, r), Math.min(255, g), Math.min(255, b));
+    }
+
+    /** Non-opaque rounded well so the theme walk never repaints it. */
+    private static JPanel wellPanel(BorderLayout layout) {
+        JPanel panel = new JPanel(layout) {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                NebulaDesign.prepare(g2);
+                g2.setColor(SURFACE);
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+                g2.setColor(LINE);
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        panel.setOpaque(false);
+        return panel;
     }
 
     private static JTextArea helpText(String text) {
@@ -2155,7 +2281,7 @@ final class UciRetailImportPanel extends JPanel {
         area.setLineWrap(true);
         area.setWrapStyleWord(true);
         area.setForeground(MUTED);
-        area.setFont(area.getFont().deriveFont(Font.PLAIN, 12f));
+        area.setFont(NebulaDesign.fontBody(12f));
         area.setBorder(new EmptyBorder(8, 0, 2, 0));
         return area;
     }
@@ -2164,6 +2290,8 @@ final class UciRetailImportPanel extends JPanel {
         JTextArea area = helpText(text);
         area.setOpaque(true);
         area.setBackground(SURFACE);
+        area.setForeground(MUTED);
+        area.setFont(NebulaDesign.fontBody(11.5f));
         area.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(LINE),
                 new EmptyBorder(9, 11, 9, 11)));
@@ -2183,10 +2311,7 @@ final class UciRetailImportPanel extends JPanel {
     }
 
     private static JLabel fieldLabel(String text) {
-        JLabel label = new JLabel(text);
-        label.setForeground(MUTED);
-        label.setFont(label.getFont().deriveFont(Font.BOLD, 12f));
-        return label;
+        return themedLabel(text, MUTED, NebulaDesign.fontMedium(11.5f));
     }
 
     private static JPanel row(Component left, Component right) {
@@ -2209,23 +2334,22 @@ final class UciRetailImportPanel extends JPanel {
     private static RoundedPanel card(String title) {
         RoundedPanel panel = new RoundedPanel(CARD);
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        panel.setBorder(new EmptyBorder(13, 14, 14, 14));
+        panel.setBorder(new EmptyBorder(14, 16, 15, 16));
 
-        JPanel header = new JPanel(new BorderLayout(8, 0));
+        JPanel header = new JPanel(new BorderLayout(9, 0));
         header.setOpaque(false);
         header.setAlignmentX(Component.LEFT_ALIGNMENT);
         String headerText = title;
         int dot = title.indexOf(". ");
         if (dot > 0 && dot <= 2) {
-            JLabel step = badge(title.substring(0, dot), SOFT_BLUE, BLUE_DARK);
-            step.setHorizontalAlignment(SwingConstants.CENTER);
-            step.setPreferredSize(new Dimension(28, 24));
+            JLabel step = badge(title.substring(0, dot), BLUE);
+            step.setFont(NebulaDesign.fontSemiBold(11f));
+            step.setBorder(new EmptyBorder(4, 4, 4, 4));
+            step.setPreferredSize(new Dimension(26, 24));
             header.add(step, BorderLayout.WEST);
             headerText = title.substring(dot + 2);
         }
-        JLabel label = new JLabel(headerText);
-        label.setForeground(INK);
-        label.setFont(label.getFont().deriveFont(Font.BOLD, 14f));
+        JLabel label = themedLabel(headerText, INK, NebulaDesign.fontSemiBold(13.5f));
         header.add(label, BorderLayout.CENTER);
         panel.add(header);
         panel.add(Box.createVerticalStrut(10));
@@ -2258,20 +2382,155 @@ final class UciRetailImportPanel extends JPanel {
 
     private static JTable styledTable(DefaultTableModel model) {
         JTable table = new JTable(model);
-        table.setRowHeight(28);
-        table.setShowGrid(true);
+        table.setRowHeight(30);
+        table.setShowVerticalLines(false);
+        table.setShowHorizontalLines(true);
         table.setGridColor(LINE);
+        table.setFont(NebulaDesign.fontBody(12f));
         table.setForeground(INK);
-        table.setSelectionBackground(new Color(219, 234, 254));
+        table.setBackground(CARD);
+        table.setSelectionBackground(NebulaDesign.SELECTION);
         table.setSelectionForeground(INK);
+        table.setIntercellSpacing(new Dimension(0, 1));
         table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
         JTableHeader header = table.getTableHeader();
-        header.setBackground(SURFACE);
-        header.setForeground(INK);
-        header.setFont(header.getFont().deriveFont(Font.BOLD, 12f));
+        header.setReorderingAllowed(false);
+        header.setDefaultRenderer(new HeaderRenderer());
         return table;
     }
 
+    private static JScrollPane tableScroll(JTable table) {
+        JScrollPane scroll = new JScrollPane(table);
+        scroll.setBorder(BorderFactory.createLineBorder(LINE));
+        scroll.getViewport().setBackground(CARD);
+        return scroll;
+    }
+
+    /** Flat table header: raised surface, caps label, strong bottom rule. */
+    private static final class HeaderRenderer extends javax.swing.table.DefaultTableCellRenderer {
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public Component getTableCellRendererComponent(
+                JTable table, Object value, boolean isSelected,
+                boolean hasFocus, int row, int column) {
+            super.getTableCellRendererComponent(table, value, false, false, row, column);
+            setFont(NebulaDesign.fontMedium(11f));
+            setForeground(MUTED);
+            setBackground(NebulaDesign.SURFACE_RAISED);
+            setOpaque(true);
+            setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createMatteBorder(0, 0, 1, 0, NebulaDesign.BORDER_STRONG),
+                    new EmptyBorder(6, 8, 6, 8)));
+            return this;
+        }
+    }
+
+    /** Flat Nebula combo box delegate: quiet field + hand-drawn chevron. */
+    private static final class FlatComboUI extends javax.swing.plaf.basic.BasicComboBoxUI {
+        @Override
+        protected JButton createArrowButton() {
+            JButton arrow = new JButton() {
+                private static final long serialVersionUID = 1L;
+
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    NebulaWidgets.paintChevron(g2, getWidth() / 2, getHeight() / 2, 7, MUTED);
+                    g2.dispose();
+                }
+            };
+            arrow.setBorder(BorderFactory.createEmptyBorder());
+            arrow.setContentAreaFilled(false);
+            arrow.setFocusable(false);
+            arrow.setOpaque(false);
+            return arrow;
+        }
+
+        @Override
+        public void paintCurrentValueBackground(Graphics g, Rectangle bounds, boolean hasFocus) {
+            g.setColor(SURFACE);
+            g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        }
+    }
+
+    /** Custom 16px checkbox mark: rounded square, accent fill when checked. */
+    private static final class CheckIcon implements javax.swing.Icon {
+        public int getIconWidth() {
+            return 16;
+        }
+
+        public int getIconHeight() {
+            return 16;
+        }
+
+        public void paintIcon(Component component, Graphics g, int x, int y) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            NebulaDesign.prepare(g2);
+            boolean selected = component instanceof javax.swing.AbstractButton
+                    && ((javax.swing.AbstractButton) component).isSelected();
+            boolean enabled = component == null || component.isEnabled();
+            if (selected) {
+                g2.setColor(enabled ? BLUE : NebulaDesign.BORDER_STRONG);
+                g2.fillRoundRect(x, y, 16, 16, 6, 6);
+                g2.setColor(NebulaDesign.TEXT_ON_ACCENT);
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g2.drawLine(x + 4, y + 8, x + 7, y + 11);
+                g2.drawLine(x + 7, y + 11, x + 12, y + 5);
+            } else {
+                g2.setColor(SURFACE);
+                g2.fillRoundRect(x, y, 15, 15, 6, 6);
+                g2.setColor(enabled ? NebulaDesign.BORDER_STRONG : LINE);
+                g2.drawRoundRect(x, y, 15, 15, 6, 6);
+            }
+            g2.dispose();
+        }
+    }
+
+    /** Nebula progress meter: pill track + accent-to-purple gradient fill. */
+    private static final class NebulaProgressUI extends javax.swing.plaf.basic.BasicProgressBarUI {
+        @Override
+        public Dimension getPreferredSize(javax.swing.JComponent component) {
+            Dimension size = super.getPreferredSize(component);
+            return new Dimension(size.width, Math.max(26, size.height));
+        }
+
+        @Override
+        public void paint(Graphics g, javax.swing.JComponent component) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            NebulaDesign.prepare(g2);
+            int w = progressBar.getWidth();
+            int h = progressBar.getHeight();
+            int trackHeight = 8;
+            int trackY = h - trackHeight - 2;
+            g2.setColor(NebulaDesign.INSET);
+            g2.fillRoundRect(0, trackY, w, trackHeight, trackHeight, trackHeight);
+            int amount = (int) Math.round(w * progressBar.getPercentComplete());
+            if (amount > 0) {
+                g2.setPaint(new java.awt.GradientPaint(
+                        0, 0, NebulaDesign.currentAccent(),
+                        Math.max(1, w), 0,
+                        StudioNightTheme.isNightMode()
+                                ? NebulaDesign.NIGHT_PURPLE : NebulaDesign.DAY_PURPLE));
+                g2.fillRoundRect(0, trackY, Math.max(trackHeight, amount),
+                        trackHeight, trackHeight, trackHeight);
+            }
+            if (progressBar.isStringPainted()) {
+                String text = progressBar.getString();
+                if (text != null && text.length() > 0) {
+                    g2.setFont(progressBar.getFont());
+                    FontMetrics metrics = g2.getFontMetrics();
+                    g2.setColor(NebulaDesign.currentTextSecondary());
+                    g2.drawString(text,
+                            Math.max(0, (w - metrics.stringWidth(text)) / 2),
+                            trackY - 4);
+                }
+            }
+            g2.dispose();
+        }
+    }
+
+    /** Rounded Nebula panel: card treatment for surfaces, flat fill otherwise. */
     private static class RoundedPanel extends JPanel {
         private static final long serialVersionUID = 1L;
         private final Color background;
@@ -2285,11 +2544,18 @@ final class UciRetailImportPanel extends JPanel {
         @Override
         protected void paintComponent(Graphics g) {
             Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(background);
-            g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
-            g2.setColor(LINE);
-            g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+            NebulaDesign.prepare(g2);
+            if (background == CARD) {
+                NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(),
+                        NebulaDesign.RADIUS_CARD);
+            } else {
+                g2.setColor(background);
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+                        NebulaDesign.RADIUS_CONSOLE, NebulaDesign.RADIUS_CONSOLE);
+                g2.setColor(LINE);
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+                        NebulaDesign.RADIUS_CONSOLE, NebulaDesign.RADIUS_CONSOLE);
+            }
             g2.dispose();
             super.paintComponent(g);
         }
@@ -2324,10 +2590,10 @@ final class UciRetailImportPanel extends JPanel {
         @Override
         protected void paintComponent(Graphics g) {
             Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            NebulaDesign.prepare(g2);
             boolean hover = getModel().isRollover();
-            Color fill = selected ? SOFT_BLUE : hover ? SURFACE : CARD;
-            Color stroke = selected ? BLUE : LINE;
+            Color fill = selected ? NebulaDesign.ACCENT_SOFT : hover ? SURFACE : CARD;
+            Color stroke = selected ? BLUE : hover ? NebulaDesign.BORDER_STRONG : LINE;
             g2.setColor(fill);
             g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
             g2.setColor(stroke);
@@ -2335,13 +2601,15 @@ final class UciRetailImportPanel extends JPanel {
             g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
 
             Color iconFill = selected ? BLUE : SURFACE;
-            Color iconText = selected ? Color.WHITE : BLUE_DARK;
+            Color iconText = selected ? NebulaDesign.TEXT_ON_ACCENT : BLUE_DARK;
             g2.setColor(iconFill);
             g2.fillRoundRect(13, 14, 34, 34, 10, 10);
-            g2.setColor(selected ? new Color(255, 255, 255, 90) : new Color(BLUE_DARK.getRed(), BLUE_DARK.getGreen(), BLUE_DARK.getBlue(), 60));
+            g2.setColor(selected
+                    ? NebulaDesign.withAlpha(NebulaDesign.TEXT_ON_ACCENT, 90)
+                    : NebulaDesign.withAlpha(BLUE_DARK, 60));
             g2.drawRoundRect(13, 14, 34, 34, 10, 10);
 
-            g2.setFont(getFont().deriveFont(Font.BOLD, 11f));
+            g2.setFont(NebulaDesign.fontSemiBold(11f));
             g2.setColor(iconText);
             FontMetrics iconFm = g2.getFontMetrics();
             String code = shortCode(kind);
@@ -2349,10 +2617,10 @@ final class UciRetailImportPanel extends JPanel {
 
             int textX = 58;
             int textWidth = Math.max(40, getWidth() - textX - 18);
-            g2.setFont(getFont().deriveFont(Font.BOLD, 13f));
+            g2.setFont(NebulaDesign.fontSemiBold(13f));
             g2.setColor(INK);
             g2.drawString(kind.toString(), textX, 28);
-            g2.setFont(getFont().deriveFont(Font.PLAIN, 10.5f));
+            g2.setFont(NebulaDesign.fontBody(10.5f));
             g2.setColor(MUTED);
             drawWrapped(g2, kind.description(), textX, 44, textWidth, 3);
 
@@ -2468,9 +2736,35 @@ final class UciRetailImportPanel extends JPanel {
         protected void paintComponent(Graphics g) {
             super.paintComponent(g);
             Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            NebulaDesign.prepare(g2);
             int width = getWidth();
             int height = getHeight();
+            boolean night = StudioNightTheme.isNightMode();
+
+            java.awt.Shape oldClip = g2.getClip();
+            g2.clip(new java.awt.geom.RoundRectangle2D.Float(
+                    0, 0, width - 1, height - 3,
+                    NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+            g2.setPaint(new java.awt.RadialGradientPaint(
+                    new java.awt.geom.Point2D.Float(width * 0.24f, 0f),
+                    Math.max(1f, width * 0.42f),
+                    new float[] {0f, 1f},
+                    new Color[] {
+                            NebulaDesign.withAlpha(BLUE, night ? 26 : 15),
+                            NebulaDesign.withAlpha(BLUE, 0)
+                    }));
+            g2.fillRect(0, 0, width, height);
+            g2.setPaint(new java.awt.RadialGradientPaint(
+                    new java.awt.geom.Point2D.Float(width * 0.86f, (float) height),
+                    Math.max(1f, width * 0.38f),
+                    new float[] {0f, 1f},
+                    new Color[] {
+                            NebulaDesign.withAlpha(PURPLE, night ? 22 : 13),
+                            NebulaDesign.withAlpha(PURPLE, 0)
+                    }));
+            g2.fillRect(0, 0, width, height);
+            g2.setClip(oldClip);
+
             int left = Math.max(width / 3, 360);
             int right = Math.max(left + 280, width - 250);
             int span = Math.max(280, right - left);
@@ -2490,22 +2784,24 @@ final class UciRetailImportPanel extends JPanel {
 
             g2.setComposite(AlphaComposite.SrcOver.derive(0.55f));
             g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            g2.setColor(new Color(BLUE_DARK.getRed(), BLUE_DARK.getGreen(), BLUE_DARK.getBlue(), 86));
+            g2.setColor(NebulaDesign.withAlpha(BLUE_DARK, 86));
             for (int i = 0; i < xs.length - 1; i++) {
                 g2.drawLine(xs[i], ys[i], xs[i + 1], ys[i + 1]);
             }
-            g2.setColor(new Color(GREEN.getRed(), GREEN.getGreen(), GREEN.getBlue(), 70));
+            g2.setColor(NebulaDesign.withAlpha(GREEN, 70));
             g2.drawLine(xs[1], ys[1], xs[3], ys[3]);
             g2.drawLine(xs[2], ys[2], xs[4], ys[4]);
 
             g2.setComposite(AlphaComposite.SrcOver);
             for (int i = 0; i < xs.length; i++) {
                 Color fill = i % 2 == 0 ? BLUE_DARK : GREEN;
-                g2.setColor(new Color(fill.getRed(), fill.getGreen(), fill.getBlue(), 42));
+                g2.setColor(NebulaDesign.withAlpha(fill, 42));
                 g2.fillOval(xs[i] - 7, ys[i] - 7, 14, 14);
-                g2.setColor(new Color(fill.getRed(), fill.getGreen(), fill.getBlue(), 160));
+                g2.setColor(NebulaDesign.withAlpha(fill, 160));
                 g2.drawOval(xs[i] - 7, ys[i] - 7, 14, 14);
-                g2.setColor(new Color(255, 255, 255, 225));
+                g2.setColor(NebulaDesign.withAlpha(
+                        night ? NebulaDesign.NIGHT_TEXT_PRIMARY : NebulaDesign.DAY_SURFACE,
+                        225));
                 g2.fillOval(xs[i] - 3, ys[i] - 3, 6, 6);
             }
             g2.dispose();
@@ -2516,20 +2812,34 @@ final class UciRetailImportPanel extends JPanel {
         private static final long serialVersionUID = 1L;
         private final JLabel valueLabel;
 
-        MetricCard(String title, String value, String caption) {
+        MetricCard(String title, String value, String caption, final Color accent) {
             super(CARD);
-            setLayout(new BorderLayout(4, 4));
-            setBorder(new EmptyBorder(12, 12, 12, 12));
-            JLabel titleLabel = new JLabel(title.toUpperCase(Locale.ENGLISH));
-            titleLabel.setForeground(MUTED);
-            titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 11f));
+            setLayout(new BorderLayout(4, 3));
+            setBorder(new EmptyBorder(10, 13, 10, 12));
+            JPanel headingRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            headingRow.setOpaque(false);
+            JComponent dot = new JComponent() {
+                private static final long serialVersionUID = 1L;
+
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    NebulaDesign.prepare(g2);
+                    g2.setColor(accent);
+                    g2.fillOval(0, Math.max(0, (getHeight() - 8) / 2), 8, 8);
+                    g2.dispose();
+                }
+            };
+            dot.setPreferredSize(new Dimension(8, 13));
+            headingRow.add(dot);
+            headingRow.add(themedLabel(title.toUpperCase(Locale.ENGLISH),
+                    NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontSection()));
             valueLabel = new JLabel(value);
             valueLabel.setForeground(INK);
-            valueLabel.setFont(valueLabel.getFont().deriveFont(Font.BOLD, 20f));
-            JLabel captionLabel = new JLabel(caption);
-            captionLabel.setForeground(MUTED);
-            captionLabel.setFont(captionLabel.getFont().deriveFont(Font.PLAIN, 11f));
-            add(titleLabel, BorderLayout.NORTH);
+            valueLabel.setFont(NebulaDesign.fontSemiBold(18f));
+            JLabel captionLabel = themedLabel(caption,
+                    NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontSmall());
+            add(headingRow, BorderLayout.NORTH);
             add(valueLabel, BorderLayout.CENTER);
             add(captionLabel, BorderLayout.SOUTH);
         }

@@ -14,7 +14,6 @@ import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
-import java.awt.RenderingHints;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
@@ -42,7 +41,6 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JList;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
@@ -60,20 +58,35 @@ import javax.swing.event.ListSelectionListener;
 
 final class TemporalGraphFoundationPanel extends JPanel
 {
-	private static final Color BACKGROUND = new Color(13, 18, 26);
-	private static final Color SURFACE = new Color(22, 31, 43);
-	private static final Color SURFACE_ALT = new Color(27, 38, 53);
-	private static final Color PANEL_INK = new Color(31, 44, 61);
-	private static final Color BORDER = new Color(63, 84, 106);
-	private static final Color TEXT = new Color(234, 242, 252);
-	private static final Color MUTED = new Color(157, 172, 190);
-	private static final Color BLUE = new Color(94, 166, 255);
-	private static final Color GREEN = new Color(64, 211, 146);
-	private static final Color AMBER = new Color(244, 176, 70);
-	private static final Color RED = new Color(245, 108, 102);
-	private static final Color PURPLE = new Color(169, 135, 255);
-	private static final Color TEAL = new Color(64, 213, 217);
-	private static final Color PINK = new Color(242, 113, 184);
+	// Nebula adaptive tokens: every constant resolves day/night at paint time,
+	// because this tab is exempt from the night-mode component walk.
+	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
+			NebulaDesign.DAY_CANVAS_TOP, NebulaDesign.NIGHT_CANVAS_TOP);
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color PANEL_INK = StudioNightTheme.adaptiveColor(
+			NebulaDesign.DAY_SURFACE_ALT, NebulaDesign.NIGHT_SURFACE_RAISED);
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color BORDER_STRONG = NebulaDesign.BORDER_STRONG;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color FAINT = NebulaDesign.TEXT_TERTIARY;
+	// Data-encoding hues: signal identities and status tones map to the
+	// semantic Nebula palette so meaning survives the theme switch.
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color RED = NebulaDesign.DANGER;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+	private static final Color TEAL = NebulaDesign.INFO;
+	private static final Color PINK = NebulaDesign.PINK;
+	// Meter tracks, inner plates, and wells over the painted canvases.
+	private static final Color TRACK = StudioNightTheme.adaptiveColor(
+			NebulaDesign.DAY_BORDER_SUBTLE, NebulaDesign.NIGHT_SURFACE_RAISED);
+	private static final Color PLATE = StudioNightTheme.adaptiveColor(
+			NebulaDesign.DAY_SURFACE, NebulaDesign.NIGHT_INSET);
+	private static final Color INK = StudioNightTheme.adaptiveColor(
+			NebulaDesign.DAY_SURFACE_ALT, NebulaDesign.NIGHT_INSET);
 	private static final NumberFormat COUNT_FORMAT =
 			NumberFormat.getIntegerInstance(Locale.US);
 
@@ -124,13 +137,15 @@ final class TemporalGraphFoundationPanel extends JPanel
 		private final Timer animationTimer;
 		private TemporalGraphFoundationModelSupport.Result latestResult;
 		private long visibleRevision = -1L;
+		private java.awt.image.BufferedImage canvasCache;
+		private boolean canvasCacheNight;
 
 	TemporalGraphFoundationPanel(ControllerAgentGui controller)
 	{
 		super(new BorderLayout());
 		this.controller = controller;
 		setBackground(BACKGROUND);
-		JPanel content = new JPanel(new BorderLayout(14, 14));
+		JPanel content = new WidthTrackingPage(new BorderLayout(14, 14));
 		content.setOpaque(false);
 		content.setBorder(new EmptyBorder(14, 14, 14, 14));
 		content.add(createHeader(), BorderLayout.NORTH);
@@ -142,15 +157,29 @@ final class TemporalGraphFoundationPanel extends JPanel
 				ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
 		pageScroll.setHorizontalScrollBarPolicy(
 				ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+		pageScroll.setOpaque(false);
+		pageScroll.getViewport().setOpaque(false);
+		pageScroll.getViewport().setScrollMode(
+				javax.swing.JViewport.SIMPLE_SCROLL_MODE);
 		pageScroll.getViewport().setBackground(BACKGROUND);
 		pageScroll.setBackground(BACKGROUND);
+		pageScroll.getVerticalScrollBar().setUnitIncrement(18);
+		pageScroll.getVerticalScrollBar().setOpaque(false);
+		pageScroll.getVerticalScrollBar().setUI(
+				new NebulaWidgets.PillScrollBarUI());
+		pageScroll.getHorizontalScrollBar().setOpaque(false);
+		pageScroll.getHorizontalScrollBar().setUI(
+				new NebulaWidgets.PillScrollBarUI());
 		add(pageScroll, BorderLayout.CENTER);
 		installListeners();
 		animationTimer = new Timer(40, new ActionListener()
 		{
 			public void actionPerformed(ActionEvent event)
 			{
-				foundationCanvas.advance();
+				if (foundationCanvas.isShowing())
+				{
+					foundationCanvas.advance();
+				}
 			}
 		});
 		animationTimer.start();
@@ -160,6 +189,31 @@ final class TemporalGraphFoundationPanel extends JPanel
 	void stopAnimationForTest()
 	{
 		animationTimer.stop();
+	}
+
+	protected void paintComponent(Graphics graphics)
+	{
+		super.paintComponent(graphics);
+		int width = getWidth();
+		int height = getHeight();
+		if (width <= 0 || height <= 0)
+		{
+			return;
+		}
+		boolean night = StudioNightTheme.isNightMode();
+		if (canvasCache == null
+				|| canvasCache.getWidth() != width
+				|| canvasCache.getHeight() != height
+				|| canvasCacheNight != night)
+		{
+			if (canvasCache != null)
+			{
+				canvasCache.flush();
+			}
+			canvasCacheNight = night;
+			canvasCache = StudioNightTheme.renderCanvas(width, height, night);
+		}
+		graphics.drawImage(canvasCache, 0, 0, null);
 	}
 
 	public void doLayout()
@@ -234,60 +288,94 @@ final class TemporalGraphFoundationPanel extends JPanel
 			}
 		}
 
+	/**
+	 * Page container that fits the viewport width (squeezing the KPI strip and
+	 * workspace instead of spawning a horizontal scrollbar) while keeping
+	 * vertical scrolling. Very narrow viewports still fall back to horizontal
+	 * scrolling so fixed-size canvases stay usable.
+	 */
+	private static final class WidthTrackingPage extends JPanel
+			implements javax.swing.Scrollable
+	{
+		WidthTrackingPage(java.awt.LayoutManager layout)
+		{
+			super(layout);
+		}
+
+		public Dimension getPreferredScrollableViewportSize()
+		{
+			return getPreferredSize();
+		}
+
+		public int getScrollableUnitIncrement(
+				java.awt.Rectangle visible, int orientation, int direction)
+		{
+			return 18;
+		}
+
+		public int getScrollableBlockIncrement(
+				java.awt.Rectangle visible, int orientation, int direction)
+		{
+			return 130;
+		}
+
+		public boolean getScrollableTracksViewportWidth()
+		{
+			java.awt.Container parent = getParent();
+			return parent instanceof javax.swing.JViewport
+					&& parent.getWidth() >= 1000;
+		}
+
+		public boolean getScrollableTracksViewportHeight()
+		{
+			return false;
+		}
+	}
+
 	private Component createHeader()
 	{
-		JPanel header = new HeroPanel(new BorderLayout(18, 12));
-		header.setBorder(new EmptyBorder(18, 20, 18, 20));
+		JPanel header = new HeroPanel(new BorderLayout(18, 14));
+		header.setBorder(new EmptyBorder(18, 22, 18, 22));
 
-		JPanel titleStack = new JPanel(new BorderLayout(0, 5));
+		JPanel titleStack = new JPanel(new BorderLayout(0, 3));
 		titleStack.setOpaque(false);
-				JLabel title = new JLabel("Temporal Graph Foundation Studio");
-				title.setFont(font(Font.BOLD, 26));
-				title.setForeground(TEXT);
-				JLabel subtitle = new JLabel(
-						"Decision intelligence cockpit for temporal evidence, causal stress tests, uncertainty, and reproducibility.");
-			subtitle.setFont(font(Font.PLAIN, 13));
-			subtitle.setForeground(MUTED);
-		titleStack.add(title, BorderLayout.NORTH);
+		JLabel eyebrow = new JLabel("DECISION INTELLIGENCE");
+		eyebrow.setFont(NebulaDesign.fontSection());
+		eyebrow.setForeground(BLUE);
+		JLabel title = new JLabel("Temporal Graph Foundation Studio");
+		title.setFont(NebulaDesign.fontDisplay());
+		title.setForeground(TEXT);
+		JLabel subtitle = new JLabel(
+				"Decision intelligence cockpit for temporal evidence, causal stress tests, uncertainty, and reproducibility.");
+		subtitle.setFont(NebulaDesign.fontBody(13f));
+		subtitle.setForeground(MUTED);
+		titleStack.add(eyebrow, BorderLayout.NORTH);
+		titleStack.add(title, BorderLayout.CENTER);
 		titleStack.add(subtitle, BorderLayout.SOUTH);
 		header.add(titleStack, BorderLayout.WEST);
 
-			JPanel actions = new JPanel(new GridLayout(2, 1, 0, 8));
-			actions.setOpaque(false);
-			JButton refresh = new JButton("Refresh");
-			refresh.setFont(font(Font.BOLD, 12));
-				refresh.setForeground(TEXT);
-				refresh.setBackground(PANEL_INK);
-		refresh.setFocusPainted(false);
-		refresh.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER),
-				new EmptyBorder(8, 12, 8, 12)));
+		JPanel actions = new JPanel(new GridLayout(2, 1, 0, 8));
+		actions.setOpaque(false);
+		JButton refresh = new NebulaButton("Refresh run", true, BLUE);
 		refresh.addActionListener(new ActionListener()
 		{
 			public void actionPerformed(ActionEvent event)
 			{
 				visibleRevision = -1L;
-					refreshFromRegistry();
-				}
-			});
-			JButton export = new JButton("Export Capsule");
-			export.setFont(font(Font.BOLD, 12));
-				export.setForeground(GREEN);
-				export.setBackground(PANEL_INK);
-			export.setFocusPainted(false);
-			export.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(tint(GREEN, 0.45f)),
-					new EmptyBorder(8, 12, 8, 12)));
-			export.addActionListener(new ActionListener()
+				refreshFromRegistry();
+			}
+		});
+		JButton export = new NebulaButton("Export capsule", false, GREEN);
+		export.addActionListener(new ActionListener()
+		{
+			public void actionPerformed(ActionEvent event)
 			{
-				public void actionPerformed(ActionEvent event)
-				{
-					exportResearchCapsule();
-				}
-			});
-			actions.add(refresh);
-			actions.add(export);
-			header.add(actions, BorderLayout.EAST);
+				exportResearchCapsule();
+			}
+		});
+		actions.add(refresh);
+		actions.add(export);
+		header.add(actions, BorderLayout.EAST);
 
 		header.add(createMetrics(), BorderLayout.SOUTH);
 		return header;
@@ -356,16 +444,16 @@ final class TemporalGraphFoundationPanel extends JPanel
 				JPanel dossier = new RoundedPanel(PANEL_INK);
 				dossier.setLayout(new BorderLayout(0, 9));
 				dossier.setBorder(new EmptyBorder(12, 12, 12, 12));
-				dossier.setPreferredSize(new Dimension(320, 270));
+				dossier.setPreferredSize(new Dimension(320, 324));
 
 				JPanel header = new JPanel(new BorderLayout());
 				header.setOpaque(false);
 				JLabel title = new JLabel("Decision Dossier");
-				title.setFont(font(Font.BOLD, 13));
+				title.setFont(NebulaDesign.fontSemiBold(13f));
 				title.setForeground(TEXT);
 				JLabel mode = new JLabel("why / why-not / limits");
-				mode.setFont(font(Font.BOLD, 9));
-				mode.setForeground(MUTED);
+				mode.setFont(NebulaDesign.fontMedium(10f));
+				mode.setForeground(FAINT);
 				header.add(title, BorderLayout.WEST);
 				header.add(mode, BorderLayout.EAST);
 				dossier.add(header, BorderLayout.NORTH);
@@ -408,7 +496,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 
 			replayScrubber.setPreferredSize(new Dimension(620, 122));
 			replayScrubber.setMinimumSize(new Dimension(420, 104));
-			timeReadout.setFont(font(Font.BOLD, 11));
+			timeReadout.setFont(NebulaDesign.fontMono(11f));
 			timeReadout.setForeground(MUTED);
 			timeSlider.setOpaque(false);
 			timeSlider.setPaintTicks(false);
@@ -440,8 +528,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 	private Component createFooter()
 	{
 		JPanel footer = surfacePanel(new BorderLayout());
-		footer.setBorder(new EmptyBorder(10, 14, 10, 14));
-		statusLabel.setFont(font(Font.BOLD, 12));
+		footer.setBorder(new EmptyBorder(10, 16, 12, 16));
+		statusLabel.setFont(NebulaDesign.fontMedium(12f));
 		statusLabel.setForeground(MUTED);
 		footer.add(statusLabel, BorderLayout.WEST);
 		return footer;
@@ -639,7 +727,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 					dossierEvidence.setText(html("--"));
 					return;
 				}
-				dossierReliability.setText(candidate.reliabilityBand);
+				dossierReliability.setText(firstWord(candidate.reliabilityBand));
+				dossierReliability.setToolTipText(candidate.reliabilityBand);
 				dossierCoverage.setText(percent(candidate.evidenceCoverage));
 				dossierFragility.setText(percent(candidate.counterfactualFragility));
 				dossierGap.setText(candidate.challengerName.length() == 0
@@ -676,11 +765,12 @@ final class TemporalGraphFoundationPanel extends JPanel
 	private static JPanel metricCard(String label, JLabel value, Color accent)
 	{
 		JPanel panel = new MetricPanel(accent);
-		panel.setLayout(new BorderLayout(0, 4));
-		panel.setBorder(new EmptyBorder(9, 11, 9, 11));
+		panel.setLayout(new BorderLayout(0, 3));
+		panel.setBorder(new EmptyBorder(9, 11, 11, 11));
 		JLabel caption = new JLabel(label);
-		caption.setFont(font(Font.BOLD, 10));
-		caption.setForeground(MUTED);
+		caption.setFont(NebulaDesign.fontSection());
+		caption.setForeground(FAINT);
+		caption.setBorder(new EmptyBorder(0, 12, 0, 0));
 		value.setForeground(TEXT);
 		panel.add(caption, BorderLayout.NORTH);
 		panel.add(value, BorderLayout.CENTER);
@@ -690,7 +780,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 			private static JLabel metricValue(String text)
 			{
 				JLabel label = new JLabel(text);
-				label.setFont(font(Font.BOLD, 19));
+				label.setFont(NebulaDesign.fontSemiBold(18f));
 				label.setForeground(TEXT);
 				label.setHorizontalAlignment(SwingConstants.LEFT);
 				return label;
@@ -699,7 +789,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 			private static JLabel dossierValue(String text)
 			{
 				JLabel label = new JLabel(text);
-				label.setFont(font(Font.BOLD, 13));
+				label.setFont(NebulaDesign.fontSemiBold(13f));
 				label.setForeground(TEXT);
 				label.setHorizontalAlignment(SwingConstants.LEFT);
 				return label;
@@ -708,7 +798,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 			private static JLabel dossierText(String text)
 			{
 				JLabel label = new JLabel(html(text));
-				label.setFont(font(Font.PLAIN, 10));
+				label.setFont(NebulaDesign.fontBody(10.5f));
 				label.setForeground(MUTED);
 				label.setVerticalAlignment(SwingConstants.TOP);
 				return label;
@@ -718,10 +808,11 @@ final class TemporalGraphFoundationPanel extends JPanel
 			{
 				JPanel panel = new MetricPanel(accent);
 				panel.setLayout(new BorderLayout(0, 2));
-				panel.setBorder(new EmptyBorder(7, 8, 7, 8));
+				panel.setBorder(new EmptyBorder(8, 9, 8, 8));
 				JLabel caption = new JLabel(label.toUpperCase(Locale.US));
-				caption.setFont(font(Font.BOLD, 8));
-				caption.setForeground(MUTED);
+				caption.setFont(NebulaDesign.fontSemiBold(9f));
+				caption.setForeground(FAINT);
+				caption.setBorder(new EmptyBorder(0, 11, 0, 0));
 				panel.add(caption, BorderLayout.NORTH);
 				panel.add(value, BorderLayout.CENTER);
 				return panel;
@@ -732,7 +823,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				JPanel panel = new JPanel(new BorderLayout(0, 2));
 				panel.setOpaque(false);
 				JLabel caption = new JLabel(title);
-				caption.setFont(font(Font.BOLD, 9));
+				caption.setFont(NebulaDesign.fontSemiBold(9.5f));
 				caption.setForeground(accent);
 				panel.add(caption, BorderLayout.NORTH);
 				panel.add(text, BorderLayout.CENTER);
@@ -745,7 +836,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				safe = safe.replace("&", "&amp;")
 						.replace("<", "&lt;")
 						.replace(">", "&gt;");
-				return "<html><body style='width:292px; color:#9DACBE;'>"
+				return "<html><body style='width:292px;'>"
 						+ safe + "</body></html>";
 			}
 
@@ -753,19 +844,13 @@ final class TemporalGraphFoundationPanel extends JPanel
 		{
 			JCheckBox box = new JCheckBox(text);
 				box.setOpaque(false);
-				box.setFont(font(Font.BOLD, 10));
+				box.setFont(NebulaDesign.fontMedium(11f));
 				box.setForeground(MUTED);
 			box.setFocusPainted(false);
+			box.setIcon(new ToggleIcon());
+			box.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			box.setIconTextGap(7);
 			return box;
-		}
-
-		private static Color tint(Color color, float amount)
-		{
-			float clamped = Math.max(0.0f, Math.min(1.0f, amount));
-			int r = Math.round(color.getRed() + (255 - color.getRed()) * clamped);
-			int g = Math.round(color.getGreen() + (255 - color.getGreen()) * clamped);
-			int b = Math.round(color.getBlue() + (255 - color.getBlue()) * clamped);
-			return new Color(r, g, b);
 		}
 
 			private static String decimal(double value)
@@ -825,21 +910,19 @@ final class TemporalGraphFoundationPanel extends JPanel
 		{
 			if (latestResult == null)
 			{
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showInfo(
 						this,
 						"No TGF run has been recorded yet.",
-						"Temporal Graph Foundation Studio",
-						JOptionPane.INFORMATION_MESSAGE);
+						"Temporal Graph Foundation Studio");
 				return;
 			}
 			File dir = new File("reports/tgf-capsules");
 			if (!dir.exists() && !dir.mkdirs())
 			{
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showWarning(
 						this,
 						"Could not create capsule directory:\n" + dir.getAbsolutePath(),
-						"Temporal Graph Foundation Studio",
-						JOptionPane.WARNING_MESSAGE);
+						"Temporal Graph Foundation Studio");
 				return;
 			}
 			File capsule = new File(
@@ -861,19 +944,17 @@ final class TemporalGraphFoundationPanel extends JPanel
 						// The capsule was written; opening it is a convenience.
 					}
 				}
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showSuccess(
 						this,
 						"TGF research capsule written to:\n" + capsule.getAbsolutePath(),
-						"Temporal Graph Foundation Studio",
-						JOptionPane.INFORMATION_MESSAGE);
+						"Temporal Graph Foundation Studio");
 			}
 			catch (IOException ex)
 			{
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showWarning(
 						this,
 						"Could not write TGF research capsule:\n" + ex.getMessage(),
-						"Temporal Graph Foundation Studio",
-						JOptionPane.WARNING_MESSAGE);
+						"Temporal Graph Foundation Studio");
 			}
 		}
 
@@ -1221,7 +1302,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 		{
 			JPanel panel = new RoundedPanel(SURFACE);
 			panel.setLayout(layout);
-			panel.setBorder(new EmptyBorder(12, 12, 12, 12));
+			panel.setBorder(new EmptyBorder(14, 14, 14, 14));
 		return panel;
 	}
 
@@ -1233,6 +1314,10 @@ final class TemporalGraphFoundationPanel extends JPanel
 					ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 			scroll.getViewport().setBackground(SURFACE);
 			scroll.setBackground(SURFACE);
+			scroll.getVerticalScrollBar().setUnitIncrement(16);
+			scroll.getVerticalScrollBar().setOpaque(false);
+			scroll.getVerticalScrollBar().setUI(
+					new NebulaWidgets.PillScrollBarUI());
 			return scroll;
 		}
 
@@ -1241,11 +1326,11 @@ final class TemporalGraphFoundationPanel extends JPanel
 		JPanel panel = new JPanel(new BorderLayout());
 		panel.setOpaque(false);
 			JLabel titleLabel = new JLabel(title);
-			titleLabel.setFont(font(Font.BOLD, 14));
+			titleLabel.setFont(NebulaDesign.fontSemiBold(15f));
 			titleLabel.setForeground(TEXT);
 			JLabel detailLabel = new JLabel(detail);
-		detailLabel.setFont(font(Font.BOLD, 10));
-		detailLabel.setForeground(MUTED);
+		detailLabel.setFont(NebulaDesign.fontMedium(11f));
+		detailLabel.setForeground(FAINT);
 		panel.add(titleLabel, BorderLayout.WEST);
 		panel.add(detailLabel, BorderLayout.EAST);
 		return panel;
@@ -1253,7 +1338,37 @@ final class TemporalGraphFoundationPanel extends JPanel
 
 	private static Font font(int style, int size)
 	{
-		return new Font("SansSerif", style, size);
+		if (style == Font.BOLD)
+		{
+			return NebulaDesign.fontSemiBold(Math.max(9, size));
+		}
+		return NebulaDesign.fontBody(Math.max(10, size));
+	}
+
+	private static Color alphaOf(Color color, int alpha)
+	{
+		return new Color(color.getRed(), color.getGreen(), color.getBlue(),
+				Math.max(0, Math.min(255, alpha)));
+	}
+
+	private static Color mix(Color base, Color tint, float amount)
+	{
+		float clamped = Math.max(0.0f, Math.min(1.0f, amount));
+		int r = Math.round(base.getRed()
+				+ (tint.getRed() - base.getRed()) * clamped);
+		int g = Math.round(base.getGreen()
+				+ (tint.getGreen() - base.getGreen()) * clamped);
+		int b = Math.round(base.getBlue()
+				+ (tint.getBlue() - base.getBlue()) * clamped);
+		return new Color(r, g, b);
+	}
+
+	private static String hex(Color color)
+	{
+		return String.format(Locale.US, "#%02X%02X%02X",
+				Integer.valueOf(color.getRed()),
+				Integer.valueOf(color.getGreen()),
+				Integer.valueOf(color.getBlue()));
 	}
 
 	private static String shortRunId(String runId)
@@ -1264,6 +1379,17 @@ final class TemporalGraphFoundationPanel extends JPanel
 		}
 		String trimmed = runId.trim();
 		return trimmed.length() <= 8 ? trimmed : trimmed.substring(0, 8);
+	}
+
+	private static String firstWord(String value)
+	{
+		String trimmed = value == null ? "" : value.trim();
+		if (trimmed.length() == 0)
+		{
+			return "--";
+		}
+		int space = trimmed.indexOf(' ');
+		return space > 0 ? trimmed.substring(0, space) : trimmed;
 	}
 
 	private static String percent(double value)
@@ -1317,14 +1443,26 @@ final class TemporalGraphFoundationPanel extends JPanel
 						? "No positive candidates"
 						: "Top: " + report.topCandidates.get(0).candidateName();
 					label.setText("<html><b>" + safe(report.targetUser)
-							+ "</b><br><span style='color:#9DACBE;'>"
+							+ "</b><br><span style='color:"
+							+ hex(NebulaDesign.currentTextSecondary()) + ";'>"
 							+ safe(report.targetFollowee) + " | " + count
 							+ " | NDCG " + percent(report.ndcgAtFive)
 							+ "</span><br>" + top + "</html>");
-			label.setBorder(new EmptyBorder(8, 10, 8, 10));
-			label.setFont(font(Font.PLAIN, 12));
+			label.setFont(NebulaDesign.fontBody(12f));
 				label.setForeground(TEXT);
-				label.setBackground(isSelected ? new Color(39, 91, 160) : SURFACE);
+				if (isSelected)
+				{
+					label.setBackground(NebulaDesign.currentSelection());
+					label.setBorder(BorderFactory.createCompoundBorder(
+							BorderFactory.createMatteBorder(0, 3, 0, 0,
+									NebulaDesign.currentAccent()),
+							new EmptyBorder(8, 9, 8, 10)));
+				}
+				else
+				{
+					label.setBackground(NebulaDesign.currentSurface());
+					label.setBorder(new EmptyBorder(8, 12, 8, 10));
+				}
 				return label;
 			}
 	}
@@ -1344,19 +1482,33 @@ final class TemporalGraphFoundationPanel extends JPanel
 					(TemporalGraphFoundationModelSupport.CandidateScore) value;
 					label.setText("<html><b>#" + score.rank + " "
 							+ safe(score.candidateName()) + "</b><br>"
-							+ "<span style='color:#9DACBE;'>"
+							+ "<span style='color:"
+							+ hex(NebulaDesign.currentTextSecondary()) + ";'>"
 							+ safe(score.candidateFollowee()) + " | score "
 							+ scoreText(score.finalScore) + "</span><br>"
 							+ score.reliabilityBand + " | stable " + percent(score.stability)
 							+ " | fragile " + percent(score.counterfactualFragility)
-							+ " | " + score.calibrationVerdict
+							+ "<br><span style='color:"
+							+ hex(NebulaDesign.currentTextSecondary()) + ";'>"
+							+ score.calibrationVerdict
 							+ ", CI [" + scoreText(score.confidenceLower)
 							+ ", " + scoreText(score.confidenceUpper) + "]"
-							+ "</html>");
-			label.setBorder(new EmptyBorder(8, 10, 8, 10));
-			label.setFont(font(Font.PLAIN, 12));
+							+ "</span></html>");
+			label.setFont(NebulaDesign.fontBody(12f));
 				label.setForeground(TEXT);
-				label.setBackground(isSelected ? new Color(26, 96, 76) : SURFACE);
+				if (isSelected)
+				{
+					label.setBackground(mix(NebulaDesign.currentSurface(),
+							GREEN, StudioNightTheme.isNightMode() ? 0.22f : 0.16f));
+					label.setBorder(BorderFactory.createCompoundBorder(
+							BorderFactory.createMatteBorder(0, 3, 0, 0, GREEN),
+							new EmptyBorder(8, 9, 8, 10)));
+				}
+				else
+				{
+					label.setBackground(NebulaDesign.currentSurface());
+					label.setBorder(new EmptyBorder(8, 12, 8, 10));
+				}
 				return label;
 			}
 	}
@@ -1429,8 +1581,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 			{
 				super.paintComponent(graphics);
 				Graphics2D g = (Graphics2D)graphics.create();
-				g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-						RenderingHints.VALUE_ANTIALIAS_ON);
+				NebulaDesign.prepare(g);
 				int w = getWidth();
 				int h = getHeight();
 				if (candidate == null || candidate.timeline.isEmpty())
@@ -1469,9 +1620,9 @@ final class TemporalGraphFoundationPanel extends JPanel
 				drawClipped(g, trajectorySummary(frame),
 						railX + 130, 16, Math.max(40, railW - 132));
 
-				g.setColor(new Color(47, 62, 80, 210));
+				g.setColor(alphaOf(TRACK, 220));
 				g.fillRoundRect(railX, railY - 4, railW, 8, 8, 8);
-				g.setColor(new Color(91, 111, 135, 100));
+				g.setColor(alphaOf(BORDER_STRONG, 110));
 				g.drawLine(railX, railY - 14, railX + railW, railY - 14);
 				int previousX = -1;
 				int previousY = -1;
@@ -1524,13 +1675,13 @@ final class TemporalGraphFoundationPanel extends JPanel
 				}
 				g.setColor(new Color(GREEN.getRed(), GREEN.getGreen(),
 						GREEN.getBlue(), 130));
-				g.drawLine(selectedX, 21, selectedX, h - 13);
+				g.drawLine(selectedX, 21, selectedX, h - 24);
 				g.setColor(new Color(GREEN.getRed(), GREEN.getGreen(),
 						GREEN.getBlue(), 46));
 				g.fillOval(selectedX - 17, selectedCurveY - 17, 34, 34);
 				g.setColor(GREEN);
 				g.fillOval(selectedX - 5, selectedCurveY - 5, 10, 10);
-				g.fillRoundRect(selectedX - 20, h - 19, 40, 6, 6, 6);
+				g.fillRoundRect(selectedX - 20, h - 24, 40, 6, 6, 6);
 
 				if (frame != null && railW > 260)
 				{
@@ -1541,8 +1692,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 							calloutMetrics.stringWidth(callout) + 18);
 					int calloutX = Math.max(railX, Math.min(railX + railW - calloutW,
 							selectedX - calloutW / 2));
-					int calloutY = Math.max(19, selectedCurveY - 24);
-					g.setColor(new Color(12, 23, 36, 230));
+					int calloutY = Math.max(22, selectedCurveY - 24);
+					g.setColor(alphaOf(PLATE, 242));
 					g.fillRoundRect(calloutX, calloutY, calloutW, 18, 8, 8);
 					g.setColor(new Color(GREEN.getRed(), GREEN.getGreen(),
 							GREEN.getBlue(), 150));
@@ -1554,20 +1705,25 @@ final class TemporalGraphFoundationPanel extends JPanel
 				}
 
 				g.setFont(font(Font.BOLD, 9));
-				g.setColor(MUTED);
-				drawClipped(g, first.label, railX, h - 8, 74);
 				FontMetrics metrics = g.getFontMetrics();
 				String selectedLabel = frame == null ? "-" : frame.label;
-				g.setColor(GREEN);
-				g.drawString(selectedLabel,
-						Math.max(railX, Math.min(railX + railW
-								- metrics.stringWidth(selectedLabel),
-								selectedX - metrics.stringWidth(selectedLabel) / 2)),
-						h - 8);
+				int selectedLabelW = metrics.stringWidth(selectedLabel);
+				int selectedLabelX = Math.max(railX, Math.min(railX + railW
+						- selectedLabelW,
+						selectedX - selectedLabelW / 2));
 				g.setColor(MUTED);
+				if (selectedLabelX > railX + metrics.stringWidth(first.label) + 10)
+				{
+					drawClipped(g, first.label, railX, h - 8, 74);
+				}
 				String lastLabel = last.label;
-				g.drawString(lastLabel,
-						railX + railW - metrics.stringWidth(lastLabel), h - 8);
+				int lastLabelX = railX + railW - metrics.stringWidth(lastLabel);
+				if (lastLabelX > selectedLabelX + selectedLabelW + 10)
+				{
+					g.drawString(lastLabel, lastLabelX, h - 8);
+				}
+				g.setColor(GREEN);
+				g.drawString(selectedLabel, selectedLabelX, h - 8);
 			}
 
 			private int[] railBounds(int w, int h)
@@ -1601,14 +1757,12 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int h,
 					TemporalGraphFoundationModelSupport.TimelineFrame frame)
 			{
-				GradientPaint gradient = new GradientPaint(x, y,
-						new Color(42, 78, 112, 145), x + w, y + h,
-						new Color(20, 41, 58, 190));
-				g.setPaint(gradient);
+				g.setColor(alphaOf(PLATE, 240));
 				g.fillRoundRect(x, y, w, h, 9, 9);
-				g.setPaint(null);
-				g.setColor(new Color(BLUE.getRed(), BLUE.getGreen(),
-						BLUE.getBlue(), 125));
+				g.setColor(alphaOf(BLUE,
+						StudioNightTheme.isNightMode() ? 34 : 16));
+				g.fillRoundRect(x, y, w, h, 9, 9);
+				g.setColor(alphaOf(BLUE, 125));
 				g.drawRoundRect(x, y, w, h, 9, 9);
 				g.setFont(font(Font.BOLD, 8));
 				g.setColor(TEAL);
@@ -1636,9 +1790,9 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int h,
 					TemporalGraphFoundationModelSupport.TimelineFrame frame)
 			{
-				g.setColor(new Color(9, 18, 29, 220));
+				g.setColor(alphaOf(PLATE, 232));
 				g.fillRoundRect(x, y, w, h, 9, 9);
-				g.setColor(new Color(87, 109, 132, 110));
+				g.setColor(alphaOf(BORDER_STRONG, 120));
 				g.drawRoundRect(x, y, w, h, 9, 9);
 				int third = Math.max(56, (w - 28) / 3);
 				drawMiniBadge(g, x + 8, y + 7, third, 32, "score",
@@ -1666,7 +1820,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 					double progress,
 					Color tone)
 			{
-				g.setColor(new Color(42, 57, 75, 220));
+				g.setColor(alphaOf(TRACK, 220));
 				g.fillRoundRect(x, y, w, 5, 5, 5);
 				int fill = (int)Math.round(w * Math.max(0.0,
 						Math.min(1.0, progress)));
@@ -1698,10 +1852,16 @@ final class TemporalGraphFoundationPanel extends JPanel
 
 			private void drawEmpty(Graphics2D g, int w, int h)
 			{
+				NebulaDesign.prepare(g);
+				g.setColor(alphaOf(TRACK, 200));
+				g.fillRoundRect(14, h / 2 + 12, w - 28, 6, 6, 6);
 				g.setFont(font(Font.BOLD, 11));
 				g.setColor(MUTED);
-				drawClipped(g, "No replay frames available yet.", 12, h / 2 + 4,
-						w - 24);
+				String text = "No replay frames available yet.";
+				FontMetrics metrics = g.getFontMetrics();
+				g.drawString(ellipsize(text, metrics, w - 24),
+						Math.max(12, (w - metrics.stringWidth(text)) / 2),
+						h / 2 - 2);
 			}
 
 			private double displayScore(
@@ -1866,8 +2026,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D) graphics.create();
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int w = getWidth();
 			int h = getHeight();
 			paintBackground(g, w, h);
@@ -1895,11 +2054,20 @@ final class TemporalGraphFoundationPanel extends JPanel
 
 			private void paintBackground(Graphics2D g, int w, int h)
 			{
-				g.setPaint(new GradientPaint(
-						0, 0, new Color(19, 30, 44),
-						w, h, new Color(32, 24, 45)));
-				g.fillRoundRect(0, 0, w - 1, h - 1, 12, 12);
-				g.setColor(new Color(255, 255, 255, 18));
+				NebulaDesign.prepare(g);
+				boolean night = StudioNightTheme.isNightMode();
+				Color top = night ? NebulaDesign.NIGHT_SURFACE
+						: NebulaDesign.DAY_SURFACE;
+				Color low = night
+						? mix(NebulaDesign.NIGHT_SURFACE,
+								NebulaDesign.NIGHT_PURPLE, 0.10f)
+						: mix(NebulaDesign.DAY_SURFACE,
+								NebulaDesign.DAY_ACCENT_SOFT, 0.55f);
+				g.setPaint(new GradientPaint(0, 0, top, w, h, low));
+				g.fillRoundRect(0, 0, w - 1, h - 1,
+						NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+				g.setPaint(null);
+				g.setColor(alphaOf(BORDER, night ? 110 : 130));
 				for (int x = 24; x < w; x += 42)
 				{
 					g.drawLine(x, 12, x, h - 14);
@@ -1908,7 +2076,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				{
 					g.drawLine(12, y, w - 14, y);
 				}
-				g.setColor(new Color(64, 213, 217, 50));
+				g.setColor(alphaOf(TEAL, night ? 50 : 34));
 				for (int i = 0; i < 5; i++)
 				{
 					int x = w - 230 + i * 42;
@@ -1920,24 +2088,40 @@ final class TemporalGraphFoundationPanel extends JPanel
 								x + 3, y + 3);
 					}
 				}
-				g.setColor(new Color(BORDER.getRed(), BORDER.getGreen(),
-						BORDER.getBlue(), 210));
-				g.drawRoundRect(0, 0, w - 1, h - 1, 12, 12);
+				g.setColor(BORDER);
+				g.drawRoundRect(0, 0, w - 1, h - 1,
+						NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
 			}
 
 		private void paintEmpty(Graphics2D g, int w, int h, String message)
 		{
+			int cx = w / 2;
+			int cy = h / 2 - 34;
+			g.setColor(alphaOf(BLUE, 22));
+			g.fillOval(cx - 44, cy - 44, 88, 88);
+			g.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND,
+					BasicStroke.JOIN_ROUND));
+			g.setColor(alphaOf(BLUE, 170));
+			g.drawOval(cx - 28, cy - 28, 56, 56);
+			g.setColor(alphaOf(TEAL, 200));
+			g.fillOval(cx - 21, cy - 9, 8, 8);
+			g.fillOval(cx + 12, cy - 20, 8, 8);
+			g.fillOval(cx + 2, cy + 12, 8, 8);
+			g.setColor(alphaOf(TEAL, 120));
+			g.drawLine(cx - 17, cy - 5, cx + 16, cy - 16);
+			g.drawLine(cx + 16, cy - 16, cx + 6, cy + 16);
+			g.setStroke(new BasicStroke(1.0f));
 			g.setFont(font(Font.BOLD, 18));
 			g.setColor(TEXT);
 			String title = "Temporal Graph Foundation";
 			FontMetrics titleMetrics = g.getFontMetrics();
 			g.drawString(title, (w - titleMetrics.stringWidth(title)) / 2,
-					h / 2 - 16);
+					h / 2 + 44);
 			g.setFont(font(Font.PLAIN, 13));
 			g.setColor(MUTED);
 			FontMetrics metrics = g.getFontMetrics();
 			String body = ellipsize(message, metrics, Math.max(100, w - 80));
-			g.drawString(body, (w - metrics.stringWidth(body)) / 2, h / 2 + 12);
+			g.drawString(body, (w - metrics.stringWidth(body)) / 2, h / 2 + 68);
 		}
 
 			private void paintFoundation(Graphics2D g, int w, int h)
@@ -2023,9 +2207,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int height,
 					TemporalGraphFoundationModelSupport.TimelineFrame frame)
 			{
-				drawPanel(g, x, y, width, height, new Color(14, 23, 36, 224),
-						new Color(BORDER.getRed(), BORDER.getGreen(),
-								BORDER.getBlue(), 182));
+				drawPanel(g, x, y, width, height, alphaOf(INK, 235),
+						alphaOf(BORDER_STRONG, 150));
 				g.setFont(font(Font.BOLD, 11));
 				g.setColor(TEAL);
 				drawClipped(g, "FUSED EVIDENCE CONSTELLATION", x + 16, y + 22,
@@ -2071,8 +2254,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 						visibleSignals, signalOrder, values);
 				if (height >= 224)
 				{
-					drawReplayTrace(g, x + 18, y + height - 42,
-							Math.max(80, width - 36), 24, frame);
+					drawReplayTrace(g, x + 18, y + height - 52,
+							Math.max(80, width - 36), 34, frame);
 				}
 			}
 
@@ -2093,19 +2276,24 @@ final class TemporalGraphFoundationPanel extends JPanel
 				{
 					int inset = i * 22;
 					int alpha = 54 - i * 9;
-					g.setColor(new Color(64, 213, 217, Math.max(16, alpha)));
+					g.setColor(alphaOf(TEAL, Math.max(16, alpha)));
 					g.drawOval(cx - haloW / 2 + inset,
 							cy - haloH / 2 + inset / 2,
 							Math.max(12, haloW - inset * 2),
 							Math.max(12, haloH - inset));
 				}
-				g.setColor(new Color(94, 166, 255, 48));
+				g.setColor(alphaOf(BLUE, 48));
 				g.drawLine(x + 32, cy, x + width - 32, cy);
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(MUTED);
-				String label = frame == null ? candidate.path
-						: frame.label + " | " + frame.auditNote;
-				drawClipped(g, label, x + 18, y + height - 14, width - 36);
+				if (height < 224)
+				{
+					// The replay trace band carries this caption when it is
+					// visible; only paint it here on short canvases.
+					g.setFont(font(Font.BOLD, 9));
+					g.setColor(MUTED);
+					String label = frame == null ? candidate.path
+							: frame.label + " | " + frame.auditNote;
+					drawClipped(g, label, x + 18, y + height - 14, width - 36);
+				}
 			}
 
 			private void drawSignalArc(
@@ -2160,8 +2348,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int width,
 					int height)
 			{
-				drawPanel(g, x, y, width, height, new Color(9, 16, 27, 180),
-						new Color(244, 176, 70, 112));
+				drawPanel(g, x, y, width, height, alphaOf(PLATE, 205),
+						alphaOf(AMBER, 112));
 				String title = "GRAPH BRIDGE";
 				String detail = candidate.path;
 				if (removeGraph)
@@ -2209,6 +2397,12 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int badgeH = 25;
 					int bx = cx + side * radiusX - badgeW / 2;
 					int by = cy + dy - badgeH / 2;
+					if (dy == 0 && rows >= 3)
+					{
+						// Keep the middle band clear of the identity nodes:
+						// float those chips just above the node halo.
+						by = cy - 60 - badgeH;
+					}
 					bx = Math.max(mapX + 12, Math.min(mapX + mapW - badgeW - 12, bx));
 					by = Math.max(mapY + 34, Math.min(mapY + mapH - badgeH - 12, by));
 					drawSignalBadge(g, bx, by, badgeW, badgeH,
@@ -2227,11 +2421,10 @@ final class TemporalGraphFoundationPanel extends JPanel
 			{
 				Color color = SIGNAL_COLORS[signal];
 				drawPanel(g, x, y, width, height,
-						new Color(8, 16, 27, 214),
-						new Color(color.getRed(), color.getGreen(),
-								color.getBlue(), 150));
+						alphaOf(PLATE, 225),
+						alphaOf(color, 150));
 				int barW = Math.max(20, width - 18);
-				g.setColor(new Color(47, 62, 80));
+				g.setColor(TRACK);
 				g.fillRoundRect(x + 9, y + height - 7, barW, 4, 4, 4);
 				g.setColor(color);
 				g.fillRoundRect(x + 9, y + height - 7,
@@ -2254,9 +2447,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int height,
 					TemporalGraphFoundationModelSupport.TimelineFrame frame)
 			{
-				drawPanel(g, x, y, width, height, new Color(16, 24, 35, 232),
-						new Color(BORDER.getRed(), BORDER.getGreen(),
-								BORDER.getBlue(), 190));
+				drawPanel(g, x, y, width, height, alphaOf(INK, 240),
+						alphaOf(BORDER_STRONG, 160));
 				g.setFont(font(Font.BOLD, 13));
 				g.setColor(TEXT);
 				drawClipped(g, "Signal Contribution Ledger", x + 14, y + 24,
@@ -2314,7 +2506,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 					double scale = level / 4.0;
 					java.awt.Polygon grid = radarPolygon(cx, cy, radius * scale,
 							filledValues(1.0));
-					g.setColor(new Color(64, 84, 106, 56 + level * 12));
+					g.setColor(alphaOf(BORDER_STRONG, 70 + level * 12));
 					g.drawPolygon(grid);
 				}
 				for (int i = 0; i < SIGNAL_LABELS.length; i++)
@@ -2322,7 +2514,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 					double angle = radarAngle(i);
 					int ex = cx + (int)Math.round(Math.cos(angle) * radius);
 					int ey = cy + (int)Math.round(Math.sin(angle) * radius);
-					g.setColor(new Color(64, 84, 106, 120));
+					g.setColor(alphaOf(BORDER_STRONG, 140));
 					g.drawLine(cx, cy, ex, ey);
 					g.setFont(font(Font.BOLD, 8));
 					g.setColor(SIGNAL_COLORS[i]);
@@ -2332,16 +2524,16 @@ final class TemporalGraphFoundationPanel extends JPanel
 				double[] challenger = challengerSignalValues();
 				java.awt.Polygon challengerShape =
 						radarPolygon(cx, cy, radius, challenger);
-				g.setColor(new Color(244, 176, 70, 40));
+				g.setColor(alphaOf(AMBER, 40));
 				g.fillPolygon(challengerShape);
-				g.setColor(new Color(244, 176, 70, 120));
+				g.setColor(alphaOf(AMBER, 120));
 				g.drawPolygon(challengerShape);
 				java.awt.Polygon shape = radarPolygon(cx, cy, radius, values);
-				g.setColor(new Color(64, 211, 146, 64));
+				g.setColor(alphaOf(GREEN, 64));
 				g.fillPolygon(shape);
 				g.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND,
 						BasicStroke.JOIN_ROUND));
-				g.setColor(new Color(64, 211, 146, 210));
+				g.setColor(alphaOf(GREEN, 210));
 				g.drawPolygon(shape);
 				g.setStroke(new BasicStroke(1.0f));
 				g.setFont(font(Font.BOLD, 9));
@@ -2357,9 +2549,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int height,
 					TemporalGraphFoundationModelSupport.TimelineFrame frame)
 			{
-				drawPanel(g, x, y, width, height, new Color(14, 23, 35, 226),
-						new Color(BORDER.getRed(), BORDER.getGreen(),
-								BORDER.getBlue(), 190));
+				drawPanel(g, x, y, width, height, alphaOf(INK, 235),
+						alphaOf(BORDER_STRONG, 160));
 				int gap = 8;
 				int columns = width >= 980 ? 4 : 3;
 				int colW = Math.max(96, (width - gap * (columns + 1)) / columns);
@@ -2440,9 +2631,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int chipW = 112;
 					int chipX = Math.max(x1, Math.min(x2 - chipW, x2 - 142));
 					drawPanel(g, chipX, y1 - 11, chipW, 22,
-							new Color(12, 20, 32, 218),
-							new Color(color.getRed(), color.getGreen(),
-									color.getBlue(), 128));
+							alphaOf(PLATE, 228),
+							alphaOf(color, 128));
 					g.setFont(font(Font.BOLD, 9));
 					g.setColor(TEXT);
 					drawClipped(g, label + " " + percent(value),
@@ -2465,11 +2655,10 @@ final class TemporalGraphFoundationPanel extends JPanel
 					String followee)
 			{
 				int glow = 8 + (int)Math.round(3.0 * Math.sin(phase));
-				g.setColor(new Color(color.getRed(), color.getGreen(),
-						color.getBlue(), 34));
+				g.setColor(alphaOf(color, 34));
 				g.fillOval(cx - 34 - glow, cy - 34 - glow,
 						68 + glow * 2, 68 + glow * 2);
-				g.setColor(new Color(9, 15, 24, 230));
+				g.setColor(alphaOf(PLATE, 235));
 				g.fillOval(cx - 34, cy - 34, 68, 68);
 				g.setStroke(new BasicStroke(3.0f));
 				g.setColor(color);
@@ -2498,16 +2687,16 @@ final class TemporalGraphFoundationPanel extends JPanel
 					double[] values)
 			{
 				double score = displayScore(frame);
-				g.setColor(new Color(9, 15, 24, 235));
+				g.setColor(alphaOf(PLATE, 240));
 				g.fillOval(cx - radius, cy - radius, radius * 2, radius * 2);
 				g.setStroke(new BasicStroke(10.0f, BasicStroke.CAP_ROUND,
 						BasicStroke.JOIN_ROUND));
-				g.setColor(new Color(47, 62, 80, 210));
+				g.setColor(alphaOf(TRACK, 220));
 				g.drawOval(cx - radius, cy - radius, radius * 2, radius * 2);
 				int ciStart = 90 - (int)Math.round(candidate.confidenceUpper * 360.0);
 				int ciExtent = Math.max(3, (int)Math.round(
 						(candidate.confidenceUpper - candidate.confidenceLower) * 360.0));
-				g.setColor(new Color(64, 213, 217, 160));
+				g.setColor(alphaOf(TEAL, 160));
 				g.drawArc(cx - radius, cy - radius, radius * 2, radius * 2,
 						ciStart, ciExtent);
 				g.setStroke(new BasicStroke(7.0f, BasicStroke.CAP_ROUND,
@@ -2532,8 +2721,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 			private void drawBridgeBadge(Graphics2D g, int cx, int y, int width)
 			{
 				int x = cx - width / 2;
-				drawPanel(g, x, y - 15, width, 30, new Color(244, 176, 70, 28),
-						new Color(244, 176, 70, 112));
+				drawPanel(g, x, y - 15, width, 30, alphaOf(AMBER, 28),
+						alphaOf(AMBER, 112));
 				g.setFont(font(Font.BOLD, 9));
 				g.setColor(AMBER);
 				centerString(g, "GRAPH BRIDGE", cx, y - 2);
@@ -2551,16 +2740,16 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int height,
 					TemporalGraphFoundationModelSupport.TimelineFrame frame)
 			{
-				drawPanel(g, x, y, width, height, new Color(10, 18, 29, 186),
-						new Color(64, 84, 106, 132));
+				drawPanel(g, x, y, width, height, alphaOf(PLATE, 205),
+						alphaOf(BORDER_STRONG, 140));
 				if (candidate.timeline == null || candidate.timeline.isEmpty())
 				{
 					return;
 				}
 				int lineX = x + 12;
-				int lineY = y + height / 2 + 2;
+				int lineY = y + 19;
 				int lineW = Math.max(20, width - 24);
-				g.setColor(new Color(64, 84, 106, 180));
+				g.setColor(alphaOf(BORDER_STRONG, 190));
 				g.drawLine(lineX, lineY, lineX + lineW, lineY);
 				int previousX = -1;
 				int previousY = -1;
@@ -2569,9 +2758,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 					TemporalGraphFoundationModelSupport.TimelineFrame point =
 							candidate.timeline.get(i);
 					int px = lineX + (int)Math.round(lineW * point.progress);
-					int py = y + height - 6
-							- (int)Math.round(Math.max(4, height - 12)
-									* displayScore(point));
+					int py = lineY - (int)Math.round(13.0 * displayScore(point));
 					if (previousX >= 0)
 					{
 						g.setColor(new Color(BLUE.getRed(), BLUE.getGreen(),
@@ -2598,11 +2785,11 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int height,
 					TemporalGraphFoundationModelSupport.TimelineFrame frame)
 			{
-				g.setColor(new Color(47, 62, 80));
+				g.setColor(TRACK);
 				g.fillRoundRect(x, y + height - 9, width, 7, 7, 7);
 				int lo = x + (int)Math.round(width * candidate.confidenceLower);
 				int hi = x + (int)Math.round(width * candidate.confidenceUpper);
-				g.setColor(new Color(64, 213, 217, 100));
+				g.setColor(alphaOf(TEAL, 100));
 				g.fillRoundRect(Math.min(lo, hi), y + height - 10,
 						Math.max(3, Math.abs(hi - lo)), 9, 9, 9);
 				int scoreX = x + (int)Math.round(width * displayScore(frame));
@@ -2631,7 +2818,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(),
 						34));
 				g.fillRoundRect(x, y, width, height, 7, 7);
-				g.setColor(new Color(64, 84, 106, 170));
+				g.setColor(alphaOf(BORDER_STRONG, 170));
 				g.drawRoundRect(x, y, width, height, 7, 7);
 				g.setFont(font(Font.BOLD, 10));
 				g.setColor(TEXT);
@@ -2639,7 +2826,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 						Math.max(44, width / 4));
 				int barX = x + Math.max(58, width / 4);
 				int barW = Math.max(34, width - (barX - x) - 76);
-				g.setColor(new Color(47, 62, 80));
+				g.setColor(TRACK);
 				g.fillRoundRect(barX, y + height / 2 - 4, barW, 8, 8, 8);
 				g.setColor(color);
 				g.fillRoundRect(barX, y + height / 2 - 4,
@@ -3197,8 +3384,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 			{
 				super.paintComponent(graphics);
 				Graphics2D g = (Graphics2D) graphics.create();
-				g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-						RenderingHints.VALUE_ANTIALIAS_ON);
+				NebulaDesign.prepare(g);
 				int w = getWidth();
 				int h = getHeight();
 				if (result == null)
@@ -3281,10 +3467,10 @@ final class TemporalGraphFoundationPanel extends JPanel
 				for (int i = 0; i <= 3; i++)
 				{
 					int gridY = graphY + (int)Math.round(graphH * i / 3.0);
-					g.setColor(new Color(64, 84, 106, 76));
+					g.setColor(alphaOf(BORDER_STRONG, 100));
 					g.drawLine(graphX, gridY, graphX + graphW, gridY);
 				}
-				g.setColor(new Color(64, 84, 106, 190));
+				g.setColor(alphaOf(BORDER_STRONG, 200));
 				g.drawLine(graphX, axisY, graphX + graphW, axisY);
 				int previousX = -1;
 				int previousY = -1;
@@ -3311,7 +3497,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 					previousY = py;
 				}
 				area.addPoint(graphX + graphW, axisY);
-				g.setColor(new Color(94, 166, 255, 30));
+				g.setColor(alphaOf(BLUE, 30));
 				g.fillPolygon(area);
 				for (int i = 0; i < candidate.timeline.size(); i++)
 				{
@@ -3385,7 +3571,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 						x + 12, cardY + cardH + 18, w - 24);
 				g.setFont(font(Font.PLAIN, 10));
 				g.setColor(MUTED);
-				drawClipped(g, "stress probes ranked by score drop and rank movement",
+				drawClipped(g, "probes ranked by score drop",
 						x + 12, cardY + cardH + 33, w - 24);
 				int rowY = cardY + cardH + 42;
 				int rowH = Math.max(17, Math.min(22, (y + h - rowY - 10) / 3));
@@ -3492,6 +3678,35 @@ final class TemporalGraphFoundationPanel extends JPanel
 				g.drawString(text, cx - metrics.stringWidth(text) / 2, y);
 			}
 
+			/** Draws up to two lines, wrapping at a word break instead of clipping. */
+			private void drawNoteLines(Graphics2D g, String value, int x, int y, int w)
+			{
+				String text = safe(value);
+				FontMetrics metrics = g.getFontMetrics();
+				if (metrics.stringWidth(text) <= w)
+				{
+					g.drawString(text, x, y + 4);
+					return;
+				}
+				int split = -1;
+				for (int i = text.length() - 1; i > 0; i--)
+				{
+					if (text.charAt(i) == ' '
+							&& metrics.stringWidth(text.substring(0, i)) <= w)
+					{
+						split = i;
+						break;
+					}
+				}
+				if (split <= 0)
+				{
+					drawClipped(g, text, x, y + 4, w);
+					return;
+				}
+				g.drawString(text.substring(0, split), x, y);
+				drawClipped(g, text.substring(split + 1), x, y + 13, w);
+			}
+
 			private void drawRankShiftRow(
 					Graphics2D g,
 					int x,
@@ -3508,7 +3723,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				g.setColor(new Color(tone.getRed(), tone.getGreen(),
 						tone.getBlue(), selected ? 74 : 34));
 				g.fillRoundRect(x, y, w, h, 6, 6);
-				g.setColor(selected ? tone : new Color(64, 84, 106));
+				g.setColor(selected ? tone : BORDER_STRONG);
 				g.drawRoundRect(x, y, w, h, 6, 6);
 				g.setFont(font(Font.BOLD, 9));
 				g.setColor(TEXT);
@@ -3517,7 +3732,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				drawClipped(g, label, x + 7, y + 12, Math.max(50, w / 2));
 				int barW = Math.max(34, w / 3);
 				int barX = x + w - barW - 7;
-				g.setColor(new Color(47, 62, 80));
+				g.setColor(TRACK);
 				g.fillRoundRect(barX, y + 5, barW, 6, 6, 6);
 				g.setColor(tone);
 				g.fillRoundRect(barX, y + 5,
@@ -3535,23 +3750,20 @@ final class TemporalGraphFoundationPanel extends JPanel
 						result.getResearchSummary();
 				TemporalGraphFoundationModelSupport.FoundationReadiness readiness =
 						summary.foundationReadiness;
-				int ring = Math.min(54, Math.max(38, h / 3));
+				int ring = Math.min(44, Math.max(34, h / 4));
 				int ringX = x + 14;
-				int ringY = y + 30;
+				int ringY = y + 28;
 				drawReadinessRing(g, ringX + ring / 2, ringY + ring / 2,
 						ring / 2, readiness.overall);
-				g.setFont(font(Font.BOLD, 11));
+				g.setFont(font(Font.BOLD, 10));
 				g.setColor(TEXT);
-				drawClipped(g,
-						percent(readiness.overall) + " " + readiness.label,
-						x + ring + 24,
-						y + 41,
-						w - ring - 36);
+				drawNoteLines(g, readiness.label, x + ring + 20, y + 36,
+						w - ring - 32);
 				g.setFont(font(Font.PLAIN, 10));
 				g.setColor(MUTED);
-				drawClipped(g, readiness.note, x + ring + 24, y + 57,
-						w - ring - 36);
-				int barY = y + 76;
+				drawNoteLines(g, readiness.note, x + ring + 20, y + 62,
+						w - ring - 32);
+				int barY = y + 30 + ring + 12;
 				int barW = Math.max(90, w - 26);
 				drawReadinessBar(g, x + 13, barY, barW, "temporal",
 						readiness.temporalDepth, TEAL);
@@ -3582,7 +3794,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 			{
 				g.setStroke(new BasicStroke(6.0f, BasicStroke.CAP_ROUND,
 						BasicStroke.JOIN_ROUND));
-				g.setColor(new Color(47, 62, 80, 210));
+				g.setColor(alphaOf(TRACK, 220));
 				g.drawOval(cx - radius, cy - radius, radius * 2, radius * 2);
 				Color tone = value >= 0.75 ? GREEN : value >= 0.55 ? AMBER : RED;
 				g.setColor(tone);
@@ -3608,7 +3820,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				drawClipped(g, label.toUpperCase(Locale.US), x, y + 9, 58);
 				int barX = x + 62;
 				int barW = Math.max(32, w - 106);
-				g.setColor(new Color(47, 62, 80));
+				g.setColor(TRACK);
 				g.fillRoundRect(barX, y + 3, barW, 7, 7, 7);
 				g.setColor(tone);
 				g.fillRoundRect(barX, y + 3,
@@ -3631,32 +3843,36 @@ final class TemporalGraphFoundationPanel extends JPanel
 						: row.hitAtOne >= 1.0 ? BLUE : AMBER;
 				g.setColor(new Color(tone.getRed(), tone.getGreen(), tone.getBlue(), 36));
 				g.fillRoundRect(x, y, w, h, 6, 6);
-				g.setColor(new Color(64, 84, 106));
+				g.setColor(BORDER_STRONG);
 				g.drawRoundRect(x, y, w, h, 6, 6);
-				int barW = Math.max(40, w / 3);
-				g.setColor(new Color(47, 62, 80));
-				g.fillRoundRect(x + w - barW - 7, y + h - 8,
-						barW, 5, 5, 5);
-				g.setColor(tone);
-				g.fillRoundRect(x + w - barW - 7, y + h - 8,
-						Math.max(2, (int)Math.round(barW * row.ndcgAtFive)),
-						5, 5, 5);
+				if (h >= 22)
+				{
+					int barW = Math.max(40, w / 3);
+					g.setColor(TRACK);
+					g.fillRoundRect(x + w - barW - 7, y + h - 7,
+							barW, 4, 4, 4);
+					g.setColor(tone);
+					g.fillRoundRect(x + w - barW - 7, y + h - 7,
+							Math.max(2, (int)Math.round(barW * row.ndcgAtFive)),
+							4, 4, 4);
+				}
 				g.setFont(font(Font.BOLD, 9));
 				g.setColor(TEXT);
 				drawClipped(g,
 						row.label + " | H@1 " + percent(row.hitAtOne)
-								+ " MRR " + decimal(row.mrr),
+								+ " MRR " + String.format(Locale.US, "%.2f",
+										Double.valueOf(row.mrr)),
 						x + 7,
-						y + 12,
-						Math.max(50, w - 58));
+						y + 13,
+						Math.max(50, w - 44));
 				g.setColor(MUTED);
 				drawClipped(g,
 						row.topCandidate.length() == 0 ? "-"
 								: "#" + (row.relevantRank <= 0 ? "n/a"
 										: Integer.toString(row.relevantRank)),
-						x + w - 48,
-						y + 12,
-						42);
+						x + w - 32,
+						y + 13,
+						28);
 			}
 
 			private void drawProbe(
@@ -3677,7 +3893,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				g.drawRoundRect(x, y, w, h, 6, 6);
 				int barW = Math.max(36, w / 3);
 				int barX = x + w - barW - 7;
-				g.setColor(new Color(47, 62, 80));
+				g.setColor(TRACK);
 				g.fillRoundRect(barX, y + h / 2 - 4, barW, 8, 8, 8);
 				g.setColor(tone);
 				g.fillRoundRect(barX, y + h / 2 - 4,
@@ -3721,18 +3937,27 @@ final class TemporalGraphFoundationPanel extends JPanel
 
 			private void drawPanel(Graphics2D g, int x, int y, int w, int h)
 			{
-					g.setColor(new Color(20, 29, 41, 224));
+					g.setColor(alphaOf(PLATE, 235));
 					g.fillRoundRect(x, y, w, h, 8, 8);
-					g.setColor(new Color(64, 84, 106));
+					g.setColor(alphaOf(BORDER_STRONG, 150));
 					g.drawRoundRect(x, y, w, h, 8, 8);
 			}
 
 			private void drawEmpty(Graphics2D g, int w, int h, String text)
 			{
+				NebulaDesign.prepare(g);
+				int cx = w / 2;
+				g.setColor(alphaOf(TEAL, 26));
+				g.fillOval(cx - 26, h / 2 - 46, 52, 52);
+				g.setColor(alphaOf(TEAL, 170));
+				g.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND,
+						BasicStroke.JOIN_ROUND));
+				g.drawOval(cx - 15, h / 2 - 35, 30, 30);
+				g.setStroke(new BasicStroke(1.0f));
 				g.setFont(font(Font.BOLD, 13));
 				g.setColor(TEXT);
 				FontMetrics metrics = g.getFontMetrics();
-				g.drawString(text, (w - metrics.stringWidth(text)) / 2, h / 2 + 4);
+				g.drawString(text, (w - metrics.stringWidth(text)) / 2, h / 2 + 24);
 			}
 
 			private void drawClipped(
@@ -3845,23 +4070,35 @@ final class TemporalGraphFoundationPanel extends JPanel
 		private static class RoundedPanel extends JPanel
 		{
 		private final Color fill;
+		private final int radius;
 
 		RoundedPanel(Color fill)
 		{
+			this(fill, NebulaDesign.RADIUS_CARD);
+		}
+
+		RoundedPanel(Color fill, int radius)
+		{
 			this.fill = fill;
+			this.radius = radius;
 			setOpaque(false);
 		}
 
 			protected void paintComponent(Graphics graphics)
 			{
 				Graphics2D g = (Graphics2D) graphics.create();
-				g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-						RenderingHints.VALUE_ANTIALIAS_ON);
+				NebulaDesign.prepare(g);
+				int w = getWidth();
+				int h = getHeight();
+				if (!StudioNightTheme.isNightMode())
+				{
+					g.setColor(alphaOf(NebulaDesign.DAY_TEXT_PRIMARY, 12));
+					g.fillRoundRect(1, 3, w - 2, h - 4, radius + 2, radius + 2);
+				}
 				g.setColor(fill);
-				g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
-				g.setColor(new Color(BORDER.getRed(), BORDER.getGreen(),
-						BORDER.getBlue(), 170));
-				g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
+				g.fillRoundRect(0, 0, w - 1, h - 3, radius, radius);
+				g.setColor(BORDER);
+				g.drawRoundRect(0, 0, w - 1, h - 3, radius, radius);
 				g.dispose();
 				super.paintComponent(graphics);
 		}
@@ -3871,39 +4108,75 @@ final class TemporalGraphFoundationPanel extends JPanel
 	{
 		HeroPanel(BorderLayout layout)
 		{
-			super(SURFACE_ALT);
+			super(SURFACE);
 			setLayout(layout);
 		}
 
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int w = getWidth();
 			int h = getHeight();
-				g.setPaint(new GradientPaint(
-						0, 0, new Color(21, 36, 51),
-						w, h, new Color(42, 30, 58)));
-				g.fillRoundRect(0, 0, w - 1, h - 1, 10, 10);
-				g.setColor(new Color(64, 213, 217, 45));
-				for (int i = 0; i < 9; i++)
-				{
-					int x = w - 330 + i * 37;
-					int y = 28 + (i % 4) * 22;
-					g.fillOval(x, y, 7, 7);
-					if (i > 0)
-					{
-						g.drawLine(x - 37 + 4, y - ((i % 4) - ((i - 1) % 4)) * 22 + 4,
-								x + 4, y + 4);
-					}
-				}
-				g.setColor(new Color(244, 176, 70, 56));
-				g.fillRoundRect(22, h - 13, Math.max(80, w / 3), 3, 3, 3);
-				g.setColor(BORDER);
-				g.drawRoundRect(0, 0, w - 1, h - 1, 10, 10);
-				g.dispose();
+			boolean night = StudioNightTheme.isNightMode();
+			if (!night)
+			{
+				g.setColor(alphaOf(NebulaDesign.DAY_TEXT_PRIMARY, 12));
+				g.fillRoundRect(1, 3, w - 2, h - 4,
+						NebulaDesign.RADIUS_CARD + 2, NebulaDesign.RADIUS_CARD + 2);
 			}
+			g.setColor(SURFACE);
+			g.fillRoundRect(0, 0, w - 1, h - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+			java.awt.Shape oldClip = g.getClip();
+			g.clip(new java.awt.geom.RoundRectangle2D.Float(
+					0, 0, w - 1, h - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+			paintGlow(g, w * 0.18f, -h * 0.4f, Math.max(w, h) * 0.5f,
+					alphaOf(BLUE, night ? 26 : 15));
+			paintGlow(g, w * 0.86f, h * 1.1f, Math.max(w, h) * 0.45f,
+					alphaOf(PURPLE, night ? 22 : 13));
+			g.setColor(alphaOf(TEAL, night ? 46 : 30));
+			for (int i = 0; i < 9; i++)
+			{
+				int x = w - 330 + i * 37;
+				int y = 26 + (i % 4) * 20;
+				g.fillOval(x, y, 6, 6);
+				if (i > 0)
+				{
+					g.drawLine(x - 37 + 3, y - ((i % 4) - ((i - 1) % 4)) * 20 + 3,
+							x + 3, y + 3);
+				}
+			}
+			g.setClip(oldClip);
+			g.setColor(BORDER);
+			g.drawRoundRect(0, 0, w - 1, h - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+			g.dispose();
+		}
+
+		private static void paintGlow(
+				Graphics2D g,
+				float centerX,
+				float centerY,
+				float radius,
+				Color color)
+		{
+			if (radius <= 0.0f)
+			{
+				return;
+			}
+			java.awt.RadialGradientPaint paint = new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(centerX, centerY),
+					radius,
+					new float[] {0.0f, 1.0f},
+					new Color[] {color, alphaOf(color, 0)},
+					java.awt.MultipleGradientPaint.CycleMethod.NO_CYCLE);
+			g.setPaint(paint);
+			g.fillRect(Math.round(centerX - radius), Math.round(centerY - radius),
+					Math.round(radius * 2), Math.round(radius * 2));
+			g.setPaint(null);
+		}
 	}
 
 	private static final class MetricPanel extends RoundedPanel
@@ -3912,7 +4185,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 
 			MetricPanel(Color accent)
 			{
-				super(PANEL_INK);
+				super(SURFACE, 12);
 				this.accent = accent;
 			}
 
@@ -3920,11 +4193,115 @@ final class TemporalGraphFoundationPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D) graphics.create();
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-				g.setColor(new Color(accent.getRed(), accent.getGreen(),
-						accent.getBlue(), 210));
-				g.fillRoundRect(8, 8, 4, getHeight() - 16, 4, 4);
+			NebulaDesign.prepare(g);
+			g.setColor(accent);
+			g.fillOval(11, 13, 7, 7);
+			g.dispose();
+		}
+	}
+
+	private static final class NebulaButton extends JButton
+	{
+		private final boolean primary;
+		private final Color hue;
+
+		NebulaButton(String label, boolean primary, Color hue)
+		{
+			super(label);
+			this.primary = primary;
+			this.hue = hue;
+			setFont(NebulaDesign.fontMedium(12.5f));
+			setContentAreaFilled(false);
+			setOpaque(false);
+			setFocusPainted(false);
+			setBorder(new EmptyBorder(8, 16, 8, 16));
+			setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			setForeground(primary ? NebulaDesign.TEXT_ON_ACCENT : hue);
+		}
+
+		public Color getForeground()
+		{
+			// Resolved at paint time so theme walks cannot strand the label
+			// color on the wrong mode.
+			if (primary)
+			{
+				return NebulaDesign.TEXT_ON_ACCENT;
+			}
+			return hue == null ? super.getForeground() : hue;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g);
+			int w = getWidth();
+			int h = getHeight();
+			boolean hover = getModel().isRollover();
+			boolean press = getModel().isArmed() && getModel().isPressed();
+			int radius = NebulaDesign.RADIUS_CONTROL;
+			if (primary)
+			{
+				Color fill = press ? NebulaDesign.ACCENT_PRESS
+						: hover ? NebulaDesign.ACCENT_HOVER : NebulaDesign.ACCENT;
+				if (hover)
+				{
+					g.setColor(alphaOf(NebulaDesign.ACCENT, 60));
+					g.fillRoundRect(0, 0, w, h, radius + 4, radius + 4);
+				}
+				g.setColor(fill);
+				g.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+			}
+			else
+			{
+				g.setColor(press || hover
+						? alphaOf(hue, StudioNightTheme.isNightMode() ? 46 : 26)
+						: SURFACE);
+				g.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+				g.setColor(alphaOf(hue, hover ? 200 : 120));
+				g.drawRoundRect(1, 1, w - 3, h - 3, radius, radius);
+			}
+			g.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	private static final class ToggleIcon implements javax.swing.Icon
+	{
+		public int getIconWidth()
+		{
+			return 15;
+		}
+
+		public int getIconHeight()
+		{
+			return 15;
+		}
+
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics2D g = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g);
+			boolean selected = component instanceof javax.swing.AbstractButton
+					&& ((javax.swing.AbstractButton) component).isSelected();
+			if (selected)
+			{
+				g.setColor(NebulaDesign.currentAccent());
+				g.fillRoundRect(x, y, 14, 14, 5, 5);
+				g.setColor(StudioNightTheme.isNightMode()
+						? NebulaDesign.NIGHT_TEXT_ON_ACCENT
+						: NebulaDesign.DAY_TEXT_ON_ACCENT);
+				g.setStroke(new BasicStroke(1.9f, BasicStroke.CAP_ROUND,
+						BasicStroke.JOIN_ROUND));
+				g.drawLine(x + 3, y + 7, x + 6, y + 10);
+				g.drawLine(x + 6, y + 10, x + 11, y + 4);
+			}
+			else
+			{
+				g.setColor(SURFACE_ALT);
+				g.fillRoundRect(x, y, 14, 14, 5, 5);
+				g.setColor(BORDER_STRONG);
+				g.drawRoundRect(x, y, 14, 14, 5, 5);
+			}
 			g.dispose();
 		}
 	}

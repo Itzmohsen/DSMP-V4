@@ -38,7 +38,6 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
@@ -62,29 +61,19 @@ import javax.swing.table.TableRowSorter;
 
 final class GraphInsightsPanel extends JPanel
 {
-	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
-			new Color(244, 247, 252), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-			new Color(255, 255, 255), StudioNightTheme.NIGHT_SURFACE);
-	private static final Color SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(248, 251, 255), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color BORDER = StudioNightTheme.adaptiveColor(
-			new Color(205, 216, 231), StudioNightTheme.NIGHT_BORDER);
-	private static final Color TEXT = StudioNightTheme.adaptiveColor(
-			new Color(25, 31, 40), StudioNightTheme.NIGHT_TEXT);
-	private static final Color MUTED = StudioNightTheme.adaptiveColor(
-			new Color(91, 104, 122), StudioNightTheme.NIGHT_MUTED);
-	private static final Color BLUE = StudioNightTheme.adaptiveColor(
-			new Color(78, 110, 220), StudioNightTheme.NIGHT_BLUE);
-	private static final Color GREEN = StudioNightTheme.adaptiveColor(
-			new Color(70, 145, 103), StudioNightTheme.NIGHT_GREEN);
-	private static final Color PURPLE = StudioNightTheme.adaptiveColor(
-			new Color(120, 92, 212), StudioNightTheme.NIGHT_PURPLE);
-	private static final Color AMBER = StudioNightTheme.adaptiveColor(
-			new Color(184, 132, 47), StudioNightTheme.NIGHT_AMBER);
-	private static final Color RED = StudioNightTheme.adaptiveColor(
-			new Color(196, 68, 68), StudioNightTheme.NIGHT_RED);
-	private static final int RADIUS = 8;
+	private static final Color BACKGROUND = NebulaDesign.CANVAS_TOP;
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color RED = NebulaDesign.DANGER;
+	private static final Color TEAL = NebulaDesign.INFO;
+	private static final int RADIUS = 10;
 	private static final int HEADER_DASHBOARD_GAP = 12;
 	private static final int DASHBOARD_EXPLORER_GAP = 14;
 	private static final int EXPLORER_FIRST_VIEW_HINT = 12;
@@ -117,20 +106,36 @@ final class GraphInsightsPanel extends JPanel
 		this.owner = owner;
 		setLayout(new BorderLayout(12, 12));
 		setBorder(new EmptyBorder(14, 16, 14, 16));
+		setOpaque(false);
 		setBackground(BACKGROUND);
 
-		titleLabel = new JLabel("Graph Insights");
-		titleLabel.setFont(font(Font.BOLD, 26));
-		titleLabel.setForeground(TEXT);
-		subtitleLabel = new JLabel("Read-only analysis of the node and edge files produced by the simulator.");
-		subtitleLabel.setFont(font(Font.PLAIN, 12));
-		subtitleLabel.setForeground(MUTED);
-		statusPill = pill("WAITING FOR GRAPH DATA", BLUE);
-		artifactLabel = new JLabel("No graph artifact selected yet.");
-		artifactLabel.setFont(font(Font.PLAIN, 11));
-		artifactLabel.setForeground(MUTED);
+		titleLabel = new JLabel("Graph Insights")
+		{
+			public Color getForeground()
+			{
+				return TEXT;
+			}
+		};
+		titleLabel.setFont(NebulaDesign.fontDisplay());
+		subtitleLabel = new JLabel("Read-only analysis of the node and edge files produced by the simulator.")
+		{
+			public Color getForeground()
+			{
+				return MUTED;
+			}
+		};
+		subtitleLabel.setFont(NebulaDesign.fontBody(12.5f));
+		statusPill = pill("Waiting for graph data", BLUE);
+		artifactLabel = new JLabel("No graph artifact selected yet.")
+		{
+			public Color getForeground()
+			{
+				return NebulaDesign.TEXT_TERTIARY;
+			}
+		};
+		artifactLabel.setFont(NebulaDesign.fontMono(11f));
 
-		refreshButton = actionButton("Analyze now", BLUE);
+		refreshButton = actionButton("Analyze now", true);
 		refreshButton.addActionListener(new ActionListener()
 		{
 			public void actionPerformed(ActionEvent event)
@@ -138,7 +143,7 @@ final class GraphInsightsPanel extends JPanel
 				refreshFromSimulator(true);
 			}
 		});
-		exportButton = actionButton("Export report", GREEN);
+		exportButton = actionButton("Export report", false);
 		exportButton.addActionListener(new ActionListener()
 		{
 			public void actionPerformed(ActionEvent event)
@@ -157,7 +162,7 @@ final class GraphInsightsPanel extends JPanel
 
 		add(createScrollablePage(), BorderLayout.CENTER);
 
-		Timer timer = new Timer(24, new ActionListener()
+		final Timer timer = new Timer(24, new ActionListener()
 		{
 			public void actionPerformed(ActionEvent event)
 			{
@@ -167,6 +172,24 @@ final class GraphInsightsPanel extends JPanel
 			}
 		});
 		timer.start();
+		addHierarchyListener(new java.awt.event.HierarchyListener()
+		{
+			public void hierarchyChanged(java.awt.event.HierarchyEvent event)
+			{
+				if ((event.getChangeFlags()
+						& java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0)
+				{
+					if (isShowing())
+					{
+						timer.start();
+					}
+					else
+					{
+						timer.stop();
+					}
+				}
+			}
+		});
 		refreshFromSimulator(false);
 	}
 
@@ -177,7 +200,7 @@ final class GraphInsightsPanel extends JPanel
 		page.setOpaque(false);
 
 		JPanel header = createHeader();
-		header.setMaximumSize(new Dimension(Integer.MAX_VALUE, 126));
+		header.setMaximumSize(new Dimension(Integer.MAX_VALUE, 138));
 		page.add(header);
 
 		final JPanel dashboard = createDashboard();
@@ -288,31 +311,37 @@ final class GraphInsightsPanel extends JPanel
 
 	private JPanel createHeader()
 	{
-		JPanel header = new RoundedPanel(new BorderLayout(18, 0));
-		header.setPreferredSize(new Dimension(900, 126));
-		header.setBorder(new EmptyBorder(16, 18, 16, 18));
+		JPanel header = new HeroCardPanel(new BorderLayout(18, 0));
+		header.setPreferredSize(new Dimension(900, 138));
+		header.setBorder(new EmptyBorder(13, 20, 14, 18));
+
+		JLabel eyebrow = new JLabel("GRAPH OBSERVATORY");
+		eyebrow.setFont(NebulaDesign.fontSection());
+		eyebrow.setForeground(BLUE);
 
 		JPanel copy = new JPanel();
 		copy.setOpaque(false);
 		copy.setLayout(new BoxLayout(copy, BoxLayout.Y_AXIS));
-		copy.setPreferredSize(new Dimension(440, 90));
+		copy.setPreferredSize(new Dimension(440, 108));
+		copy.add(eyebrow);
+		copy.add(Box.createVerticalStrut(2));
 		copy.add(titleLabel);
-		copy.add(Box.createVerticalStrut(4));
+		copy.add(Box.createVerticalStrut(3));
 		copy.add(subtitleLabel);
-		copy.add(Box.createVerticalStrut(10));
+		copy.add(Box.createVerticalStrut(7));
 
-		JPanel statusRow = new JPanel(new BorderLayout(8, 0));
+		JPanel statusRow = new JPanel(new BorderLayout(10, 0));
 		statusRow.setOpaque(false);
-		statusRow.setMaximumSize(new Dimension(440, 28));
+		statusRow.setMaximumSize(new Dimension(440, 26));
 		statusRow.add(statusPill, BorderLayout.WEST);
 		statusRow.add(artifactLabel, BorderLayout.CENTER);
 		copy.add(statusRow);
 
-		headerSignalPanel.setPreferredSize(new Dimension(690, 90));
+		headerSignalPanel.setPreferredSize(new Dimension(690, 104));
 
 		JPanel actions = new JPanel(new GridLayout(2, 1, 0, 8));
 		actions.setOpaque(false);
-		actions.setPreferredSize(new Dimension(142, 70));
+		actions.setPreferredSize(new Dimension(142, 78));
 		actions.add(refreshButton);
 		actions.add(exportButton);
 
@@ -346,7 +375,10 @@ final class GraphInsightsPanel extends JPanel
 		c.weighty = 1.0;
 		c.gridheight = 2;
 		c.insets = new java.awt.Insets(0, 0, 0, 0);
-		dashboard.add(card("Recommendation Impact", impactPanel), c);
+		JPanel impactCard = card("Recommendation Impact", impactPanel);
+		impactCard.setPreferredSize(new Dimension(380, DASHBOARD_MIN_HEIGHT));
+		impactCard.setMinimumSize(new Dimension(340, 400));
+		dashboard.add(impactCard, c);
 
 		c.gridy = 1;
 		c.gridheight = 1;
@@ -371,9 +403,9 @@ final class GraphInsightsPanel extends JPanel
 	private JPanel card(String title, JPanel body)
 	{
 		JPanel panel = new RoundedPanel(new BorderLayout(0, 8));
-		panel.setBorder(new EmptyBorder(12, 12, 12, 12));
+		panel.setBorder(new EmptyBorder(14, 14, 14, 14));
 		JLabel label = new JLabel(title);
-		label.setFont(font(Font.BOLD, 14));
+		label.setFont(NebulaDesign.fontTitle());
 		label.setForeground(TEXT);
 		panel.add(label, BorderLayout.NORTH);
 		panel.add(body, BorderLayout.CENTER);
@@ -384,17 +416,24 @@ final class GraphInsightsPanel extends JPanel
 	{
 		String family = datasetFamily(snapshot);
 		titleLabel.setText("Graph Insights");
-		subtitleLabel.setText(family + " | "
-				+ snapshot.algorithmName + " | "
-				+ snapshot.modeLabel + " | read-only graph analysis");
-		statusPill.setText(analysis.statusLabel());
-		statusPill.setForeground(statusColor(analysis).darker());
-		statusPill.setBackground(tint(statusColor(analysis), 0.18f));
-		statusPill.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(tint(statusColor(analysis), 0.42f)),
-				new EmptyBorder(7, 10, 7, 10)));
+		subtitleLabel.setText(family + "  ·  "
+				+ snapshot.algorithmName + "  ·  "
+				+ snapshot.modeLabel);
+		statusPill.setText(sentenceCase(analysis.statusLabel()));
+		statusPill.putClientProperty("nebula.tone", statusColor(analysis));
+		statusPill.repaint();
 		artifactLabel.setText(compact(edgeName(analysis.edgeFile), 58));
 		artifactLabel.setToolTipText(edgeName(analysis.edgeFile));
+	}
+
+	private static String sentenceCase(String value)
+	{
+		if (value == null || value.length() == 0)
+		{
+			return "";
+		}
+		String lower = value.toLowerCase(Locale.US);
+		return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
 	}
 
 	private void updatePanels()
@@ -414,11 +453,10 @@ final class GraphInsightsPanel extends JPanel
 	{
 		if (analysis == null || !analysis.available)
 		{
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showInfo(
 					this,
 					"There is no graph analysis report to export yet.",
-					"Graph Insights",
-					JOptionPane.INFORMATION_MESSAGE);
+					"Graph Insights");
 			return;
 		}
 		String base = snapshot.datasetName == null ? "graph" : snapshot.datasetName;
@@ -442,19 +480,17 @@ final class GraphInsightsPanel extends JPanel
 					// The report was still written; opening is a convenience only.
 				}
 			}
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showSuccess(
 					this,
 					"Graph insights report written to:\n" + report.getAbsolutePath(),
-					"Graph Insights",
-					JOptionPane.INFORMATION_MESSAGE);
+					"Graph Insights");
 		}
 		catch (IOException ex)
 		{
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showWarning(
 					this,
 					"Could not write graph insights report:\n" + ex.getMessage(),
-					"Graph Insights",
-					JOptionPane.WARNING_MESSAGE);
+					"Graph Insights");
 		}
 	}
 
@@ -587,6 +623,57 @@ final class GraphInsightsPanel extends JPanel
 		return "target -> original reference";
 	}
 
+	/** Short source-edge phrase that fits the small signal boxes without "...". */
+	private static String sourceShort(SimulatorHelpPanel.Snapshot s)
+	{
+		String meaning = originalMeaning(s);
+		int arrow = meaning.indexOf(" -> ");
+		if (arrow > 0)
+		{
+			return meaning.substring(0, arrow) + " edges";
+		}
+		return meaning;
+	}
+
+	/** Just the querying entity ("customer", "user"), for the tightest boxes. */
+	private static String sourceWord(SimulatorHelpPanel.Snapshot s)
+	{
+		String phrase = sourceShort(s);
+		if (phrase.endsWith(" edges"))
+		{
+			return phrase.substring(0, phrase.length() - " edges".length());
+		}
+		return phrase;
+	}
+
+	/** Short community caption: "near <leader>" beats a clipped full name. */
+	private static String communityShort(String name)
+	{
+		if (name == null || name.length() == 0)
+		{
+			return "community";
+		}
+		int near = name.indexOf(" near ");
+		if (near >= 0)
+		{
+			return name.substring(near + 1);
+		}
+		return name;
+	}
+
+	/** Dataset tile value that never clips the placeholder sentence. */
+	private static String datasetShort(SimulatorHelpPanel.Snapshot snapshot)
+	{
+		String name = snapshot == null ? null : snapshot.datasetName;
+		if (name == null
+				|| name.length() == 0
+				|| "No dataset selected".equals(name))
+		{
+			return "None yet";
+		}
+		return compact(name, 18);
+	}
+
 	private static String communityMetricDetail(GraphAnalysisEngine.Analysis analysis)
 	{
 		if (analysis == null || !analysis.available)
@@ -616,36 +703,123 @@ final class GraphInsightsPanel extends JPanel
 				? "Largest Gephi communities" : "Largest estimated groups";
 	}
 
+	/**
+	 * Self-painting status pill: soft tint capsule + strong hue label. The
+	 * tone color lives in the "nebula.tone" client property so the pill stays
+	 * correct across theme toggles and analysis refreshes.
+	 */
 	private static JLabel pill(String text, Color color)
 	{
-		JLabel label = new JLabel(text, SwingConstants.CENTER);
-		label.setFont(font(Font.BOLD, 10));
-		label.setForeground(color.darker());
-		label.setOpaque(true);
-		label.setBackground(tint(color, 0.18f));
-		label.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(tint(color, 0.42f)),
-				new EmptyBorder(7, 10, 7, 10)));
+		JLabel label = new JLabel(text, SwingConstants.CENTER)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(g);
+				Object tone = getClientProperty("nebula.tone");
+				Color hue = tone instanceof Color ? (Color)tone : BLUE;
+				int w = getWidth();
+				int h = getHeight();
+				g.setColor(tint(hue, 0.84f));
+				g.fillRoundRect(0, 0, w, h, h, h);
+				g.setColor(alpha(hue, 84));
+				g.drawRoundRect(0, 0, w - 1, h - 1, h - 1, h - 1);
+				g.setColor(deep(hue));
+				g.setFont(getFont());
+				FontMetrics metrics = g.getFontMetrics();
+				String value = getText();
+				g.drawString(value,
+						(w - metrics.stringWidth(value)) / 2,
+						(h - metrics.getHeight()) / 2 + metrics.getAscent());
+				g.dispose();
+			}
+		};
+		label.setFont(NebulaDesign.fontMedium(11f));
+		label.setOpaque(false);
+		label.setBorder(new EmptyBorder(6, 13, 6, 13));
+		label.putClientProperty("nebula.tone", color);
 		return label;
 	}
 
-	private static JButton actionButton(String text, Color color)
+	/**
+	 * Nebula action button: primary = accent fill, otherwise a quiet neutral
+	 * card. Fully self-painting so night-mode tree walks cannot wash it out.
+	 */
+	private static JButton actionButton(String text, final boolean primary)
 	{
-		JButton button = new JButton(text);
-		button.setFont(font(Font.BOLD, 12));
-		button.setForeground(color.darker());
-		button.setBackground(tint(color, 0.16f));
-		button.setFocusPainted(false);
-		button.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(tint(color, 0.46f)),
-				new EmptyBorder(7, 10, 7, 10)));
-		button.setOpaque(true);
+		JButton button = new JButton(text)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(g);
+				int w = getWidth();
+				int h = getHeight();
+				boolean hover = getModel().isRollover();
+				boolean pressed = getModel().isPressed();
+				if (primary)
+				{
+					Color fill = pressed
+							? NebulaDesign.ACCENT_PRESS
+							: hover ? NebulaDesign.ACCENT_HOVER : NebulaDesign.ACCENT;
+					if (hover)
+					{
+						g.setColor(alpha(NebulaDesign.ACCENT, 58));
+						g.fillRoundRect(0, 0, w, h, RADIUS + 3, RADIUS + 3);
+					}
+					g.setColor(fill);
+					g.fillRoundRect(1, 1, w - 2, h - 2, RADIUS, RADIUS);
+					g.setColor(NebulaDesign.TEXT_ON_ACCENT);
+				}
+				else
+				{
+					g.setColor(hover ? NebulaDesign.SURFACE_RAISED : SURFACE);
+					g.fillRoundRect(1, 1, w - 2, h - 2, RADIUS, RADIUS);
+					g.setColor(hover
+							? alpha(NebulaDesign.ACCENT, 120)
+							: NebulaDesign.BORDER_STRONG);
+					g.drawRoundRect(1, 1, w - 3, h - 3, RADIUS, RADIUS);
+					g.setColor(TEXT);
+				}
+				g.setFont(getFont());
+				FontMetrics metrics = g.getFontMetrics();
+				String value = getText();
+				g.drawString(value,
+						(w - metrics.stringWidth(value)) / 2,
+						(h - metrics.getHeight()) / 2 + metrics.getAscent());
+				g.dispose();
+			}
+		};
+		button.setFont(NebulaDesign.fontMedium(12.5f));
+		button.setContentAreaFilled(false);
+		button.setOpaque(false);
+		button.setRolloverEnabled(true);
+		button.setBorder(new EmptyBorder(9, 16, 9, 16));
+		NebulaWidgets.polishButton(button);
 		return button;
 	}
 
 	private static Font font(int style, int size)
 	{
-		return new Font("SansSerif", style, size);
+		float scaled = Math.max(9, size);
+		if (style == Font.BOLD)
+		{
+			return NebulaDesign.fontSemiBold(scaled);
+		}
+		return NebulaDesign.fontBody(scaled);
+	}
+
+	/**
+	 * Emphasis tone for small labels: deepened in day mode for contrast on
+	 * soft tints, kept bright in night mode where darkening would vanish.
+	 */
+	private static Color deep(Color color)
+	{
+		if (StudioNightTheme.isNightMode())
+		{
+			return new Color(color.getRed(), color.getGreen(), color.getBlue());
+		}
+		return color.darker();
 	}
 
 	private static Color tint(Color color, float amount)
@@ -672,20 +846,15 @@ final class GraphInsightsPanel extends JPanel
 	private static Color glass(int alpha)
 	{
 		return themed(
-				new Color(255, 255, 255, alpha),
+				StudioNightTheme.withAlpha(NebulaDesign.DAY_SURFACE, alpha),
 				StudioNightTheme.withAlpha(
-						StudioNightTheme.NIGHT_SURFACE_ALT,
+						NebulaDesign.NIGHT_SURFACE_ALT,
 						Math.min(255, alpha + 16)));
-	}
-
-	private static Color quietLine(Color day)
-	{
-		return themed(day, StudioNightTheme.NIGHT_BORDER);
 	}
 
 	private static Color track()
 	{
-		return themed(new Color(226, 233, 244), StudioNightTheme.NIGHT_BACKGROUND_BOTTOM);
+		return themed(NebulaDesign.DAY_INSET, NebulaDesign.NIGHT_INSET);
 	}
 
 	private static Color alpha(Color color, int amount)
@@ -791,6 +960,7 @@ final class GraphInsightsPanel extends JPanel
 		}
 	}
 
+	/** Nebula KPI tile: quiet surface, leading hue dot, eyebrow + value. */
 	private static void drawMetric(
 			Graphics2D g,
 			int x,
@@ -801,16 +971,18 @@ final class GraphInsightsPanel extends JPanel
 			String value,
 			Color color)
 	{
-		g.setColor(tint(color, 0.13f));
+		g.setColor(SURFACE_ALT);
 		g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-		g.setColor(tint(color, 0.42f));
+		g.setColor(BORDER);
 		g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
+		g.setColor(color);
+		g.fillOval(x + 10, y + 10, 7, 7);
 		g.setFont(font(Font.BOLD, 9));
-		g.setColor(color.darker());
-		drawClippedString(g, label.toUpperCase(Locale.US), x + 10, y + 15, w - 20);
+		g.setColor(NebulaDesign.TEXT_TERTIARY);
+		drawClippedString(g, label.toUpperCase(Locale.US), x + 22, y + 17, w - 32);
 		g.setFont(font(Font.BOLD, 17));
 		g.setColor(TEXT);
-		drawClippedString(g, value, x + 10, y + h - 11, w - 20);
+		drawClippedString(g, value, x + 11, y + h - 11, w - 21);
 	}
 
 	private static abstract class VisualPanel extends JPanel
@@ -844,8 +1016,7 @@ final class GraphInsightsPanel extends JPanel
 
 		void prepare(Graphics2D g)
 		{
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			g.setFont(font(Font.PLAIN, 11));
 		}
 	}
@@ -861,12 +1032,51 @@ final class GraphInsightsPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-			g.setColor(SURFACE);
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Hero card: Nebula card plus a very subtle two-tone aurora wash. */
+	private static final class HeroCardPanel extends JPanel
+	{
+		HeroCardPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D)graphics.create();
+			int w = getWidth();
+			int h = getHeight();
+			NebulaWidgets.paintCard(g, 0, 0, w, h, NebulaDesign.RADIUS_CARD);
+			boolean night = StudioNightTheme.isNightMode();
+			java.awt.Shape oldClip = g.getClip();
+			g.clip(new java.awt.geom.RoundRectangle2D.Float(
+					0, 0, w - 1, h - 3, NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+			g.setPaint(new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(w * 0.24f, 0f),
+					Math.max(1f, w * 0.42f),
+					new float[] {0f, 1f},
+					new Color[] {
+							alpha(BLUE, night ? 26 : 15),
+							alpha(BLUE, 0)
+					}));
+			g.fillRect(0, 0, w, h);
+			g.setPaint(new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(w * 0.86f, h),
+					Math.max(1f, w * 0.38f),
+					new float[] {0f, 1f},
+					new Color[] {
+							alpha(PURPLE, night ? 22 : 13),
+							alpha(PURPLE, 0)
+					}));
+			g.fillRect(0, 0, w, h);
+			g.setClip(oldClip);
 			g.dispose();
 			super.paintComponent(graphics);
 		}
@@ -1027,7 +1237,7 @@ final class GraphInsightsPanel extends JPanel
 		private final NodeDetailPanel nodeDetailPanel = new NodeDetailPanel();
 		private final JTextField searchField = new JTextField();
 		private final JButton clearCommunityButton =
-				actionButton("Clear community", BLUE);
+				actionButton("Clear community", false);
 		private GraphAnalysisEngine.Analysis analysis =
 				GraphAnalysisEngine.Analysis.missing(null, null, "");
 		private Integer activeCommunityFilter;
@@ -1045,9 +1255,10 @@ final class GraphInsightsPanel extends JPanel
 			communityTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 			nodeTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 			nodeTable.setRowSorter(nodeSorter);
-			searchField.setFont(font(Font.PLAIN, 12));
+			searchField.setFont(NebulaDesign.fontBody(12.5f));
 			searchField.setForeground(TEXT);
 			searchField.setBackground(SURFACE_ALT);
+			searchField.setCaretColor(NebulaDesign.currentAccent());
 			searchField.setBorder(BorderFactory.createCompoundBorder(
 					BorderFactory.createLineBorder(BORDER),
 					new EmptyBorder(8, 10, 8, 10)));
@@ -1150,6 +1361,22 @@ final class GraphInsightsPanel extends JPanel
 			repaint();
 		}
 
+		protected void paintComponent(Graphics graphics)
+		{
+			// Full opaque canvas base beneath the explorer cards: blends with
+			// the page background in-app and keeps the standalone render
+			// (self-test contract) fully painted.
+			Graphics2D g = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g);
+			g.setPaint(new GradientPaint(
+					0, 0, themed(NebulaDesign.DAY_CANVAS_TOP, NebulaDesign.NIGHT_CANVAS_TOP),
+					0, Math.max(1, getHeight()),
+					themed(NebulaDesign.DAY_CANVAS_BOTTOM, NebulaDesign.NIGHT_CANVAS_BOTTOM)));
+			g.fillRect(0, 0, getWidth(), getHeight());
+			g.dispose();
+			super.paintComponent(graphics);
+		}
+
 		private JPanel createCommunityBody()
 		{
 			JPanel body = new JPanel(new BorderLayout(0, 8));
@@ -1180,15 +1407,15 @@ final class GraphInsightsPanel extends JPanel
 		private JPanel explorerCard(String title, String detail, JComponent body)
 		{
 			JPanel card = new RoundedPanel(new BorderLayout(0, 8));
-			card.setBorder(new EmptyBorder(12, 12, 12, 12));
-			JPanel header = new JPanel(new BorderLayout(8, 0));
+			card.setBorder(new EmptyBorder(14, 14, 14, 14));
+			JPanel header = new JPanel(new BorderLayout(10, 0));
 			header.setOpaque(false);
 			JLabel titleLabel = new JLabel(title);
-			titleLabel.setFont(font(Font.BOLD, 15));
+			titleLabel.setFont(NebulaDesign.fontTitle());
 			titleLabel.setForeground(TEXT);
 			JLabel detailLabel = new JLabel(detail);
-			detailLabel.setFont(font(Font.PLAIN, 10));
-			detailLabel.setForeground(MUTED);
+			detailLabel.setFont(NebulaDesign.fontBody(11f));
+			detailLabel.setForeground(NebulaDesign.TEXT_TERTIARY);
 			header.add(titleLabel, BorderLayout.WEST);
 			header.add(detailLabel, BorderLayout.CENTER);
 			card.add(header, BorderLayout.NORTH);
@@ -1213,6 +1440,8 @@ final class GraphInsightsPanel extends JPanel
 			scroll.setHorizontalScrollBarPolicy(
 					ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 			scroll.getVerticalScrollBar().setUnitIncrement(18);
+			scroll.getVerticalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+			scroll.getVerticalScrollBar().setOpaque(false);
 			return scroll;
 		}
 
@@ -1354,15 +1583,20 @@ final class GraphInsightsPanel extends JPanel
 		{
 			table.setFillsViewportHeight(true);
 			table.setRowHeight(32);
-			table.setFont(font(Font.PLAIN, 11));
+			table.setFont(NebulaDesign.fontBody(12f));
 			table.setForeground(TEXT);
 			table.setBackground(SURFACE);
 			table.setGridColor(BORDER);
-			table.setSelectionBackground(tint(BLUE, 0.58f));
+			table.setShowVerticalLines(false);
+			table.setIntercellSpacing(new Dimension(0, 1));
+			table.setSelectionBackground(NebulaDesign.SELECTION);
 			table.setSelectionForeground(TEXT);
-			table.getTableHeader().setFont(font(Font.BOLD, 10));
+			table.getTableHeader().setFont(NebulaDesign.fontMedium(11f));
 			table.getTableHeader().setForeground(MUTED);
 			table.getTableHeader().setBackground(SURFACE_ALT);
+			table.getTableHeader().setBorder(
+					BorderFactory.createMatteBorder(0, 0, 1, 0,
+							NebulaDesign.currentBorderStrong()));
 			table.setDefaultRenderer(Object.class, new ExplorerCellRenderer());
 			table.setDefaultRenderer(Integer.class, new ExplorerCellRenderer());
 			table.setDefaultRenderer(Long.class, new ExplorerCellRenderer());
@@ -1378,44 +1612,37 @@ final class GraphInsightsPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
-			int pad = 14;
-			g.setPaint(new GradientPaint(
-					0,
-					0,
-					themed(new Color(248, 251, 255), StudioNightTheme.NIGHT_SURFACE),
-					w,
-					h,
-					themed(new Color(239, 249, 246), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(0, 0, w - 1, h - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, w - 1, h - 1, RADIUS, RADIUS);
+			int pad = 16;
+			NebulaWidgets.paintCard(g, 0, 0, w, h, NebulaDesign.RADIUS_CARD);
 
-			g.setFont(font(Font.BOLD, 18));
+			NebulaDesign.paintEyebrow(g, "EXPLORER", pad, 22,
+					NebulaDesign.currentAccent());
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
-			drawClippedString(g, "Explorer Layer", pad, 29, w / 3);
+			drawClippedString(g, "Explorer layer", pad, 44, w / 3);
 			g.setFont(font(Font.PLAIN, 11));
 			g.setColor(MUTED);
 			drawClippedString(g,
 					"Community membership, node roles, edge boundaries, and recommendation pull.",
 					pad,
-					50,
+					64,
 					w / 2);
 
-			int tileW = Math.max(116, (w - pad * 2 - 480) / 4);
-			int x = Math.max(w / 2, w - pad - tileW * 4 - 24);
-			drawMetric(g, x, 18, tileW, 54,
+			int tileW = Math.max(110, Math.min(170, (w - pad - w / 2 - 24) / 4));
+			int x = w - pad - tileW * 4 - 24;
+			drawMetric(g, x, 17, tileW, 54,
 					"communities",
 					formatCount(analysis.communityDetails.size()),
 					GREEN);
-			drawMetric(g, x + tileW + 8, 18, tileW, 54,
+			drawMetric(g, x + tileW + 8, 17, tileW, 54,
 					"inspectable nodes",
 					formatCount(analysis.nodeDetails.size()),
 					BLUE);
-			drawMetric(g, x + (tileW + 8) * 2, 18, tileW, 54,
+			drawMetric(g, x + (tileW + 8) * 2, 17, tileW, 54,
 					"active nodes",
 					formatCount(analysis.activeNodeCount),
 					PURPLE);
-			drawMetric(g, x + (tileW + 8) * 3, 18, tileW, 54,
+			drawMetric(g, x + (tileW + 8) * 3, 17, tileW, 54,
 					"method",
 					analysis.gephiCommunityCount ? "Gephi" : "Fallback",
 					AMBER);
@@ -1465,7 +1692,7 @@ final class GraphInsightsPanel extends JPanel
 			g.setColor(TEXT);
 			drawClippedString(g, compact(detail.name, 48), 14, 24, w - 190);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(GREEN.darker());
+			g.setColor(deep(GREEN));
 			drawClippedString(g, detail.methodDetail, w - 172, 24, 158);
 
 			int metricY = 38;
@@ -1486,10 +1713,10 @@ final class GraphInsightsPanel extends JPanel
 			drawEdgeBlock(g, 30 + columnW * 2, columnY, columnW, columnH,
 					"LEAVING EDGES", detail.externalEdgeSamples);
 			drawScoreBlock(g, 38 + columnW * 3, columnY, columnW, columnH,
-					"TOP RECOMMENDATIONS", detail.topRecommendations);
+					"TOP RECS", detail.topRecommendations);
 
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(AMBER.darker());
+			g.setColor(deep(AMBER));
 			drawClippedString(g,
 					"WHY THIS GROUP EXISTS",
 					14,
@@ -1541,7 +1768,7 @@ final class GraphInsightsPanel extends JPanel
 			}
 
 			Color roleColor = nodeColor(node);
-			g.setColor(tint(roleColor, 0.17f));
+			g.setColor(tint(roleColor, 0.84f));
 			g.fillRoundRect(12, 12, w - 24, 42, RADIUS, RADIUS);
 			g.setColor(alpha(roleColor, 92));
 			g.drawRoundRect(12, 12, w - 24, 42, RADIUS, RADIUS);
@@ -1549,7 +1776,7 @@ final class GraphInsightsPanel extends JPanel
 			g.setColor(TEXT);
 			drawClippedString(g, node.name + "  #" + node.id, 24, 32, w - 170);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(roleColor.darker());
+			g.setColor(deep(roleColor));
 			drawClippedString(g, node.role.toUpperCase(Locale.US), w - 138, 32, 112);
 
 			int metricY = 66;
@@ -1561,14 +1788,14 @@ final class GraphInsightsPanel extends JPanel
 
 			int infoY = 122;
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
+			g.setColor(deep(BLUE));
 			drawClippedString(g, "COMMUNITY", 14, infoY, w - 28);
 			g.setFont(font(Font.PLAIN, 10));
 			g.setColor(TEXT);
 			drawClippedString(g, compact(node.communityName, 46), 14, infoY + 17, w - 28);
 
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(PURPLE.darker());
+			g.setColor(deep(PURPLE));
 			drawClippedString(g, "COMPONENT + BOUNDARY", 14, infoY + 42, w - 28);
 			g.setFont(font(Font.PLAIN, 10));
 			g.setColor(MUTED);
@@ -1589,7 +1816,7 @@ final class GraphInsightsPanel extends JPanel
 			}
 
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(roleColor.darker());
+			g.setColor(deep(roleColor));
 			drawClippedString(g, "INSPECTOR READ", 14, h - 32, w - 28);
 			g.setFont(font(Font.PLAIN, 10));
 			g.setColor(MUTED);
@@ -1761,17 +1988,28 @@ final class GraphInsightsPanel extends JPanel
 					focused,
 					row,
 					column);
-			label.setBorder(new EmptyBorder(0, 8, 0, 8));
-			label.setFont(font(column == 0 ? Font.BOLD : Font.PLAIN, 11));
-			if (selected)
+			if (value instanceof Number)
 			{
-				label.setBackground(tint(BLUE, 0.55f));
-				label.setForeground(TEXT);
+				label.setFont(NebulaDesign.fontMono(11.5f));
 			}
 			else
 			{
-				label.setBackground(row % 2 == 0 ? SURFACE : SURFACE_ALT);
-				label.setForeground(column == 0 ? BLUE.darker() : TEXT);
+				label.setFont(NebulaDesign.fontBody(12f));
+			}
+			if (selected)
+			{
+				label.setBackground(NebulaDesign.SELECTION);
+				label.setForeground(TEXT);
+				label.setBorder(BorderFactory.createCompoundBorder(
+						BorderFactory.createMatteBorder(0, column == 0 ? 2 : 0, 0, 0,
+								NebulaDesign.currentAccent()),
+						new EmptyBorder(0, column == 0 ? 8 : 10, 0, 8)));
+			}
+			else
+			{
+				label.setBackground(SURFACE);
+				label.setForeground(column == 0 ? deep(BLUE) : TEXT);
+				label.setBorder(new EmptyBorder(0, 10, 0, 8));
 			}
 			label.setToolTipText(value == null ? "" : String.valueOf(value));
 			return label;
@@ -1805,11 +2043,13 @@ final class GraphInsightsPanel extends JPanel
 	{
 		g.setColor(glass(210));
 		g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-		g.setColor(alpha(color, 86));
+		g.setColor(BORDER);
 		g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
+		g.setColor(color);
+		g.fillOval(x + 8, y + 7, 5, 5);
 		g.setFont(font(Font.BOLD, 9));
-		g.setColor(color.darker());
-		drawClippedString(g, label.toUpperCase(Locale.US), x + 8, y + 14, w - 16);
+		g.setColor(NebulaDesign.TEXT_TERTIARY);
+		drawClippedString(g, label.toUpperCase(Locale.US), x + 17, y + 14, w - 25);
 		g.setFont(font(Font.BOLD, 14));
 		g.setColor(TEXT);
 		drawClippedString(g, value, x + 8, y + 32, w - 16);
@@ -1906,11 +2146,13 @@ final class GraphInsightsPanel extends JPanel
 	{
 		g.setColor(glass(180));
 		g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-		g.setColor(alpha(color, 76));
+		g.setColor(BORDER);
 		g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
+		g.setColor(color);
+		g.fillOval(x + 10, y + 10, 5, 5);
 		g.setFont(font(Font.BOLD, 9));
-		g.setColor(color.darker());
-		drawClippedString(g, title, x + 10, y + 17, w - 20);
+		g.setColor(deep(color));
+		drawClippedString(g, title, x + 20, y + 17, w - 30);
 	}
 
 	private static String scoreNames(
@@ -1970,53 +2212,78 @@ final class GraphInsightsPanel extends JPanel
 			int pad = 14;
 			String[] labels = {"Dataset", "Edges", "Communities", "Hubs", "Report"};
 			String[] values = {
-					compact(snapshot.datasetName, 18),
+					datasetShort(snapshot),
 					formatCount(analysis.validEdgeCount),
 					formatCount(analysis.estimatedCommunityCount),
 					analysis.topIncomingNodes.isEmpty()
 							? "none" : compact(analysis.topIncomingNodes.get(0).name, 16),
-					analysis.statusLabel()
+					statusShort(analysis)
 			};
 			Color[] colors = {BLUE, PURPLE, GREEN, AMBER, statusColor(analysis)};
 			int boxW = Math.max(100, (w - pad * 2 - 48) / 5);
 			int gap = Math.max(8, (w - pad * 2 - boxW * 5) / 4);
 			int y = 16;
-			int lineY = y + 50;
+			int lineY = y + 31;
 			int x = pad;
 			for (int i = 0; i < 5; i++)
 			{
-				g.setColor(tint(colors[i], 0.13f));
+				g.setColor(SURFACE_ALT);
 				g.fillRoundRect(x, y, boxW, 62, RADIUS, RADIUS);
-				g.setColor(tint(colors[i], 0.42f));
+				g.setColor(BORDER);
 				g.drawRoundRect(x, y, boxW, 62, RADIUS, RADIUS);
+				g.setColor(colors[i]);
+				g.fillOval(x + 10, y + 11, 7, 7);
 				g.setFont(font(Font.BOLD, 9));
-				g.setColor(colors[i].darker());
-				drawClippedString(g, labels[i].toUpperCase(Locale.US), x + 9, y + 16, boxW - 18);
-				g.setFont(font(Font.BOLD, 12));
+				g.setColor(NebulaDesign.TEXT_TERTIARY);
+				drawClippedString(g, labels[i].toUpperCase(Locale.US), x + 23, y + 18, boxW - 32);
+				g.setFont(font(Font.BOLD, 14));
 				g.setColor(TEXT);
-				drawClippedString(g, values[i], x + 9, y + 39, boxW - 18);
+				drawClippedString(g, values[i], x + 11, y + 44, boxW - 21);
 				if (i < 4)
 				{
-					int x1 = x + boxW + 4;
-					int x2 = x + boxW + gap - 4;
-					g.setStroke(new BasicStroke(2f));
-					g.setColor(new Color(203, 213, 230));
+					int x1 = x + boxW + 3;
+					int x2 = x + boxW + gap - 3;
+					g.setStroke(new BasicStroke(1.6f));
+					g.setColor(NebulaDesign.BORDER_STRONG);
 					g.drawLine(x1, lineY, x2, lineY);
 					double t = (phase + i * 0.19) % 1.0;
 					int px = (int)(x1 + (x2 - x1) * t);
 					g.setColor(colors[i + 1]);
-					g.fill(new Ellipse2D.Double(px - 3, lineY - 3, 6, 6));
+					g.fill(new Ellipse2D.Double(px - 2.5, lineY - 2.5, 5, 5));
 				}
 				x += boxW + gap;
 			}
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
+			g.setFont(NebulaDesign.fontSmall());
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
 			drawClippedString(g,
 					"Reads existing graph artifacts only; recommendation logic is untouched.",
 					pad,
-					h - 7,
+					h - 5,
 					w - pad * 2);
 			g.dispose();
+		}
+
+		private static String statusShort(GraphAnalysisEngine.Analysis analysis)
+		{
+			if (analysis == null || !analysis.available)
+			{
+				return "Waiting";
+			}
+			if (analysis.validEdgeCount == 0L)
+			{
+				return "No edges yet";
+			}
+			if (analysis.malformedEdgeLines > 0L
+					|| analysis.unknownNodeEdges > 0L
+					|| analysis.healthScore < 70)
+			{
+				return "Needs review";
+			}
+			if (analysis.healthScore < 86)
+			{
+				return "Usable";
+			}
+			return "Healthy";
 		}
 	}
 
@@ -2054,7 +2321,9 @@ final class GraphInsightsPanel extends JPanel
 					"isolates", formatCount(analysis.isolatedMappedNodeCount), "mapped but unused", AMBER);
 
 			int checksY = metricY + metricH * 2 + gap + 12;
-			int checksH = h - checksY - 8;
+			// Cap the checks well so viewport-stretched cards never leave a
+			// huge empty glass box under the three quality rows.
+			int checksH = Math.min(h - checksY - 8, 132);
 			if (checksH >= 74)
 			{
 				drawCheckPanel(g, pad, checksY, w - pad * 2, checksH, color);
@@ -2067,41 +2336,43 @@ final class GraphInsightsPanel extends JPanel
 			g.setPaint(new GradientPaint(
 					x,
 					y,
-					themed(new Color(248, 251, 255), StudioNightTheme.NIGHT_SURFACE),
+					themed(NebulaDesign.DAY_SURFACE, NebulaDesign.NIGHT_SURFACE),
 					x + w,
 					y + h,
-					tint(color, 0.78f)));
+					tint(color, 0.86f)));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(220, 230, 243)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 
 			int ring = Math.max(68, Math.min(92, h - 28));
 			int ringX = x + 18;
 			int ringY = y + (h - ring) / 2;
 			g.setStroke(new BasicStroke(9f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-			g.setColor(themed(new Color(226, 234, 246), StudioNightTheme.NIGHT_PANEL_INK));
+			g.setColor(track());
 			g.draw(new Arc2D.Double(ringX, ringY, ring, ring, 90, -360, Arc2D.OPEN));
-			g.setColor(color);
-			g.draw(new Arc2D.Double(
-					ringX,
-					ringY,
-					ring,
-					ring,
-					90,
-					-360.0 * (analysis.healthScore / 100.0),
-					Arc2D.OPEN));
-			g.setFont(font(Font.BOLD, 28));
+			double sweep = -360.0 * (analysis.healthScore / 100.0);
+			if (analysis.healthScore > 0)
+			{
+				g.setPaint(new GradientPaint(
+						ringX, ringY + ring, color,
+						ringX + ring, ringY, tint(color, 0.30f)));
+				g.draw(new Arc2D.Double(ringX, ringY, ring, ring, 90, sweep, Arc2D.OPEN));
+			}
+			drawGaugeTick(g, ringX, ringY, ring, 70);
+			drawGaugeTick(g, ringX, ringY, ring, 86);
+			g.setStroke(new BasicStroke(1f));
+			g.setFont(NebulaDesign.fontSemiBold(26f));
 			g.setColor(TEXT);
 			String score = Integer.toString(analysis.healthScore);
 			FontMetrics metrics = g.getFontMetrics();
 			g.drawString(score,
 					ringX + ring / 2 - metrics.stringWidth(score) / 2,
-					ringY + ring / 2 + 10);
+					ringY + ring / 2 + 9);
 
 			int copyX = ringX + ring + 20;
 			int copyW = w - (copyX - x) - 16;
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, "GRAPH HEALTH SCORE", copyX, y + 27, copyW);
 			g.setFont(font(Font.BOLD, 18));
 			g.setColor(TEXT);
@@ -2109,6 +2380,23 @@ final class GraphInsightsPanel extends JPanel
 			g.setFont(font(Font.PLAIN, 11));
 			g.setColor(MUTED);
 			drawWrapped(g, healthSentence(), copyX, y + 74, copyW, 2, 14);
+		}
+
+		/** Threshold tick on the gauge ring so status hues explain themselves. */
+		private void drawGaugeTick(Graphics2D g, int ringX, int ringY, int ring, int score)
+		{
+			double angle = Math.toRadians(90 - 360.0 * (score / 100.0));
+			double cx = ringX + ring / 2.0;
+			double cy = ringY + ring / 2.0;
+			double inner = ring / 2.0 - 6.5;
+			double outer = ring / 2.0 + 6.5;
+			g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g.setColor(NebulaDesign.BORDER_STRONG);
+			g.draw(new java.awt.geom.Line2D.Double(
+					cx + Math.cos(angle) * inner,
+					cy - Math.sin(angle) * inner,
+					cx + Math.cos(angle) * outer,
+					cy - Math.sin(angle) * outer));
 		}
 
 		private void drawHealthMetric(
@@ -2124,18 +2412,18 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 56));
-			g.fillRoundRect(x, y, 5, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(216, 226, 241)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
+			g.setColor(color);
+			g.fillOval(x + 10, y + 7, 6, 6);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 11, y + 14, w - 20);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			drawClippedString(g, label.toUpperCase(Locale.US), x + 21, y + 14, w - 30);
 			g.setFont(font(Font.BOLD, 16));
 			g.setColor(TEXT);
 			drawClippedString(g, value, x + 11, y + 31, w - 20);
 			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
 			drawClippedString(g, detail, x + 11, y + h - 5, w - 20);
 		}
 
@@ -2143,7 +2431,7 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(glass(210));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 228, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 10));
 			g.setColor(MUTED);
@@ -2176,17 +2464,17 @@ final class GraphInsightsPanel extends JPanel
 				String value,
 				Color color)
 		{
-			g.setColor(tint(color, 0.16f));
+			g.setColor(tint(color, 0.86f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 70));
+			g.setColor(alpha(color, 62));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(color);
-			g.fillOval(x + 8, y + h / 2 - 4, 8, 8);
-			g.setFont(font(Font.BOLD, 10));
+			g.fillOval(x + 9, y + h / 2 - 3, 7, 7);
+			g.setFont(NebulaDesign.fontMedium(10.5f));
 			g.setColor(TEXT);
 			drawClippedString(g, label, x + 24, y + h / 2 + 4, w / 2);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, value, x + w / 2 + 18, y + h / 2 + 4, w / 2 - 24);
 		}
 
@@ -2239,6 +2527,10 @@ final class GraphInsightsPanel extends JPanel
 			int w = getWidth();
 			int h = getHeight();
 			int pad = 14;
+			// Full opaque base: matches the host card and keeps the panel
+			// self-sufficient when rendered standalone (self-test contract).
+			g.setColor(SURFACE);
+			g.fillRect(0, 0, w, h);
 			if (w < 320 || h < 220)
 			{
 				g.dispose();
@@ -2250,7 +2542,7 @@ final class GraphInsightsPanel extends JPanel
 			drawMetricTile(g, pad, 8, metricW, 48,
 					"components",
 					formatCount(analysis.activeComponentCount),
-					"separate active groups",
+					"separate groups",
 					BLUE);
 			drawMetricTile(g, pad + (metricW + gap), 8, metricW, 48,
 					"communities",
@@ -2316,18 +2608,18 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 60));
-			g.fillRoundRect(x, y, 5, h, RADIUS, RADIUS);
-			g.setColor(new Color(216, 226, 241));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
+			g.setColor(color);
+			g.fillOval(x + 11, y + 7, 6, 6);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 12, y + 14, w - 20);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			drawClippedString(g, label.toUpperCase(Locale.US), x + 22, y + 14, w - 31);
 			g.setFont(font(Font.BOLD, 18));
 			g.setColor(TEXT);
 			drawClippedString(g, value, x + 12, y + 33, w - 20);
 			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
 			drawClippedString(g, detail, x + 12, y + h - 6, w - 20);
 		}
 
@@ -2336,16 +2628,15 @@ final class GraphInsightsPanel extends JPanel
 			g.setPaint(new GradientPaint(
 					x,
 					y,
-					themed(new Color(247, 250, 255), StudioNightTheme.NIGHT_SURFACE),
+					themed(NebulaDesign.DAY_SURFACE_ALT, NebulaDesign.NIGHT_INSET),
 					x + w,
 					y + h,
-					themed(new Color(239, 248, 243), StudioNightTheme.NIGHT_PANEL_INK)));
+					themed(NebulaDesign.DAY_INSET, NebulaDesign.NIGHT_CANVAS_BOTTOM)));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 229, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 
-			g.setColor(themed(new Color(255, 255, 255, 150),
-					StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BORDER, 76)));
+			g.setColor(alpha(BORDER, 110));
 			for (int gx = x + 26; gx < x + w - 20; gx += 34)
 			{
 				g.drawLine(gx, y + 52, gx, y + h - 36);
@@ -2357,12 +2648,13 @@ final class GraphInsightsPanel extends JPanel
 
 			g.setColor(glass(190));
 			g.fillRoundRect(x + 10, y + 10, w - 20, 36, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(220, 230, 243)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x + 10, y + 10, w - 20, 36, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
 			drawClippedString(g, "ACTIVE GRAPH TOPOLOGY", x + 22, y + 32, w / 2);
 			g.setFont(font(Font.PLAIN, 10));
+			g.setColor(MUTED);
 			drawClippedString(g,
 					topologySubtitle(),
 					x + w / 2,
@@ -2374,38 +2666,48 @@ final class GraphInsightsPanel extends JPanel
 		{
 			drawNetworkCanvas(g, x, y, w, h);
 
+			int footerH = 28;
+			boolean cramped = h < 240;
+			boolean showBoxes = !cramped && w >= 470;
+			boolean roomy = h >= 268 && w >= 690;
+			// Clamp the constellation to a centered band so very tall
+			// viewport-fitted canvases never leave a void between the
+			// source box, the core, and the output box.
+			int bandH = Math.min(h - 46 - footerH, 470);
+			int bandTop = y + 46 + (h - 46 - footerH - bandH) / 2;
 			int centerX = x + w / 2;
-			int centerY = y + h / 2 + 8;
-			int leftX = x + 32;
-			int rightX = x + w - 190;
-			int sourceY = centerY - 52;
-			int outputY = centerY + 42;
-			int sourceW = Math.max(132, Math.min(166, w / 4));
-			int outputW = Math.max(148, Math.min(188, w / 4));
-			int clusterRadiusX = Math.max(84, Math.min(142, w / 5));
-			int clusterRadiusY = Math.max(42, Math.min(74, h / 5));
+			int centerY = bandTop + bandH / 2;
+			int sourceW = Math.max(152, Math.min(172, w / 4));
+			int outputW = Math.max(156, Math.min(192, w / 4));
+			int leftX = x + 20;
+			int rightX = x + w - outputW - 20;
+			int sourceY = Math.max(y + 56, bandTop + 8);
+			int outputY = Math.min(y + h - footerH - 86, bandTop + bandH - 84);
+			int clusterRadiusX = Math.max(70, Math.min(142, w / 6));
+			int clusterRadiusY = Math.max(34, Math.min(94, bandH / 4));
 
-			drawSignalNode(g, leftX, sourceY, sourceW, 72, BLUE,
-					"SOURCE SET",
-					compact(originalMeaning(snapshot), 26),
-					formatCount(Math.max(analysis.recommendationEdgeCount, analysis.activeNodeCount)));
-			drawSignalNode(g, rightX, outputY, outputW, 76, GREEN,
-					"TOP OUTPUT",
-					compact(outputMeaning(snapshot), 28),
-					topName(analysis.topRecommendedTargets, "waiting"));
+			if (showBoxes)
+			{
+				drawSignalNode(g, leftX, sourceY, sourceW, 72, BLUE,
+						"SOURCE SET",
+						compact(sourceShort(snapshot), 26),
+						formatCount(Math.max(analysis.recommendationEdgeCount, analysis.activeNodeCount)));
+				drawSignalNode(g, rightX, outputY, outputW, 76, GREEN,
+						"TOP OUTPUT",
+						compact(outputMeaning(snapshot), 28),
+						topName(analysis.topRecommendedTargets, "waiting"));
 
-			drawBackbone(g, leftX + sourceW, sourceY + 36, centerX, centerY, BLUE, 0);
-			drawBackbone(g, centerX, centerY, rightX, outputY + 38, GREEN, 3);
+				drawBackbone(g, leftX + sourceW, sourceY + 36, centerX, centerY, BLUE, 0);
+				drawBackbone(g, centerX, centerY, rightX, outputY + 38, GREEN, 3);
+			}
 
 			int communityCount = Math.max(3, Math.min(6,
 					analysis.topCommunities.isEmpty()
 							? Math.max(3, analysis.estimatedCommunityCount)
 							: analysis.topCommunities.size()));
+			int coreSize = cramped ? 62 : 78;
 			for (int i = 0; i < communityCount; i++)
 			{
-				double angle = -Math.PI / 2 + (Math.PI * 2 * i / communityCount);
-				int cx = centerX + (int)(Math.cos(angle) * clusterRadiusX);
-				int cy = centerY + (int)(Math.sin(angle) * clusterRadiusY);
 				Color color = communityColor(i);
 				GraphAnalysisEngine.NodeScore score = i < analysis.topCommunities.size()
 						? analysis.topCommunities.get(i) : null;
@@ -2413,17 +2715,43 @@ final class GraphInsightsPanel extends JPanel
 						? Math.max(1, analysis.largestComponentSize / Math.max(1, communityCount))
 						: score.value;
 				int nodeSize = Math.max(34, Math.min(62, 30 + (int)Math.sqrt(Math.max(1, value)) * 3));
+				int cx;
+				int cy;
+				if (cramped)
+				{
+					// Low canvases: a calm horizontal constellation flanking
+					// the core instead of a collapsing ellipse.
+					nodeSize = Math.max(28, Math.min(38, nodeSize));
+					int step = i / 2;
+					int side = i % 2 == 0 ? 1 : -1;
+					cx = centerX + side * (coreSize / 2 + 38 + step * 56);
+					cy = centerY + (step % 2 == 0 ? -8 : 10);
+				}
+				else
+				{
+					// Half-step rotation keeps orbits off the vertical axis so
+					// their labels never collide with the core.
+					double angle = -Math.PI / 2
+							+ (Math.PI * 2 * (i + 0.5) / communityCount);
+					cx = centerX + (int)(Math.cos(angle) * clusterRadiusX);
+					cy = centerY + (int)(Math.sin(angle) * clusterRadiusY);
+				}
 				drawBackbone(g, centerX, centerY, cx, cy, color, i + 6);
 				drawCommunityOrbit(g, cx, cy, nodeSize, color,
 						score == null ? "C" + (i + 1) : formatCount(score.value),
-						score == null ? "community" : compact(score.name, 20),
+						cramped
+								? null
+								: score == null ? "community" : compact(communityShort(score.name), 20),
 						i);
 			}
 
-			drawCore(g, centerX, centerY);
-			drawHubStack(g, x + 20, y + h - 82, Math.min(270, w / 2 - 22), 58);
-			drawLegend(g, x + w - Math.min(300, w / 2) - 20, y + 54,
-					Math.min(300, w / 2), 66);
+			drawCore(g, centerX, centerY, coreSize);
+			if (roomy)
+			{
+				drawHubStack(g, x + 20, y + h - footerH - 68, Math.min(270, w / 2 - 22), 58);
+				drawLegend(g, x + w - Math.min(300, w / 3) - 20, y + 54,
+						Math.min(300, w / 3), 66);
+			}
 			drawCanvasFooter(g, x + 18, y + h - 28, w - 36);
 		}
 
@@ -2439,20 +2767,20 @@ final class GraphInsightsPanel extends JPanel
 				String value)
 		{
 			g.setColor(glass(232));
-			g.fillRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
+			g.fillRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
 			g.setColor(alpha(color, 86));
-			g.drawRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(alpha(color, 28));
+			g.drawRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
+			g.setColor(alpha(color, 22));
 			g.fillRoundRect(x + 8, y + 8, 38, h - 16, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.15f));
+			g.setColor(tint(color, 0.80f));
 			g.fillOval(x + 15, y + h / 2 - 14, 28, 28);
 			g.setColor(color);
 			g.setStroke(new BasicStroke(2f));
 			g.drawOval(x + 15, y + h / 2 - 14, 28, 28);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, title.toUpperCase(Locale.US), x + 54, y + 23, w - 64);
-			g.setFont(font(Font.BOLD, 13));
+			g.setFont(font(Font.BOLD, 12));
 			g.setColor(TEXT);
 			drawClippedString(g, subtitle, x + 54, y + 43, w - 64);
 			g.setFont(font(Font.PLAIN, 10));
@@ -2500,48 +2828,56 @@ final class GraphInsightsPanel extends JPanel
 			g.drawOval(cx - outer / 2, cy - outer / 2, outer, outer);
 			g.setColor(glass(232));
 			g.fillOval(x - 4, y - 4, size + 8, size + 8);
-			g.setColor(tint(color, 0.15f));
+			g.setColor(tint(color, 0.78f));
 			g.fillOval(x, y, size, size);
 			g.setColor(color);
 			g.setStroke(new BasicStroke(2f));
 			g.drawOval(x, y, size, size);
 			g.setFont(font(Font.BOLD, Math.max(10, Math.min(13, size / 4))));
-			g.setColor(color.darker());
-			drawClippedString(g, value, x + 9, y + size / 2 + 4, size - 18);
-			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, label, x - 18, y + size + 14, size + 36);
+			g.setColor(deep(color));
+			FontMetrics orbitMetrics = g.getFontMetrics();
+			int valueW = orbitMetrics.stringWidth(value);
+			drawClippedString(g,
+					value,
+					valueW <= size - 8 ? x + (size - valueW) / 2 : x + 4,
+					y + size / 2 + 4,
+					size - 8);
+			if (label != null)
+			{
+				g.setFont(font(Font.PLAIN, 9));
+				g.setColor(MUTED);
+				drawClippedString(g, label, x - 18, y + size + 14, size + 36);
+			}
 		}
 
-		private void drawCore(Graphics2D g, int x, int y)
+		private void drawCore(Graphics2D g, int x, int y, int size)
 		{
 			Color color = statusColor(analysis);
-			int size = 78;
 			g.setColor(glass(238));
 			g.fillOval(x - size / 2, y - size / 2, size, size);
 			g.setColor(alpha(color, 88));
 			g.setStroke(new BasicStroke(2.4f));
 			g.drawOval(x - size / 2, y - size / 2, size, size);
-			g.setFont(font(Font.BOLD, 20));
+			g.setFont(font(Font.BOLD, size >= 70 ? 20 : 17));
 			g.setColor(TEXT);
 			String value = formatCount(analysis.estimatedCommunityCount);
 			FontMetrics metrics = g.getFontMetrics();
 			g.drawString(value, x - metrics.stringWidth(value) / 2, y - 2);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			String label = analysis.gephiCommunityCount ? "MODULARITY" : "ESTIMATE";
+			g.setColor(deep(color));
+			String label = analysis.gephiCommunityCount ? "GEPHI Q" : "ESTIMATE";
 			metrics = g.getFontMetrics();
-			g.drawString(label, x - metrics.stringWidth(label) / 2, y + 17);
+			g.drawString(label, x - metrics.stringWidth(label) / 2, y + (size >= 70 ? 17 : 14));
 		}
 
 		private void drawHubStack(Graphics2D g, int x, int y, int w, int h)
 		{
 			g.setColor(glass(186));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 228, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
+			g.setColor(deep(BLUE));
 			drawClippedString(g, "HUB SPOTLIGHT", x + 12, y + 17, w - 24);
 			int chipX = x + 12;
 			int chipY = y + 28;
@@ -2579,12 +2915,12 @@ final class GraphInsightsPanel extends JPanel
 				int rank)
 		{
 			Color color = rank == 0 ? BLUE : rank == 1 ? PURPLE : AMBER;
-			g.setColor(tint(color, 0.16f));
+			g.setColor(tint(color, 0.84f));
 			g.fillRoundRect(x, y, w, h, h, h);
 			g.setColor(alpha(color, 82));
 			g.drawRoundRect(x, y, w, h, h, h);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, compact(score.name, 11), x + 8, y + 14, w - 16);
 		}
 
@@ -2592,7 +2928,7 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(glass(180));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 228, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 10));
 			g.setColor(MUTED);
@@ -2636,10 +2972,10 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 228, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, label.toUpperCase(Locale.US), x + 10, y + 15, w - 20);
 			g.setFont(font(Font.BOLD, 11));
 			g.setColor(TEXT);
@@ -2701,19 +3037,7 @@ final class GraphInsightsPanel extends JPanel
 
 		private Color communityColor(int index)
 		{
-			switch (index % 5)
-			{
-				case 0:
-					return PURPLE;
-				case 1:
-					return GREEN;
-				case 2:
-					return BLUE;
-				case 3:
-					return AMBER;
-				default:
-					return new Color(48, 141, 156);
-			}
+			return NebulaDesign.chartColor(index);
 		}
 
 		private Color alpha(Color color, int amount)
@@ -2772,6 +3096,10 @@ final class GraphInsightsPanel extends JPanel
 			int w = getWidth();
 			int h = getHeight();
 			int pad = 14;
+			// Full opaque base: matches the host card and keeps the panel
+			// self-sufficient when rendered standalone (self-test contract).
+			g.setColor(SURFACE);
+			g.fillRect(0, 0, w, h);
 			if (w < 340 || h < 220)
 			{
 				g.dispose();
@@ -2793,12 +3121,7 @@ final class GraphInsightsPanel extends JPanel
 			int heroH = showcase ? Math.min(138, Math.max(118, h / 5)) : compact ? 64 : 82;
 			drawNarrativeHero(g, pad, 8, w - pad * 2, heroH, true);
 
-			int cursorY = 8 + heroH + 8;
-			if (!compact)
-			{
-				drawModeTabs(g, pad, cursorY, w - pad * 2, showcase ? 30 : 26);
-				cursorY += showcase ? 40 : 34;
-			}
+			int cursorY = 8 + heroH + 10;
 
 			int metricH = w < 500 ? 104 : showcase ? 68 : 56;
 			if (compact)
@@ -2878,26 +3201,26 @@ final class GraphInsightsPanel extends JPanel
 			g.setPaint(new GradientPaint(
 					x,
 					y,
-					themed(new Color(247, 250, 255), StudioNightTheme.NIGHT_SURFACE),
+					themed(NebulaDesign.DAY_SURFACE, NebulaDesign.NIGHT_SURFACE),
 					x + w,
 					y + h,
-					tint(accent, hasRun ? 0.80f : 0.86f)));
+					tint(accent, hasRun ? 0.86f : 0.90f)));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
 			if (hasRun)
 			{
 				drawHeroEnergy(g, x, y, w, h, accent);
 			}
-			g.setColor(quietLine(new Color(216, 226, 241)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 
 			boolean showcase = hasRun && h >= 108 && w >= 520;
-			int badgeW = Math.max(86, Math.min(122, w / 5));
-			g.setColor(tint(accent, 0.18f));
-			g.fillRoundRect(x + 12, y + 12, badgeW, 24, RADIUS, RADIUS);
-			g.setColor(tint(accent, 0.42f));
-			g.drawRoundRect(x + 12, y + 12, badgeW, 24, RADIUS, RADIUS);
+			int badgeW = Math.max(98, Math.min(122, w / 5));
+			g.setColor(tint(accent, 0.84f));
+			g.fillRoundRect(x + 12, y + 12, badgeW, 24, 12, 12);
+			g.setColor(alpha(accent, 84));
+			g.drawRoundRect(x + 12, y + 12, badgeW, 24, 12, 12);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(accent.darker());
+			g.setColor(deep(accent));
 			drawClippedString(g, hasRun ? "IMPACT STORY" : "READY STATE",
 					x + 24, y + 28, badgeW - 24);
 
@@ -2914,7 +3237,7 @@ final class GraphInsightsPanel extends JPanel
 			drawClippedString(g,
 					hasRun
 							? impactHeadline()
-							: "No Recommendation Run Yet",
+							: "No recommendation run yet",
 					copyX,
 					copyY,
 					copyW);
@@ -2936,17 +3259,17 @@ final class GraphInsightsPanel extends JPanel
 			}
 			else
 			{
-				drawPulseRing(g, x + w - 62, y + 22, 18, accent, hasRun);
+				drawPulseRing(g, x + w - 58, y + 34, 16, accent, hasRun);
 			}
 		}
 
 		private void drawHeroEnergy(Graphics2D g, int x, int y, int w, int h, Color accent)
 		{
-			g.setColor(translucent(PURPLE, 22));
+			g.setColor(translucent(PURPLE, 14));
 			g.fillRoundRect(x + 18, y + h - 30, Math.max(120, w / 3), 18, RADIUS, RADIUS);
-			g.setColor(translucent(GREEN, 26));
+			g.setColor(translucent(BLUE, 14));
 			g.fillRoundRect(x + w / 3, y + 16, Math.max(160, w / 2), 24, RADIUS, RADIUS);
-			g.setColor(translucent(accent, 28));
+			g.setColor(translucent(accent, 16));
 			g.fillRoundRect(x + w / 5, y + h / 2, Math.max(180, w / 2), 16, RADIUS, RADIUS);
 		}
 
@@ -2969,7 +3292,9 @@ final class GraphInsightsPanel extends JPanel
 			g.setStroke(new BasicStroke(7f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 			g.setColor(track());
 			g.draw(new Arc2D.Double(ringX, ringY, ringSize, ringSize, 90, -360, Arc2D.OPEN));
-			g.setColor(GREEN);
+			g.setPaint(new GradientPaint(
+					ringX, ringY + ringSize, BLUE,
+					ringX + ringSize, ringY, PURPLE));
 			g.draw(new Arc2D.Double(ringX, ringY, ringSize, ringSize, 90,
 					-360 * clamp01(changedRatio()), Arc2D.OPEN));
 			g.setStroke(new BasicStroke(1f));
@@ -2977,7 +3302,7 @@ final class GraphInsightsPanel extends JPanel
 			int copyX = ringX + ringSize + 14;
 			int copyW = w - (copyX - x) - 12;
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(GREEN.darker());
+			g.setColor(deep(BLUE));
 			drawClippedString(g, "CHANGED TARGETS", copyX, y + 23, copyW);
 			g.setFont(font(Font.BOLD, 22));
 			g.setColor(TEXT);
@@ -2991,23 +3316,26 @@ final class GraphInsightsPanel extends JPanel
 					y + 67,
 					copyW);
 
-			int chipY = y + h - 30;
-			int chipX = copyX;
-			int chipW = Math.max(54, (copyW - 8) / 2);
-			drawHeroChip(g, chipX, chipY, chipW, 20,
-					"kept " + percentWhole(sameRatio()), AMBER);
-			drawHeroChip(g, chipX + chipW + 8, chipY, chipW, 20,
-					riskChipLabel(), concentrationColor());
+			if (h >= 104)
+			{
+				int chipY = y + h - 30;
+				int chipX = copyX;
+				int chipW = Math.max(54, (copyW - 8) / 2);
+				drawHeroChip(g, chipX, chipY, chipW, 20,
+						"kept " + percentWhole(sameRatio()), TEAL);
+				drawHeroChip(g, chipX + chipW + 8, chipY, chipW, 20,
+						riskChipLabel(), concentrationColor());
+			}
 		}
 
 		private void drawHeroChip(Graphics2D g, int x, int y, int w, int h, String label, Color color)
 		{
-			g.setColor(tint(color, 0.17f));
+			g.setColor(tint(color, 0.85f));
 			g.fillRoundRect(x, y, w, h, h, h);
 			g.setColor(translucent(color, 92));
 			g.drawRoundRect(x, y, w, h, h, h);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, label, x + 8, y + 14, w - 16);
 		}
 
@@ -3028,7 +3356,7 @@ final class GraphInsightsPanel extends JPanel
 			g.draw(new Arc2D.Double(cx - radius, cy - radius, radius * 2, radius * 2,
 					90, -360 * Math.max(0.12, sweep), Arc2D.OPEN));
 			g.setStroke(new BasicStroke(1f));
-			g.setColor(tint(color, 0.18f));
+			g.setColor(tint(color, 0.50f));
 			g.fillOval(cx - 5, cy - 5, 10, 10);
 		}
 
@@ -3069,26 +3397,6 @@ final class GraphInsightsPanel extends JPanel
 					Math.max(0, Math.min(255, alpha)));
 		}
 
-		private void drawModeTabs(Graphics2D g, int x, int y, int w, int h)
-		{
-			String[] labels = {"Summary", "Diff", "Spread", "Explanations"};
-			int gap = 6;
-			int tabW = Math.max(72, (w - gap * (labels.length - 1)) / labels.length);
-			int cursor = x;
-			for (int i = 0; i < labels.length; i++)
-			{
-				boolean selected = i == 1;
-				g.setColor(selected ? tint(GREEN, 0.14f) : glass(162));
-				g.fillRoundRect(cursor, y, tabW, h, RADIUS, RADIUS);
-				g.setColor(selected ? tint(GREEN, 0.38f) : quietLine(new Color(220, 230, 243)));
-				g.drawRoundRect(cursor, y, tabW, h, RADIUS, RADIUS);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(selected ? GREEN.darker() : MUTED);
-				drawClippedString(g, labels[i], cursor + 12, y + 17, tabW - 24);
-				cursor += tabW + gap;
-			}
-		}
-
 		private void drawImpactMetricStrip(Graphics2D g, int x, int y, int w, int h)
 		{
 			int gap = 8;
@@ -3099,7 +3407,7 @@ final class GraphInsightsPanel extends JPanel
 					{"Unique targets", formatCount(analysis.uniqueRecommendedTargets), "recommended outputs"},
 					{"Diversity", percent(analysis.recommendationDiversity), spreadRead()}
 			};
-			Color[] colors = {GREEN, AMBER, BLUE, PURPLE};
+			Color[] colors = {BLUE, TEAL, GREEN, PURPLE};
 			if (w >= 500 || h < 80)
 			{
 				int cardW = Math.max(1, (w - gap * 3) / 4);
@@ -3141,39 +3449,18 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.40f));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 58));
-			g.fillRoundRect(x, y, 5, h, RADIUS, RADIUS);
-
-			int glyphX = x + w - 26;
-			int glyphY = y + 16;
-			g.setColor(tint(color, 0.18f));
-			if (index == 0)
-			{
-				g.fillRoundRect(glyphX - 5, glyphY - 7, 17, 14, 7, 7);
-			}
-			else if (index == 1)
-			{
-				g.fillOval(glyphX - 5, glyphY - 7, 16, 16);
-			}
-			else if (index == 2)
-			{
-				g.fillRect(glyphX - 4, glyphY - 6, 14, 14);
-			}
-			else
-			{
-				g.fillArc(glyphX - 6, glyphY - 7, 17, 17, 45, 270);
-			}
-
+			g.setColor(color);
+			g.fillOval(x + 11, y + 8, 6, 6);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 12, y + 15, w - 40);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			drawClippedString(g, label.toUpperCase(Locale.US), x + 22, y + 15, w - 32);
 			g.setFont(font(Font.BOLD, h >= 64 ? 20 : h < 52 ? 14 : 16));
 			g.setColor(TEXT);
 			drawClippedString(g, value, x + 12, y + (h >= 64 ? 43 : h < 52 ? 32 : 36), w - 24);
 			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
 			drawClippedString(g, detail, x + 12, y + h - 7, w - 24);
 		}
 
@@ -3182,7 +3469,7 @@ final class GraphInsightsPanel extends JPanel
 			drawImpactStage(g, x, y, w, h);
 			g.setColor(glass(164));
 			g.fillRoundRect(x + 10, y + 10, w - 20, 32, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(220, 230, 243)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x + 10, y + 10, w - 20, 32, RADIUS, RADIUS);
 
 			g.setFont(font(Font.BOLD, 11));
@@ -3193,8 +3480,7 @@ final class GraphInsightsPanel extends JPanel
 			drawClippedString(g, "Hover lanes for detail-on-demand.",
 					x + w / 2, y + 31, w / 2 - 28);
 
-			drawLegend(g, x + 18, y + h - 19, Math.min(420, w - 36));
-			drawReplayButton(g, x + w - 112, y + h - 31, 92, 22);
+			drawLegend(g, x + 18, y + h - 19, Math.min(460, w - 36));
 
 			int contentY = y + 50;
 			int contentH = h - 88;
@@ -3216,24 +3502,23 @@ final class GraphInsightsPanel extends JPanel
 			g.setPaint(new GradientPaint(
 					x,
 					y,
-					themed(new Color(248, 251, 255), StudioNightTheme.NIGHT_SURFACE),
+					themed(NebulaDesign.DAY_SURFACE_ALT, NebulaDesign.NIGHT_INSET),
 					x + w,
 					y + h,
-					themed(new Color(241, 249, 247), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(translucent(GREEN, 18));
+					themed(NebulaDesign.DAY_INSET, NebulaDesign.NIGHT_CANVAS_BOTTOM)));
+			g.fillRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
+			g.setColor(translucent(TEAL, 14));
 			g.fillRoundRect(x + 18, y + 54, w - 36, Math.max(18, h / 10), RADIUS + 10, RADIUS + 10);
-			g.setColor(translucent(AMBER, 18));
+			g.setColor(translucent(BLUE, 12));
 			g.fillRoundRect(x + 30, y + Math.max(84, h / 3), w - 60, Math.max(18, h / 12),
 					RADIUS + 10, RADIUS + 10);
-			g.setColor(translucent(PURPLE, 15));
+			g.setColor(translucent(PURPLE, 11));
 			g.fillRoundRect(x + 18, y + h - Math.max(72, h / 4), w - 36, Math.max(18, h / 11),
 					RADIUS + 10, RADIUS + 10);
-			g.setColor(quietLine(new Color(218, 228, 242)));
-			g.drawRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
+			g.setColor(BORDER);
+			g.drawRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
 
-			g.setColor(themed(new Color(255, 255, 255, 120),
-					StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_BORDER, 54)));
+			g.setColor(alpha(BORDER, 100));
 			for (int gx = x + 26; gx < x + w - 20; gx += 36)
 			{
 				g.drawLine(gx, y + 48, gx, y + h - 36);
@@ -3246,7 +3531,7 @@ final class GraphInsightsPanel extends JPanel
 
 		private void drawDiffMap(Graphics2D g, int x, int y, int w, int h)
 		{
-			int sourceW = Math.max(104, Math.min(138, w / 4));
+			int sourceW = Math.max(126, Math.min(142, w / 4));
 			int outputW = Math.max(114, Math.min(148, w / 4));
 			int laneX = x + sourceW + 22;
 			int outputX = x + w - outputW;
@@ -3266,35 +3551,35 @@ final class GraphInsightsPanel extends JPanel
 					"Kept original",
 					formatCount(analysis.recommendationSameAsOriginalCount) + " stable edges",
 					sameRatio(),
-					AMBER,
+					TEAL,
 					true);
 			drawImpactLane(g, laneX, changedY, laneW, laneH,
 					"Changed target",
 					formatCount(analysis.recommendationChangedTargetCount) + " rerouted edges",
 					changedRatio(),
-					GREEN,
+					BLUE,
 					false);
 			drawOutputSpreadPanel(g, outputX, y + 4, outputW, h - 8);
 
 			drawImpactCurve(g, x + sourceW, centerY - 12,
-					laneX, keptY + laneH / 2, AMBER, 0, sameRatio());
+					laneX, keptY + laneH / 2, TEAL, 0, sameRatio());
 			drawImpactCurve(g, x + sourceW, centerY + 12,
-					laneX, changedY + laneH / 2, GREEN, 1, changedRatio());
+					laneX, changedY + laneH / 2, BLUE, 1, changedRatio());
 			drawImpactCurve(g, laneX + laneW, keptY + laneH / 2,
-					outputX - 8, y + h / 3, AMBER, 2, sameRatio());
+					outputX - 8, y + h / 3, TEAL, 2, sameRatio());
 			drawImpactCurve(g, laneX + laneW, changedY + laneH / 2,
-					outputX - 8, y + (h * 2) / 3, GREEN, 3, changedRatio());
+					outputX - 8, y + (h * 2) / 3, BLUE, 3, changedRatio());
 		}
 
 		private void drawQueryNode(Graphics2D g, int x, int y, int w, int h)
 		{
 			g.setColor(glass(230));
-			g.fillRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(tint(BLUE, 0.38f));
-			g.drawRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
+			g.fillRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
+			g.setColor(alpha(BLUE, 80));
+			g.drawRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
 			int cx = x + 28;
 			int cy = y + h / 2;
-			g.setColor(tint(BLUE, 0.16f));
+			g.setColor(tint(BLUE, 0.80f));
 			g.fillOval(cx - 18, cy - 18, 36, 36);
 			g.setStroke(new BasicStroke(2f));
 			g.setColor(BLUE);
@@ -3302,15 +3587,15 @@ final class GraphInsightsPanel extends JPanel
 			g.setStroke(new BasicStroke(1f));
 
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(BLUE.darker());
-			drawClippedString(g, "QUERY TARGET", x + 56, y + 21, w - 66);
+			g.setColor(deep(BLUE));
+			drawClippedString(g, "QUERY", x + 52, y + 21, w - 60);
 			g.setFont(font(Font.BOLD, 12));
 			g.setColor(TEXT);
-			drawClippedString(g, compact(originalMeaning(snapshot), 22), x + 56, y + 42, w - 66);
+			drawClippedString(g, compact(sourceWord(snapshot), 22), x + 52, y + 42, w - 58);
 			g.setFont(font(Font.PLAIN, 9));
 			g.setColor(MUTED);
 			drawClippedString(g, formatCount(totalRecommendations()) + " decisions",
-					x + 56, y + 61, w - 66);
+					x + 52, y + 61, w - 60);
 		}
 
 		private void drawImpactLane(
@@ -3335,12 +3620,12 @@ final class GraphInsightsPanel extends JPanel
 			}
 			g.setColor(glass(232));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.36f));
+			g.setColor(alpha(color, 76));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.17f));
+			g.setColor(tint(color, 0.82f));
 			g.fillRoundRect(x + 8, y + 7, 42, h - 14, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 11));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			String pct = percent(ratio);
 			FontMetrics metrics = g.getFontMetrics();
 			g.drawString(pct, x + 29 - metrics.stringWidth(pct) / 2, y + h / 2 + 4);
@@ -3364,11 +3649,11 @@ final class GraphInsightsPanel extends JPanel
 		{
 			outputBounds.setBounds(x, y, w, h);
 			g.setColor(glass(232));
-			g.fillRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(tint(BLUE, 0.38f));
-			g.drawRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
+			g.fillRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
+			g.setColor(alpha(GREEN, 80));
+			g.drawRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(BLUE.darker());
+			g.setColor(deep(GREEN));
 			drawClippedString(g, "RECOMMENDED", x + 12, y + 18, w - 24);
 			g.setFont(font(Font.BOLD, 18));
 			g.setColor(TEXT);
@@ -3409,15 +3694,15 @@ final class GraphInsightsPanel extends JPanel
 			{
 				return;
 			}
-			Color color = rank == 1 ? GREEN : rank == 2 ? PURPLE : BLUE;
+			Color color = GREEN;
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(214, 224, 240)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(color);
+			g.setColor(rank == 1 ? color : tint(color, 0.80f));
 			g.fillRoundRect(x, y, 22, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(Color.WHITE);
+			g.setColor(rank == 1 ? NebulaDesign.TEXT_ON_ACCENT : deep(color));
 			drawClippedString(g, Integer.toString(rank), x + 8, y + h / 2 + 4, 12);
 			g.setColor(TEXT);
 			drawClippedString(g, compact(node.name, 18), x + 30, y + h / 2 + 4, w - 42);
@@ -3464,11 +3749,11 @@ final class GraphInsightsPanel extends JPanel
 		{
 			inspectorBounds.setBounds(x, y, w, h);
 			g.setColor(glass(232));
-			g.fillRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(tint(PURPLE, 0.38f));
-			g.drawRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
+			g.fillRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
+			g.setColor(alpha(PURPLE, 80));
+			g.drawRoundRect(x, y, w, h, RADIUS + 4, RADIUS + 4);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(PURPLE.darker());
+			g.setColor(deep(PURPLE));
 			drawClippedString(g, "WHY THIS HAPPENED", x + 12, y + 18, w - 24);
 			g.setFont(font(Font.BOLD, 12));
 			g.setColor(TEXT);
@@ -3496,7 +3781,7 @@ final class GraphInsightsPanel extends JPanel
 			if (h > 204)
 			{
 				g.setFont(font(Font.BOLD, 9));
-				g.setColor(GREEN.darker());
+				g.setColor(deep(GREEN));
 				drawClippedString(g, "NEXT ACTION", x + 12, rowY, w - 24);
 				g.setFont(font(Font.PLAIN, 10));
 				g.setColor(TEXT);
@@ -3517,10 +3802,10 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 228, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, label.toUpperCase(Locale.US), x + 9, y + 13, w - 18);
 			g.setFont(font(Font.BOLD, 11));
 			g.setColor(TEXT);
@@ -3531,7 +3816,7 @@ final class GraphInsightsPanel extends JPanel
 		private void drawLegend(Graphics2D g, int x, int y, int w)
 		{
 			String[] labels = {"kept", "changed", "unique target", "risk"};
-			Color[] colors = {AMBER, GREEN, BLUE, RED};
+			Color[] colors = {TEAL, BLUE, GREEN, RED};
 			int cursor = x;
 			for (int i = 0; i < labels.length; i++)
 			{
@@ -3555,23 +3840,6 @@ final class GraphInsightsPanel extends JPanel
 			}
 		}
 
-		private void drawReplayButton(Graphics2D g, int x, int y, int w, int h)
-		{
-			g.setColor(tint(GREEN, 0.16f));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(GREEN, 0.42f));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(GREEN);
-			int triX = x + 12;
-			int triY = y + h / 2;
-			int[] xs = {triX, triX, triX + 8};
-			int[] ys = {triY - 5, triY + 5, triY};
-			g.fillPolygon(xs, ys, 3);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(GREEN.darker());
-			drawClippedString(g, "Replay diff", x + 26, y + 14, w - 34);
-		}
-
 		private void drawJudgmentStrip(Graphics2D g, int x, int y, int w, int h)
 		{
 			String[][] cards = {
@@ -3579,9 +3847,9 @@ final class GraphInsightsPanel extends JPanel
 					{"Stability Score", percent(sameRatio()), "original links kept"},
 					{"Novelty", percent(changedRatio()), "target reroutes"},
 					{"Concentration", concentrationRisk(), spreadRead()},
-					{"Regression Alerts", formatCount(analysis.warnings.size()), alertRead()}
+					{"Alerts", formatCount(analysis.warnings.size()), alertRead()}
 			};
-			Color[] colors = {GREEN, AMBER, PURPLE, concentrationColor(), statusColor(analysis)};
+			Color[] colors = {GREEN, TEAL, BLUE, concentrationColor(), statusColor(analysis)};
 			int gap = 7;
 			int cardW = Math.max(74, (w - gap * (cards.length - 1)) / cards.length);
 			int cursor = x;
@@ -3610,18 +3878,18 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.38f));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 48));
-			g.fillRoundRect(x, y, 4, h, RADIUS, RADIUS);
+			g.setColor(color);
+			g.fillOval(x + 10, y + 8, 6, 6);
 			g.setFont(font(Font.BOLD, 8));
-			g.setColor(color.darker());
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 10, y + 14, w - 20);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			drawClippedString(g, label.toUpperCase(Locale.US), x + 20, y + 14, w - 30);
 			g.setFont(font(Font.BOLD, 11));
 			g.setColor(TEXT);
 			drawClippedString(g, value, x + 10, y + 32, w - 20);
 			g.setFont(font(Font.PLAIN, 8));
-			g.setColor(MUTED);
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
 			drawClippedString(g, detail, x + 10, y + h - 8, w - 20);
 		}
 
@@ -3633,14 +3901,15 @@ final class GraphInsightsPanel extends JPanel
 			}
 			drawImpactStage(g, x, y, w, h);
 			int centerX = x + w / 2;
-			int centerY = y + Math.max(74, h / 2 - 12);
+			// Keep the ghost diagram near the intro copy even when the card
+			// is viewport-stretched very tall.
+			int centerY = y + Math.max(74, Math.min(h / 2 - 12, 330));
 			int leftX = Math.max(x + 24, centerX - 172);
 			int rightX = Math.min(x + w - 114, centerX + 96);
 			int laneY = centerY - 5;
 
 			g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-			g.setColor(themed(new Color(182, 196, 219, 118),
-					StudioNightTheme.withAlpha(StudioNightTheme.NIGHT_MUTED, 94)));
+			g.setColor(alpha(NebulaDesign.TEXT_TERTIARY, 105));
 			g.draw(new QuadCurve2D.Double(leftX + 68, centerY, centerX, laneY - 42, rightX, centerY - 18));
 			g.draw(new QuadCurve2D.Double(leftX + 68, centerY, centerX, laneY + 42, rightX, centerY + 18));
 			g.setStroke(new BasicStroke(1f));
@@ -3669,7 +3938,7 @@ final class GraphInsightsPanel extends JPanel
 				int gap = 8;
 				int stepW = Math.max(1, (w - 48 - gap * 2) / 3);
 				drawEmptyStep(g, x + 24, stepY, stepW, 34, "Load graph", BLUE);
-				drawEmptyStep(g, x + 24 + stepW + gap, stepY, stepW, 34, "Run recommendation", GREEN);
+				drawEmptyStep(g, x + 24 + stepW + gap, stepY, stepW, 34, "Run query", GREEN);
 				drawEmptyStep(g, x + 24 + (stepW + gap) * 2, stepY, stepW, 34, "Inspect diff", PURPLE);
 			}
 		}
@@ -3678,7 +3947,7 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(glass(186));
 			g.fillOval(x, y, size, size);
-			g.setColor(quietLine(new Color(206, 218, 235)));
+			g.setColor(BORDER);
 			g.drawOval(x, y, size, size);
 			g.setFont(font(Font.BOLD, 9));
 			g.setColor(MUTED);
@@ -3689,7 +3958,7 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(glass(212));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(210, 222, 239)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 9));
 			g.setColor(MUTED);
@@ -3698,9 +3967,9 @@ final class GraphInsightsPanel extends JPanel
 
 		private void drawEmptyStep(Graphics2D g, int x, int y, int w, int h, String label, Color color)
 		{
-			g.setColor(tint(color, 0.16f));
+			g.setColor(tint(color, 0.86f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.38f));
+			g.setColor(alpha(color, 70));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(color);
 			g.fillOval(x + 10, y + h / 2 - 4, 8, 8);
@@ -3804,415 +4073,6 @@ final class GraphInsightsPanel extends JPanel
 		}
 	}
 
-	private static final class RecommendationImpactPanel extends VisualPanel
-	{
-		protected void paintComponent(Graphics graphics)
-		{
-			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D)graphics.create();
-			prepare(g);
-			int w = getWidth();
-			int h = getHeight();
-			int pad = 14;
-			if (w < 340 || h < 220)
-			{
-				g.dispose();
-				return;
-			}
-
-			long total = Math.max(analysis.recommendationEdgeCount,
-					analysis.recommendationChangedTargetCount
-							+ analysis.recommendationSameAsOriginalCount);
-			double changedRatio = ratio(analysis.recommendationChangedTargetCount, total);
-			double sameRatio = ratio(analysis.recommendationSameAsOriginalCount, total);
-			int gap = 8;
-			int metricW = Math.max(1, (w - pad * 2 - gap * 3) / 4);
-			drawImpactMetric(g, pad, 8, metricW, 48,
-					"events",
-					formatCount(total),
-					"recommendation edges",
-					BLUE);
-			drawImpactMetric(g, pad + (metricW + gap), 8, metricW, 48,
-					"unique outputs",
-					formatCount(analysis.uniqueRecommendedTargets),
-					"distinct ranked targets",
-					GREEN);
-			drawImpactMetric(g, pad + (metricW + gap) * 2, 8, metricW, 48,
-					"changed",
-					formatCount(analysis.recommendationChangedTargetCount),
-					percent(changedRatio),
-					PURPLE);
-			drawImpactMetric(g, pad + (metricW + gap) * 3, 8, metricW, 48,
-					"kept original",
-					formatCount(analysis.recommendationSameAsOriginalCount),
-					percent(sameRatio),
-					AMBER);
-
-			int summaryH = 58;
-			int canvasY = 70;
-			int canvasH = h - canvasY - summaryH - 18;
-			if (canvasH < 120)
-			{
-				summaryH = 48;
-				canvasH = h - canvasY - summaryH - 14;
-			}
-			if (canvasH < 96)
-			{
-				g.dispose();
-				return;
-			}
-			drawImpactCanvas(g, pad, canvasY, w - pad * 2, canvasH);
-
-			int leftW = Math.max(118, Math.min(150, w / 5));
-			int outputW = Math.max(150, Math.min(210, w / 4));
-			int leftX = pad + 18;
-			int laneX = leftX + leftW + 26;
-			int outputX = w - pad - outputW - 18;
-			int centerY = canvasY + canvasH / 2;
-			int laneW = Math.max(120, outputX - laneX - 20);
-			int laneH = Math.max(38, Math.min(52, canvasH / 5));
-			int originalY = canvasY + 58;
-			int changedY = canvasY + canvasH - laneH - 56;
-			if (changedY < originalY + laneH + 16)
-			{
-				originalY = canvasY + 48;
-				changedY = originalY + laneH + 14;
-			}
-
-			drawTargetCard(g, leftX, centerY - 45, leftW, 90, total);
-			drawDecisionLane(g, laneX, originalY, laneW, laneH,
-					"Original edge kept",
-					formatCount(analysis.recommendationSameAsOriginalCount) + " same as original",
-					sameRatio,
-					AMBER);
-			drawDecisionLane(g, laneX, changedY, laneW, laneH,
-					"Recommendation changed target",
-					formatCount(analysis.recommendationChangedTargetCount) + " changed",
-					changedRatio,
-					GREEN);
-			drawOutputPanel(g, outputX, canvasY + 50, outputW, canvasH - 82);
-
-			int startX = leftX + leftW;
-			drawImpactCurve(g, startX, centerY - 10, laneX, originalY + laneH / 2, AMBER, 0);
-			drawImpactCurve(g, startX, centerY + 10, laneX, changedY + laneH / 2, GREEN, 1);
-			drawImpactCurve(g, laneX + laneW, originalY + laneH / 2, outputX - 8,
-					canvasY + 86, AMBER, 2);
-			drawImpactCurve(g, laneX + laneW, changedY + laneH / 2, outputX - 8,
-					canvasY + canvasH - 78, GREEN, 3);
-
-			int summaryY = canvasY + canvasH + 10;
-			int summaryW = Math.max(1, (w - pad * 2 - gap * 2) / 3);
-			drawSummaryCard(g, pad, summaryY, summaryW, summaryH,
-					"diversity",
-					percent(analysis.recommendationDiversity),
-					"unique outputs divided by events",
-					GREEN,
-					analysis.recommendationDiversity);
-			drawSummaryCard(g, pad + summaryW + gap, summaryY, summaryW, summaryH,
-					"routing",
-					recommendationRead(changedRatio, sameRatio),
-					"how much the graph changed",
-					changedRatio > 0.5 ? PURPLE : AMBER,
-					changedRatio);
-			drawSummaryCard(g, pad + (summaryW + gap) * 2, summaryY, summaryW, summaryH,
-					"spread",
-					spreadRead(),
-					"output concentration",
-					analysis.recommendationDiversity < 0.15 ? AMBER : GREEN,
-					analysis.recommendationDiversity);
-			g.dispose();
-		}
-
-		private void drawImpactMetric(
-				Graphics2D g,
-				int x,
-				int y,
-				int w,
-				int h,
-				String label,
-				String value,
-				String detail,
-				Color color)
-		{
-			g.setColor(SURFACE_ALT);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 58));
-			g.fillRoundRect(x, y, 5, h, RADIUS, RADIUS);
-			g.setColor(new Color(216, 226, 241));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 12, y + 14, w - 20);
-			g.setFont(font(Font.BOLD, 18));
-			g.setColor(TEXT);
-			drawClippedString(g, value, x + 12, y + 33, w - 20);
-			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, detail, x + 12, y + h - 6, w - 20);
-		}
-
-		private void drawImpactCanvas(Graphics2D g, int x, int y, int w, int h)
-		{
-			g.setPaint(new GradientPaint(
-					x,
-					y,
-					themed(new Color(249, 251, 255), StudioNightTheme.NIGHT_SURFACE),
-					x + w,
-					y + h,
-					themed(new Color(246, 250, 246), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(220, 230, 243)));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(glass(160));
-			g.fillRoundRect(x + 10, y + 10, w - 20, 34, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
-			drawClippedString(g,
-					"RECOMMENDATION SIDE EFFECTS",
-					x + 22,
-					y + 31,
-					w / 2);
-			g.setFont(font(Font.PLAIN, 10));
-			drawClippedString(g,
-					"compares original graph edges with recommended edges",
-					x + w / 2,
-					y + 31,
-					w / 2 - 24);
-		}
-
-		private void drawTargetCard(Graphics2D g, int x, int y, int w, int h, long total)
-		{
-			g.setColor(glass(224));
-			g.fillRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(new Color(BLUE.getRed(), BLUE.getGreen(), BLUE.getBlue(), 74));
-			g.drawRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(tint(BLUE, 0.15f));
-			g.fillOval(x + 14, y + 21, 38, 38);
-			g.setColor(BLUE);
-			g.setStroke(new BasicStroke(2f));
-			g.drawOval(x + 14, y + 21, 38, 38);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
-			drawClippedString(g, "TARGET SET", x + 62, y + 24, w - 72);
-			g.setFont(font(Font.BOLD, 13));
-			g.setColor(TEXT);
-			drawClippedString(g, "queried users", x + 62, y + 45, w - 72);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, formatCount(total) + " graph decisions", x + 62, y + 64, w - 72);
-		}
-
-		private void drawDecisionLane(
-				Graphics2D g,
-				int x,
-				int y,
-				int w,
-				int h,
-				String title,
-				String detail,
-				double ratio,
-				Color color)
-		{
-			g.setColor(glass(230));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 72));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.13f));
-			g.fillRoundRect(x + 8, y + 8, 38, h - 16, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(color.darker());
-			String pct = percent(ratio);
-			FontMetrics metrics = g.getFontMetrics();
-			g.drawString(pct, x + 27 - metrics.stringWidth(pct) / 2, y + h / 2 + 5);
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(TEXT);
-			drawClippedString(g, title, x + 56, y + 18, w - 68);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, detail, x + 56, y + h - 13, w - 68);
-			int barY = y + h - 7;
-			int barW = w - 64;
-			g.setColor(track());
-			g.fillRoundRect(x + 56, barY, barW, 4, 4, 4);
-			g.setColor(color);
-			g.fillRoundRect(x + 56, barY,
-					Math.max(2, (int)(barW * Math.max(0.0, Math.min(1.0, ratio)))),
-					4,
-					4,
-					4);
-		}
-
-		private void drawOutputPanel(Graphics2D g, int x, int y, int w, int h)
-		{
-			g.setColor(glass(226));
-			g.fillRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setColor(new Color(GREEN.getRed(), GREEN.getGreen(), GREEN.getBlue(), 72));
-			g.drawRoundRect(x, y, w, h, RADIUS + 6, RADIUS + 6);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(GREEN.darker());
-			drawClippedString(g, "OUTPUT SPREAD", x + 12, y + 19, w - 24);
-			g.setFont(font(Font.BOLD, 17));
-			g.setColor(TEXT);
-			drawClippedString(g, formatCount(analysis.uniqueRecommendedTargets), x + 12, y + 42, w - 24);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, "unique recommendation outputs", x + 12, y + 58, w - 24);
-			int rowY = y + 76;
-			int rowH = 24;
-			int max = 1;
-			for (GraphAnalysisEngine.NodeScore node : analysis.topRecommendedTargets)
-			{
-				max = Math.max(max, node.value);
-			}
-			for (int i = 0; i < Math.min(3, analysis.topRecommendedTargets.size()); i++)
-			{
-				GraphAnalysisEngine.NodeScore node = analysis.topRecommendedTargets.get(i);
-				drawOutputRow(g, x + 12, rowY + i * (rowH + 7), w - 24, rowH, i + 1, node, max);
-			}
-			if (analysis.topRecommendedTargets.isEmpty())
-			{
-				g.setFont(font(Font.PLAIN, 10));
-				g.setColor(MUTED);
-				drawWrapped(g, "No recommendation output rows have been saved yet.",
-						x + 12, rowY + 10, w - 24, 2, 13);
-			}
-		}
-
-		private void drawOutputRow(
-				Graphics2D g,
-				int x,
-				int y,
-				int w,
-				int h,
-				int rank,
-				GraphAnalysisEngine.NodeScore node,
-				int max)
-		{
-			g.setColor(SURFACE_ALT);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(214, 224, 240)));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(rank == 1 ? GREEN : rank == 2 ? PURPLE : BLUE);
-			g.fillRoundRect(x, y, 24, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(Color.WHITE);
-			drawClippedString(g, Integer.toString(rank), x + 8, y + 16, 14);
-			g.setColor(TEXT);
-			drawClippedString(g, compact(node.name, 20), x + 32, y + 15, w - 76);
-			int barW = Math.max(20, w - 46);
-			int barY = y + h - 5;
-			g.setColor(track());
-			g.fillRoundRect(x + 32, barY, barW, 3, 3, 3);
-			g.setColor(rank == 1 ? GREEN : rank == 2 ? PURPLE : BLUE);
-			g.fillRoundRect(x + 32,
-					barY,
-					Math.max(2, (int)(barW * (node.value / (double)Math.max(1, max)))),
-					3,
-					3,
-					3);
-		}
-
-		private void drawImpactCurve(
-				Graphics2D g,
-				int x1,
-				int y1,
-				int x2,
-				int y2,
-				Color color,
-				int index)
-		{
-			int controlX = (x1 + x2) / 2;
-			int controlY = (y1 + y2) / 2 + (index % 2 == 0 ? -14 : 14);
-			g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 78));
-			g.draw(new QuadCurve2D.Double(x1, y1, controlX, controlY, x2, y2));
-			double t = (phase + index * 0.23) % 1.0;
-			double px = (1 - t) * (1 - t) * x1 + 2 * (1 - t) * t * controlX + t * t * x2;
-			double py = (1 - t) * (1 - t) * y1 + 2 * (1 - t) * t * controlY + t * t * y2;
-			g.setColor(color);
-			g.fill(new Ellipse2D.Double(px - 3, py - 3, 6, 6));
-		}
-
-		private void drawSummaryCard(
-				Graphics2D g,
-				int x,
-				int y,
-				int w,
-				int h,
-				String label,
-				String value,
-				String detail,
-				Color color,
-				double progress)
-		{
-			g.setColor(SURFACE_ALT);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 228, 242)));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 10, y + 15, w - 20);
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(TEXT);
-			drawClippedString(g, value, x + 10, y + 32, w - 20);
-			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, detail, x + 10, y + h - 18, w - 20);
-			drawProgressBar(g, x + 10, y + h - 10, w - 20, 5, progress, color);
-		}
-
-		private void drawProgressBar(Graphics2D g, int x, int y, int w, int h, double value, Color color)
-		{
-			g.setColor(track());
-			g.fillRoundRect(x, y, w, h, h, h);
-			g.setColor(color);
-			g.fillRoundRect(x, y, Math.max(2, (int)(w * Math.max(0.0, Math.min(1.0, value)))), h, h, h);
-		}
-
-		private double ratio(long value, long total)
-		{
-			return total <= 0L ? 0.0 : value / (double)total;
-		}
-
-		private String recommendationRead(double changedRatio, double sameRatio)
-		{
-			if (!analysis.available)
-			{
-				return "waiting for graph data";
-			}
-			if (analysis.recommendationEdgeCount == 0L)
-			{
-				return "no recommendations saved";
-			}
-			if (changedRatio > 0.55)
-			{
-				return "mostly rerouted";
-			}
-			if (sameRatio > 0.65)
-			{
-				return "mostly preserved";
-			}
-			return "mixed behavior";
-		}
-
-		private String spreadRead()
-		{
-			if (analysis.recommendationEdgeCount == 0L)
-			{
-				return "no output spread";
-			}
-			if (analysis.recommendationDiversity < 0.10)
-			{
-				return "very concentrated";
-			}
-			if (analysis.recommendationDiversity < 0.25)
-			{
-				return "moderately concentrated";
-			}
-			return "diverse outputs";
-		}
-	}
-
 	private static final class RankingsPanel extends VisualPanel
 	{
 		protected void paintComponent(Graphics graphics)
@@ -4247,18 +4107,18 @@ final class GraphInsightsPanel extends JPanel
 			g.setPaint(new GradientPaint(
 					x,
 					y,
-					themed(new Color(249, 251, 255), StudioNightTheme.NIGHT_SURFACE),
+					themed(NebulaDesign.DAY_SURFACE, NebulaDesign.NIGHT_SURFACE),
 					x + w,
 					y + h,
-					tint(color, 0.88f)));
+					tint(color, 0.90f)));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(220, 229, 244)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(glass(186));
-			g.fillRoundRect(x + 8, y + 8, w - 16, 24, RADIUS, RADIUS);
+			g.setColor(color);
+			g.fillOval(x + 12, y + 15, 7, 7);
 			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			drawClippedString(g, title.toUpperCase(Locale.US), x + 18, y + 24, w - 36);
+			g.setColor(deep(color));
+			drawClippedString(g, title.toUpperCase(Locale.US), x + 25, y + 24, w - 43);
 			if (rows == null || rows.isEmpty())
 			{
 				g.setFont(font(Font.PLAIN, 11));
@@ -4300,12 +4160,12 @@ final class GraphInsightsPanel extends JPanel
 		{
 			g.setColor(glass(224));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(218, 228, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(rank == 1 ? color : tint(color, 0.20f));
+			g.setColor(rank == 1 ? color : tint(color, 0.80f));
 			g.fillRoundRect(x, y, 34, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 11));
-			g.setColor(rank == 1 ? Color.WHITE : color.darker());
+			g.setColor(rank == 1 ? NebulaDesign.TEXT_ON_ACCENT : deep(color));
 			drawClippedString(g, Integer.toString(rank), x + 12, y + h / 2 + 4, 16);
 			int valueW = 54;
 			g.setFont(font(Font.BOLD, 11));
@@ -4315,7 +4175,7 @@ final class GraphInsightsPanel extends JPanel
 			g.setColor(MUTED);
 			drawClippedString(g, score.detail, x + 44, y + h - 7, w - 54 - valueW);
 			g.setFont(font(Font.BOLD, 11));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, formatCount(score.value), x + w - valueW, y + 17, valueW - 8);
 			int barX = x + 44;
 			int barY = y + h - 4;
@@ -4373,25 +4233,25 @@ final class GraphInsightsPanel extends JPanel
 			g.setPaint(new GradientPaint(
 					x,
 					y,
-					tint(color, 0.13f),
+					tint(color, 0.84f),
 					x + w,
 					y + h,
-					themed(new Color(250, 252, 255), StudioNightTheme.NIGHT_SURFACE_ALT)));
+					themed(NebulaDesign.DAY_SURFACE, NebulaDesign.NIGHT_SURFACE_ALT)));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.43f));
+			g.setColor(alpha(color, 88));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 60));
-			g.fillRoundRect(x, y, 6, h, RADIUS, RADIUS);
+			g.setColor(alpha(color, 60));
+			g.fillRoundRect(x, y, 5, h, RADIUS, RADIUS);
 
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, "INTERPRETATION", x + 14, y + 17, w - 28);
+			g.setColor(deep(color));
+			drawClippedString(g, "INTERPRETATION", x + 15, y + 17, w - 28);
 			g.setFont(font(Font.BOLD, 15));
 			g.setColor(TEXT);
-			drawClippedString(g, analysis.statusLabel(), x + 14, y + 39, w - 28);
+			drawClippedString(g, sentenceCase(analysis.statusLabel()), x + 15, y + 39, w - 28);
 			g.setFont(font(Font.PLAIN, 11));
-			g.setColor(TEXT);
-			drawWrapped(g, mainTakeaway(), x + 14, y + 60, w - 28,
+			g.setColor(MUTED);
+			drawWrapped(g, mainTakeaway(), x + 15, y + 60, w - 28,
 					h < 116 ? 2 : 3, 14);
 
 			int footerY = y + h - 32;
@@ -4419,10 +4279,10 @@ final class GraphInsightsPanel extends JPanel
 			}
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(222, 230, 242)));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 9));
-			g.setColor(PURPLE.darker());
+			g.setColor(deep(PURPLE));
 			drawClippedString(g, "ARTIFACTS", x + 12, y + 17, w - 24);
 
 			int chipY = y + 28;
@@ -4437,11 +4297,11 @@ final class GraphInsightsPanel extends JPanel
 				g.setColor(glass(190));
 				g.fillRoundRect(x + 10, contractY, w - 20, y + h - contractY - 8,
 						RADIUS, RADIUS);
-				g.setColor(quietLine(new Color(222, 230, 242)));
+				g.setColor(BORDER);
 				g.drawRoundRect(x + 10, contractY, w - 20, y + h - contractY - 8,
 						RADIUS, RADIUS);
 				g.setFont(font(Font.BOLD, 9));
-				g.setColor(PURPLE.darker());
+				g.setColor(deep(PURPLE));
 				drawClippedString(g, "READ-ONLY", x + 20, contractY + 16, w - 40);
 				g.setFont(font(Font.PLAIN, 10));
 				g.setColor(TEXT);
@@ -4465,14 +4325,14 @@ final class GraphInsightsPanel extends JPanel
 				int h,
 				Color color)
 		{
-			g.setColor(tint(color, 0.14f));
+			g.setColor(tint(color, 0.86f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.42f));
+			g.setColor(alpha(color, 70));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setFont(font(Font.BOLD, 8));
-			g.setColor(color.darker());
+			g.setColor(deep(color));
 			drawClippedString(g, label.toUpperCase(Locale.US), x + 10, y + 13, w - 20);
-			g.setFont(font(Font.BOLD, 10));
+			g.setFont(NebulaDesign.fontMono(10f));
 			g.setColor(TEXT);
 			drawClippedString(g, file == null ? "Not selected" : file.getName(),
 					x + 10, y + 29, w - 20);
@@ -4499,12 +4359,12 @@ final class GraphInsightsPanel extends JPanel
 				String label,
 				Color color)
 		{
-			g.setColor(tint(color, 0.17f));
+			g.setColor(tint(color, 0.85f));
 			g.fillRoundRect(x, y, w, h, h, h);
-			g.setColor(tint(color, 0.42f));
+			g.setColor(alpha(color, 78));
 			g.drawRoundRect(x, y, w, h, h, h);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
+			g.setFont(NebulaDesign.fontMedium(9.5f));
+			g.setColor(deep(color));
 			drawClippedString(g, label, x + 10, y + 15, w - 20);
 		}
 
@@ -4532,131 +4392,4 @@ final class GraphInsightsPanel extends JPanel
 		}
 	}
 
-	private static final class WarningsPanel extends VisualPanel
-	{
-		protected void paintComponent(Graphics graphics)
-		{
-			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D)graphics.create();
-			prepare(g);
-			int w = getWidth();
-			int y = 8;
-			int calloutH = 64;
-			Color color = statusColor(analysis);
-			g.setColor(tint(color, 0.13f));
-			g.fillRoundRect(8, y, w - 16, calloutH, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.44f));
-			g.drawRoundRect(8, y, w - 16, calloutH, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(color.darker());
-			drawClippedString(g, analysis.statusLabel(), 20, y + 22, w - 40);
-			g.setFont(font(Font.PLAIN, 11));
-			g.setColor(TEXT);
-			drawWrapped(g, mainTakeaway(), 20, y + 41, w - 40, 2, 13);
-
-			y += calloutH + 16;
-			List<String> warnings = analysis.warnings;
-			for (int i = 0; i < Math.min(5, warnings.size()); i++)
-			{
-				g.setColor(i == 0 ? SURFACE_ALT : SURFACE);
-				g.fillRoundRect(8, y, w - 16, 44, RADIUS, RADIUS);
-				g.setColor(quietLine(new Color(222, 230, 242)));
-				g.drawRoundRect(8, y, w - 16, 44, RADIUS, RADIUS);
-				g.setColor(i == 0 ? color : MUTED);
-				g.fillOval(20, y + 17, 8, 8);
-				g.setFont(font(Font.PLAIN, 11));
-				g.setColor(TEXT);
-				drawWrapped(g, warnings.get(i), 38, y + 17, w - 54, 2, 13);
-				y += 50;
-			}
-			g.dispose();
-		}
-
-		private String mainTakeaway()
-		{
-			if (!analysis.available)
-			{
-				return "The tab is waiting for the simulator's graph map and edge files.";
-			}
-			if (analysis.validEdgeCount == 0L)
-			{
-				return "Users are loaded, but no recommendation edges have been persisted yet.";
-			}
-				if (analysis.estimatedCommunityCount <= 2 && analysis.activeNodeCount >= 20)
-				{
-					return communityMetricDetail(analysis)
-							+ " finds only " + analysis.estimatedCommunityCount
-							+ " groups, so the active graph is clustering into very few communities.";
-				}
-			if (analysis.hubConcentration >= 0.35)
-			{
-				return "One or two nodes receive a large share of graph edges.";
-			}
-			return "The saved graph artifacts are structurally readable and ready for interpretation.";
-		}
-	}
-
-	private static final class ArtifactPanel extends VisualPanel
-	{
-		protected void paintComponent(Graphics graphics)
-		{
-			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D)graphics.create();
-			prepare(g);
-			int w = getWidth();
-			int y = 8;
-			drawArtifact(g, "Node map", analysis.mappingFile, 8, y, w - 16, BLUE);
-			y += 72;
-			drawArtifact(g, "Edge list", analysis.edgeFile, 8, y, w - 16, GREEN);
-			y += 82;
-			int boxH = Math.max(96, getHeight() - y - 12);
-			g.setColor(SURFACE_ALT);
-			g.fillRoundRect(8, y, w - 16, boxH, RADIUS, RADIUS);
-			g.setColor(quietLine(new Color(222, 230, 242)));
-			g.drawRoundRect(8, y, w - 16, boxH, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(PURPLE.darker());
-			g.drawString("READ-ONLY CONTRACT", 20, y + 18);
-			g.setFont(font(Font.PLAIN, 11));
-			g.setColor(TEXT);
-			drawWrapped(g,
-					"This tab reads the same files Gephi uses. It never writes recommendation scores, never changes edge persistence, and never changes graph export behavior.",
-					20,
-					y + 40,
-					w - 40,
-					6,
-					15);
-			g.dispose();
-		}
-
-		private void drawArtifact(
-				Graphics2D g,
-				String label,
-				File file,
-				int x,
-				int y,
-				int w,
-				Color color)
-		{
-			g.setColor(tint(color, 0.13f));
-			g.fillRoundRect(x, y, w, 58, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.42f));
-			g.drawRoundRect(x, y, w, 58, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			g.drawString(label.toUpperCase(Locale.US), x + 12, y + 17);
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(TEXT);
-			drawClippedString(g, file == null ? "Not selected" : file.getName(), x + 12, y + 36, w - 24);
-			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
-			drawClippedString(g,
-					file != null && file.isFile()
-							? formatCount(file.length()) + " bytes"
-							: "missing",
-					x + 12,
-					y + 50,
-					w - 24);
-		}
-	}
 }

@@ -8,6 +8,7 @@ import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
@@ -48,28 +49,21 @@ import javax.swing.table.DefaultTableCellRenderer;
 final class ActualSchedulerPanel extends JPanel
 		implements NodeExecutionMonitor.Listener
 {
-	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
-			new Color(242, 246, 250), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-			Color.WHITE, StudioNightTheme.NIGHT_SURFACE);
-	private static final Color SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(247, 250, 253), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color BORDER = StudioNightTheme.adaptiveColor(
-			new Color(207, 216, 227), StudioNightTheme.NIGHT_BORDER);
-	private static final Color TEXT = StudioNightTheme.adaptiveColor(
-			new Color(24, 29, 36), StudioNightTheme.NIGHT_TEXT);
-	private static final Color MUTED = StudioNightTheme.adaptiveColor(
-			new Color(91, 101, 116), StudioNightTheme.NIGHT_MUTED);
-	private static final Color BLUE = StudioNightTheme.adaptiveColor(
-			new Color(83, 113, 220), StudioNightTheme.NIGHT_BLUE);
-	private static final Color GREEN = StudioNightTheme.adaptiveColor(
-			new Color(88, 154, 112), StudioNightTheme.NIGHT_GREEN);
-	private static final Color AMBER = StudioNightTheme.adaptiveColor(
-			new Color(190, 145, 66), StudioNightTheme.NIGHT_AMBER);
-	private static final Color PURPLE = StudioNightTheme.adaptiveColor(
-			new Color(129, 100, 211), StudioNightTheme.NIGHT_PURPLE);
-	private static final Color RED = StudioNightTheme.adaptiveColor(
-			new Color(202, 74, 63), StudioNightTheme.NIGHT_RED);
+	private static final Color BACKGROUND = NebulaDesign.CANVAS_TOP;
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+	private static final Color RED = NebulaDesign.DANGER;
+	private static final int BTN_PRIMARY = 0;
+	private static final int BTN_SUCCESS = 1;
+	private static final int BTN_NEUTRAL = 2;
+	private static final int BTN_DANGER = 3;
 	private static final DecimalFormat DECIMAL = new DecimalFormat("0.##");
 
 	private final ControllerAgentGui owner;
@@ -79,43 +73,43 @@ final class ActualSchedulerPanel extends JPanel
 	private final JComboBox<SchedulerLabEngine.SchedulingPolicy> policyBox =
 			new JComboBox<SchedulerLabEngine.SchedulingPolicy>(
 					SchedulerLabEngine.SchedulingPolicy.values());
-	private final JButton applyButton = button("Apply to simulator", BLUE, Color.WHITE);
+	private final JButton applyButton = button("Apply to simulator", BTN_PRIMARY);
 	private final JButton restoreButton =
-			button("Restore DSMP default", SURFACE_ALT, TEXT);
+			button("Restore DSMP default", BTN_NEUTRAL);
 	private final JButton capacityButton =
-			button("Node capacity", SURFACE_ALT, TEXT);
+			button("Node capacity", BTN_NEUTRAL);
 	private final JButton timelineButton =
-			button("Save live run", GREEN, Color.WHITE);
+			button("Save live run", BTN_SUCCESS);
 	private final JComboBox<Integer> liveNodeBox = new JComboBox<Integer>();
 	private final JComboBox<SchedulerLabEngine.SchedulingPolicy> livePolicyBox =
 			new JComboBox<SchedulerLabEngine.SchedulingPolicy>(
 					SchedulerLabEngine.SchedulingPolicy.values());
 	private final JSlider liveCapacitySlider = new JSlider(10, 200, 100);
 	private final JButton livePauseButton =
-			button("Pause node", SURFACE_ALT, TEXT);
+			button("Pause node", BTN_NEUTRAL);
 	private final JButton liveResumeButton =
-			button("Resume", SURFACE_ALT, TEXT);
+			button("Resume", BTN_NEUTRAL);
 	private final JButton liveUnavailableButton =
-			button("Unavailable", StudioNightTheme.adaptiveColor(
-					new Color(255, 236, 234), StudioNightTheme.NIGHT_PANEL_INK), RED);
+			button("Unavailable", BTN_DANGER);
 	private final JButton liveAvailableButton =
-			button("Available", StudioNightTheme.adaptiveColor(
-					new Color(222, 242, 229), StudioNightTheme.NIGHT_PANEL_INK), GREEN);
+			button("Available", BTN_SUCCESS);
 	private final JButton liveRedirectButton =
-			button("Move pending here", GREEN, Color.WHITE);
+			button("Move pending here", BTN_SUCCESS);
 	private final JButton liveApplyPolicyButton =
-			button("Switch remaining policy", BLUE, Color.WHITE);
+			button("Switch remaining policy", BTN_PRIMARY);
 	private final JButton liveResetButton =
-			button("Reset live controls", SURFACE_ALT, TEXT);
+			button("Reset live controls", BTN_NEUTRAL);
 	private final JLabel liveControlStatus = new JLabel("Live controls idle.");
 	private final JLabel modeMetric = metricValue("--");
 	private final JLabel policyMetric = metricValue("--");
 	private final JLabel nodeMetric = metricValue("--");
 	private final JLabel heapMetric = metricValue("--");
 	private final JLabel contractMetric = metricValue("--");
-	private final JLabel statusPill = new JLabel("READY");
-	private final JLabel statusLabel =
-			new JLabel("Choose a scheduling contract before running the simulator.");
+	private final JLabel statusPill = pill("READY", GREEN);
+	private final JLabel statusLabel = themedLabel(
+			"Choose a scheduling contract before running the simulator.",
+			TEXT,
+			NebulaDesign.fontMedium(12f));
 	private final JTextArea planLog = new JTextArea();
 	private final PlanCanvas planCanvas = new PlanCanvas();
 	private final WorkQueueCanvas queueCanvas = new WorkQueueCanvas();
@@ -146,8 +140,9 @@ final class ActualSchedulerPanel extends JPanel
 	{
 		super(new BorderLayout(0, 14));
 		this.owner = owner;
+		setOpaque(false);
 		setBackground(BACKGROUND);
-		setBorder(new EmptyBorder(14, 14, 14, 14));
+		setBorder(new EmptyBorder(14, 16, 14, 16));
 		timelineTimer = new Timer(22, new ActionListener()
 		{
 			public void actionPerformed(ActionEvent event)
@@ -218,10 +213,10 @@ final class ActualSchedulerPanel extends JPanel
 
 	void refreshFromSimulator()
 	{
-		int nodes = Math.max(1, owner.currentNodeCountSetting());
+		int nodes = Math.max(1, ownerNodeCount());
 		int heap = Math.max(
 				RuntimeResourceSettings.MIN_HEAP_MB,
-				owner.currentHeapSetting());
+				ownerHeapSetting());
 		NodeCapacityRegistry.configureForNodeCount(nodes, heap);
 		RecommendationSchedulerPlan plan =
 				RecommendationSchedulerRegistry.snapshot();
@@ -257,22 +252,31 @@ final class ActualSchedulerPanel extends JPanel
 
 	private JComponent createHeader()
 	{
-		JPanel header = surface(new BorderLayout(24, 0));
-		header.setBorder(new EmptyBorder(16, 18, 16, 18));
+		JPanel header = new HeroCardPanel(new BorderLayout(24, 0));
+		header.setBorder(new EmptyBorder(13, 20, 15, 18));
 
 		JPanel titleStack = new JPanel();
 		titleStack.setOpaque(false);
 		titleStack.setLayout(new BoxLayout(titleStack, BoxLayout.Y_AXIS));
-		JLabel title = new JLabel("Scheduler Lab");
-		title.setFont(font(Font.BOLD, 28));
-		title.setForeground(TEXT);
-		JLabel subtitle = new JLabel(
-				"Apply a real scheduling plan to safe simulator assignment points; Doc2Vec uses live dynamic candidate shards.");
-		subtitle.setFont(font(Font.PLAIN, 12));
-		subtitle.setForeground(MUTED);
-		titleStack.add(title);
-		titleStack.add(Box.createRigidArea(new Dimension(0, 4)));
+		JLabel eyebrow = themedLabel("SCHEDULING", BLUE, NebulaDesign.fontSection());
+		eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		JLabel title = themedLabel("Scheduler Lab", TEXT, NebulaDesign.fontDisplay());
+		JLabel subtitle = themedLabel(
+				"Apply a real scheduling plan to safe simulator assignment points; Doc2Vec uses live dynamic candidate shards.",
+				MUTED,
+				NebulaDesign.fontBody(12.5f));
+		subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+		JPanel titleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+		titleRow.setOpaque(false);
+		titleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		titleRow.add(title);
+		titleRow.add(pill("LIVE SIMULATOR", GREEN));
+		titleStack.add(eyebrow);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 2)));
+		titleStack.add(titleRow);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 2)));
 		titleStack.add(subtitle);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 6)));
 		titleStack.add(createAttributionBlock());
 
 		header.add(titleStack, BorderLayout.WEST);
@@ -382,11 +386,11 @@ final class ActualSchedulerPanel extends JPanel
 				JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
 		body.add(queueScroll, BorderLayout.CENTER);
 		panel.add(body, BorderLayout.CENTER);
-		JLabel help = new JLabel(
-				"Shows real candidate-shard claims. Use the Live Workload tab to pause, redirect, throttle, or switch remaining queue work.");
-		help.setFont(font(Font.BOLD, 11));
-		help.setForeground(MUTED);
-		help.setBorder(new EmptyBorder(6, 8, 0, 8));
+		JLabel help = themedLabel(
+				"Shows real candidate-shard claims. Use the Live Workload tab to pause, redirect, throttle, or switch remaining queue work.",
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontBody(11.5f));
+		help.setBorder(new EmptyBorder(6, 2, 0, 2));
 		panel.add(help, BorderLayout.SOUTH);
 		return panel;
 	}
@@ -443,16 +447,48 @@ final class ActualSchedulerPanel extends JPanel
 	private JComponent createNodeTablePanel()
 	{
 		JPanel panel = section("Node Assignment Preview");
-		nodeTable.setRowHeight(30);
-		nodeTable.setFillsViewportHeight(true);
-		nodeTable.setShowGrid(false);
-		nodeTable.setIntercellSpacing(new Dimension(0, 0));
-		nodeTable.setFont(font(Font.PLAIN, 12));
-		nodeTable.getTableHeader().setFont(font(Font.BOLD, 11));
-		nodeTable.getTableHeader().setForeground(MUTED);
+		configureTable(nodeTable, 32);
 		nodeTable.setDefaultRenderer(Object.class, new NodeCellRenderer());
-		panel.add(new JScrollPane(nodeTable), BorderLayout.CENTER);
+		applyColumnWidths(nodeTable,
+				new int[] { 44, 88, 56, 66, 50, 56, 48, 48 });
+		panel.add(wrapTable(nodeTable), BorderLayout.CENTER);
 		return panel;
+	}
+
+	private static void configureTable(JTable table, int rowHeight)
+	{
+		table.setRowHeight(rowHeight);
+		table.setFillsViewportHeight(true);
+		table.setShowGrid(false);
+		table.setIntercellSpacing(new Dimension(0, 0));
+		table.setBackground(SURFACE);
+		table.setForeground(TEXT);
+		table.setSelectionBackground(NebulaDesign.SELECTION);
+		table.setSelectionForeground(TEXT);
+		table.setFont(NebulaDesign.fontBody(12f));
+		table.getTableHeader().setDefaultRenderer(new HeaderRenderer());
+		table.getTableHeader().setReorderingAllowed(false);
+	}
+
+	private static JScrollPane wrapTable(JTable table)
+	{
+		JScrollPane scroll = new JScrollPane(table);
+		scroll.setBorder(BorderFactory.createLineBorder(BORDER));
+		scroll.getViewport().setBackground(SURFACE);
+		scroll.setColumnHeaderView(table.getTableHeader());
+		scroll.getColumnHeader().setBackground(NebulaDesign.SURFACE_RAISED);
+		scroll.setOpaque(false);
+		return scroll;
+	}
+
+	private static void applyColumnWidths(JTable table, int[] widths)
+	{
+		int count = Math.min(widths.length, table.getColumnCount());
+		for (int index = 0; index < count; index++)
+		{
+			table.getColumnModel().getColumn(index)
+					.setPreferredWidth(widths[index]);
+		}
 	}
 
 	private JComponent createTimelinePanel()
@@ -466,11 +502,11 @@ final class ActualSchedulerPanel extends JPanel
 		timelineScroll.setVerticalScrollBarPolicy(
 				JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
 		panel.add(timelineScroll, BorderLayout.CENTER);
-		JLabel help = new JLabel(
-				"Live timing comes from the real Simulator run. Completed runs are stored in this session history.");
-		help.setFont(font(Font.BOLD, 11));
-		help.setForeground(MUTED);
-		help.setBorder(new EmptyBorder(6, 8, 0, 8));
+		JLabel help = themedLabel(
+				"Live timing comes from the real Simulator run. Completed runs are stored in this session history.",
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontBody(11.5f));
+		help.setBorder(new EmptyBorder(6, 2, 0, 2));
 		panel.add(help, BorderLayout.SOUTH);
 		return panel;
 	}
@@ -489,18 +525,14 @@ final class ActualSchedulerPanel extends JPanel
 		gbc.gridy = 0;
 		body.add(historyCanvas, gbc);
 
-		historyTable.setRowHeight(26);
-		historyTable.setFillsViewportHeight(true);
-		historyTable.setShowGrid(false);
-		historyTable.setIntercellSpacing(new Dimension(0, 0));
-		historyTable.setFont(font(Font.PLAIN, 12));
-		historyTable.getTableHeader().setFont(font(Font.BOLD, 11));
-		historyTable.getTableHeader().setForeground(MUTED);
+		configureTable(historyTable, 28);
 		historyTable.setDefaultRenderer(Object.class, new NodeCellRenderer());
+		applyColumnWidths(historyTable,
+				new int[] { 64, 72, 96, 110, 84, 52, 84, 84, 56, 76, 56 });
 		gbc.gridy = 1;
 		gbc.weighty = 0.48;
 		gbc.insets = new Insets(0, 0, 0, 0);
-		body.add(new JScrollPane(historyTable), gbc);
+		body.add(wrapTable(historyTable), gbc);
 		panel.add(body, BorderLayout.CENTER);
 		return panel;
 	}
@@ -509,24 +541,21 @@ final class ActualSchedulerPanel extends JPanel
 	{
 		JPanel panel = section("Plan Log");
 		planLog.setEditable(false);
-		planLog.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-		planLog.setForeground(new Color(230, 236, 247));
-		planLog.setBackground(new Color(18, 24, 38));
+		planLog.setFont(NebulaDesign.fontMono(12f));
+		planLog.setForeground(NebulaDesign.CONSOLE_TEXT);
+		planLog.setBackground(NebulaDesign.CONSOLE);
 		planLog.setBorder(new EmptyBorder(12, 12, 12, 12));
-		panel.add(new JScrollPane(planLog), BorderLayout.CENTER);
+		JScrollPane scroll = new JScrollPane(planLog);
+		scroll.setBorder(BorderFactory.createLineBorder(BORDER));
+		scroll.getViewport().setBackground(NebulaDesign.CONSOLE);
+		panel.add(scroll, BorderLayout.CENTER);
 		return panel;
 	}
 
 	private JComponent createStatusBar()
 	{
-		JPanel bar = surface(new BorderLayout(10, 0));
-		bar.setBorder(new EmptyBorder(8, 12, 8, 12));
-		statusPill.setOpaque(true);
-		statusPill.setHorizontalAlignment(SwingConstants.CENTER);
-		statusPill.setBorder(new EmptyBorder(4, 14, 4, 14));
-		statusPill.setFont(font(Font.BOLD, 11));
-		statusLabel.setFont(font(Font.BOLD, 12));
-		statusLabel.setForeground(TEXT);
+		JPanel bar = surface(new BorderLayout(12, 0));
+		bar.setBorder(new EmptyBorder(8, 14, 10, 14));
 		bar.add(statusPill, BorderLayout.WEST);
 		bar.add(statusLabel, BorderLayout.CENTER);
 		return bar;
@@ -542,8 +571,8 @@ final class ActualSchedulerPanel extends JPanel
 						(RecommendationSchedulerPlan.Mode)modeBox.getSelectedItem(),
 						(SchedulerLabEngine.SchedulingPolicy)policyBox.getSelectedItem(),
 						RecommendationSchedulerRegistry.snapshot().getRevision(),
-						owner.currentNodeCountSetting(),
-						owner.currentHeapSetting(),
+						ownerNodeCount(),
+						ownerHeapSetting(),
 						"Preview only."));
 			}
 		};
@@ -568,8 +597,8 @@ final class ActualSchedulerPanel extends JPanel
 		{
 			public void actionPerformed(ActionEvent event)
 			{
-				int nodes = owner.currentNodeCountSetting();
-				int heap = owner.currentHeapSetting();
+				int nodes = ownerNodeCount();
+				int heap = ownerHeapSetting();
 				NodeCapacityRegistry.configureForNodeCount(nodes, heap);
 				if (NodeCapacitySettingsDialog.showDialog(
 						owner,
@@ -739,7 +768,7 @@ final class ActualSchedulerPanel extends JPanel
 	private void refreshLiveNodeChoices()
 	{
 		int selected = selectedLiveNode();
-		int nodes = Math.max(1, owner.currentNodeCountSetting());
+		int nodes = Math.max(1, ownerNodeCount());
 		if (actualSnapshot != null && !actualSnapshot.getNodes().isEmpty())
 		{
 			nodes = Math.max(nodes, actualSnapshot.getNodes().size());
@@ -781,7 +810,7 @@ final class ActualSchedulerPanel extends JPanel
 
 	private RecommendationWorkQueueRegistry.QueueSnapshot currentLiveQueueSnapshot()
 	{
-		int nodeCount = Math.max(1, owner.currentNodeCountSetting());
+		int nodeCount = Math.max(1, ownerNodeCount());
 		if (actualSnapshot != null && !actualSnapshot.getNodes().isEmpty())
 		{
 			nodeCount = Math.max(nodeCount, actualSnapshot.getNodes().size());
@@ -859,8 +888,8 @@ final class ActualSchedulerPanel extends JPanel
 
 	private void applyPlan()
 	{
-		int nodes = owner.currentNodeCountSetting();
-		int heap = owner.currentHeapSetting();
+		int nodes = ownerNodeCount();
+		int heap = ownerHeapSetting();
 		NodeCapacityRegistry.configureForNodeCount(nodes, heap);
 		RecommendationSchedulerPlan.Mode mode =
 				(RecommendationSchedulerPlan.Mode)modeBox.getSelectedItem();
@@ -886,8 +915,8 @@ final class ActualSchedulerPanel extends JPanel
 
 	private void restoreDefault()
 	{
-		int nodes = owner.currentNodeCountSetting();
-		int heap = owner.currentHeapSetting();
+		int nodes = ownerNodeCount();
+		int heap = ownerHeapSetting();
 		NodeCapacityRegistry.resetToDefaults(nodes, heap);
 		NodeExecutionMonitor.refreshCapacityProfiles();
 		RecommendationSchedulerPlan plan =
@@ -903,12 +932,10 @@ final class ActualSchedulerPanel extends JPanel
 
 	private void updatePreview(RecommendationSchedulerPlan plan)
 	{
-		int nodes = owner.currentNodeCountSetting();
-		int heap = owner.currentHeapSetting();
-		int targetCount = Math.max(1, owner.getRecommendationBatchUserCount());
-		int algorithm = owner.algorithmSelectionBox == null
-				? ControllerAgent.K_MEANS
-				: owner.algorithmSelectionBox.getSelectedIndex();
+		int nodes = ownerNodeCount();
+		int heap = ownerHeapSetting();
+		int targetCount = Math.max(1, ownerTargetUserCount());
+		int algorithm = currentAlgorithm();
 		int workUnits = Math.max(24, Math.min(300,
 				targetCount > 1 ? targetCount : nodes * 24));
 		SchedulerLabEngine.WorkloadTemplate template =
@@ -987,9 +1014,7 @@ final class ActualSchedulerPanel extends JPanel
 				source,
 				actualPlan,
 				snapshot,
-				owner.algorithmSelectionBox == null
-						? ControllerAgent.K_MEANS
-						: owner.algorithmSelectionBox.getSelectedIndex());
+				currentAlgorithm());
 		runHistory.add(0, entry);
 		while (runHistory.size() > 18)
 		{
@@ -1027,19 +1052,41 @@ final class ActualSchedulerPanel extends JPanel
 
 	private int currentAlgorithm()
 	{
-		return owner.algorithmSelectionBox == null
+		return owner == null || owner.algorithmSelectionBox == null
 				? ControllerAgent.K_MEANS
 				: owner.algorithmSelectionBox.getSelectedIndex();
 	}
 
 	private int currentTargetCount()
 	{
-		return Math.max(1, owner.getRecommendationBatchUserCount());
+		return Math.max(1, ownerTargetUserCount());
 	}
 
 	private int currentCandidateCount()
 	{
-		return Math.max(1, owner.getCandidateUserCountEstimate());
+		return Math.max(1, ownerCandidateEstimate());
+	}
+
+	private int ownerNodeCount()
+	{
+		return owner == null ? 1 : owner.currentNodeCountSetting();
+	}
+
+	private int ownerHeapSetting()
+	{
+		return owner == null
+				? RuntimeResourceSettings.MIN_HEAP_MB
+				: owner.currentHeapSetting();
+	}
+
+	private int ownerTargetUserCount()
+	{
+		return owner == null ? 1 : owner.getRecommendationBatchUserCount();
+	}
+
+	private int ownerCandidateEstimate()
+	{
+		return owner == null ? 1 : owner.getCandidateUserCountEstimate();
 	}
 
 	private RecommendationSchedulerPlan timelinePlanForSnapshot(
@@ -1095,16 +1142,16 @@ final class ActualSchedulerPanel extends JPanel
 				.append(RecommendationModeSupport.algorithmName(algorithm))
 				.append('\n');
 		builder.append("target jobs: ").append(Math.max(1, targetCount)).append('\n');
-		builder.append("nodes: ").append(owner.currentNodeCountSetting()).append('\n');
+		builder.append("nodes: ").append(ownerNodeCount()).append('\n');
 		builder.append("heap: ")
 				.append(RuntimeResourceSettings.formatMegabytes(
-						owner.currentHeapSetting()))
+						ownerHeapSetting()))
 				.append('\n');
 		builder.append("contract: complete score maps only; organizer merge unchanged\n");
 		if (algorithm == ControllerAgent.Doc2Vec && plan.isActive())
 		{
 			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					owner.currentNodeCountSetting(),
+					ownerNodeCount(),
 					Math.max(1, targetCount));
 			builder.append("active simulator queue: Doc2Vec candidate shards are split into ")
 					.append(shardCount)
@@ -1122,8 +1169,8 @@ final class ActualSchedulerPanel extends JPanel
 				&& plan.allowsExperimentalSideEffects())
 		{
 			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					owner.currentNodeCountSetting(),
-					Math.max(1, owner.getCandidateUserCountEstimate()));
+					ownerNodeCount(),
+					Math.max(1, ownerCandidateEstimate()));
 			builder.append("active simulator queue: candidate users are split into ")
 					.append(shardCount)
 					.append(" live virtual jobs and claimed by recommender nodes\n");
@@ -1161,35 +1208,24 @@ final class ActualSchedulerPanel extends JPanel
 	private void setStatus(String label, String message, StatusTone tone)
 	{
 		statusPill.setText(label);
-		statusPill.setBackground(tone == StatusTone.ERROR
-				? StudioNightTheme.adaptiveColor(
-						new Color(255, 230, 230), StudioNightTheme.NIGHT_PANEL_INK)
-				: StudioNightTheme.adaptiveColor(
-						new Color(222, 242, 229), StudioNightTheme.NIGHT_PANEL_INK));
-		statusPill.setForeground(tone == StatusTone.ERROR
-				? new Color(151, 45, 45)
-				: new Color(45, 122, 76));
+		statusPill.putClientProperty("nebula.tone",
+				tone == StatusTone.ERROR ? RED : GREEN);
+		statusPill.revalidate();
+		statusPill.repaint();
 		statusLabel.setText(message);
 	}
 
 	private JPanel surface(BorderLayout layout)
 	{
-		JPanel panel = new JPanel(layout);
-		panel.setBackground(SURFACE);
-		panel.setBorder(BorderFactory.createLineBorder(BORDER));
-		return panel;
+		return new RoundedPanel(layout);
 	}
 
 	private JPanel section(String title)
 	{
-		JPanel panel = surface(new BorderLayout(0, 8));
-		panel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER),
-				new EmptyBorder(12, 14, 12, 14)));
-		JLabel label = new JLabel(title);
-		label.setFont(font(Font.BOLD, 16));
-		label.setForeground(TEXT);
-		panel.add(label, BorderLayout.NORTH);
+		JPanel panel = new RoundedPanel(new BorderLayout(0, 8));
+		panel.setBorder(new EmptyBorder(14, 16, 15, 16));
+		panel.add(themedLabel(title, TEXT, NebulaDesign.fontTitle()),
+				BorderLayout.NORTH);
 		return panel;
 	}
 
@@ -1197,28 +1233,58 @@ final class ActualSchedulerPanel extends JPanel
 	{
 		JPanel panel = new JPanel(new BorderLayout(0, 4));
 		panel.setOpaque(false);
-		JLabel label = new JLabel(title);
-		label.setFont(font(Font.BOLD, 11));
-		label.setForeground(MUTED);
-		component.setFont(font(Font.BOLD, 12));
-		panel.add(label, BorderLayout.NORTH);
+		panel.add(themedLabel(title, MUTED, NebulaDesign.fontMedium(11f)),
+				BorderLayout.NORTH);
+		styleControl(component);
 		panel.add(component, BorderLayout.CENTER);
 		return panel;
 	}
 
+	private static void styleControl(JComponent component)
+	{
+		component.setFont(NebulaDesign.fontBody(12.5f));
+		if (component instanceof JComboBox)
+		{
+			JComboBox<?> combo = (JComboBox<?>)component;
+			combo.setUI(new FlatComboUI());
+			combo.setBackground(SURFACE_ALT);
+			combo.setForeground(TEXT);
+			combo.setBorder(BorderFactory.createLineBorder(BORDER));
+			combo.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		}
+	}
+
 	private JPanel metricCard(String label, JLabel value, Color accent)
 	{
-		JPanel card = new JPanel(new BorderLayout(0, 2));
-		card.setBackground(SURFACE_ALT);
-		card.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createMatteBorder(0, 4, 0, 0, accent),
-				new EmptyBorder(9, 10, 9, 10)));
-		JLabel heading = new JLabel(label.toUpperCase(Locale.US));
-		heading.setFont(font(Font.BOLD, 10));
-		heading.setForeground(MUTED);
-		card.add(heading, BorderLayout.NORTH);
+		JPanel card = new RoundedPanel(new BorderLayout(0, 3));
+		card.setBorder(new EmptyBorder(9, 13, 9, 12));
+		JPanel headingRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		headingRow.setOpaque(false);
+		headingRow.add(hueDot(accent));
+		headingRow.add(themedLabel(
+				label.toUpperCase(Locale.US),
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontSection()));
+		card.add(headingRow, BorderLayout.NORTH);
 		card.add(value, BorderLayout.CENTER);
 		return card;
+	}
+
+	private static JComponent hueDot(final Color accent)
+	{
+		JComponent dot = new JComponent()
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(g);
+				g.setColor(accent);
+				g.fillOval(0, Math.max(0, (getHeight() - 8) / 2), 8, 8);
+				g.dispose();
+			}
+		};
+		dot.setPreferredSize(new Dimension(8, 13));
+		return dot;
 	}
 
 	private JPanel explainCard(String title, String detail, Color accent)
@@ -1250,39 +1316,147 @@ final class ActualSchedulerPanel extends JPanel
 		return card;
 	}
 
-	private static JButton button(String text, Color background, Color foreground)
+	private static JButton button(String text, final int kind)
 	{
-		JButton button = new JButton(text);
-		button.setUI(new javax.swing.plaf.basic.BasicButtonUI());
-		button.setFocusPainted(false);
-		button.setOpaque(true);
-		button.setContentAreaFilled(true);
-		button.setBorderPainted(true);
-		Color border = new Color(
-				Math.max(0, background.getRed() - 38),
-				Math.max(0, background.getGreen() - 38),
-				Math.max(0, background.getBlue() - 38));
-		button.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(border),
-				new EmptyBorder(10, 16, 10, 16)));
-		button.setBackground(background);
-		button.setForeground(foreground);
-		button.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
-		button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		JButton button = new JButton(text)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(g);
+				int w = getWidth();
+				int h = getHeight();
+				boolean hover = getModel().isRollover();
+				boolean pressed = getModel().isPressed();
+				int radius = NebulaDesign.RADIUS_CONTROL;
+				if (kind == BTN_PRIMARY || kind == BTN_SUCCESS)
+				{
+					Color base = kind == BTN_PRIMARY ? BLUE : GREEN;
+					Color fill;
+					if (kind == BTN_PRIMARY)
+					{
+						fill = pressed
+								? NebulaDesign.ACCENT_PRESS
+								: hover ? NebulaDesign.ACCENT_HOVER
+										: NebulaDesign.ACCENT;
+					}
+					else
+					{
+						fill = pressed
+								? StudioNightTheme.blend(base, Color.BLACK, 0.14f)
+								: hover ? StudioNightTheme.blend(
+										base, Color.WHITE, 0.12f) : base;
+					}
+					if (hover)
+					{
+						g.setColor(alpha(base, 55));
+						g.fillRoundRect(0, 0, w, h, radius + 3, radius + 3);
+					}
+					g.setColor(fill);
+					g.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+					g.setColor(kind == BTN_PRIMARY
+							? NebulaDesign.TEXT_ON_ACCENT
+							: themed(Color.WHITE, NebulaDesign.NIGHT_TEXT_ON_ACCENT));
+				}
+				else
+				{
+					g.setColor(hover ? NebulaDesign.SURFACE_RAISED : SURFACE);
+					g.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+					g.setColor(hover
+							? alpha(BLUE, 120)
+							: NebulaDesign.BORDER_STRONG);
+					g.drawRoundRect(1, 1, w - 3, h - 3, radius, radius);
+					g.setColor(kind == BTN_DANGER ? RED : TEXT);
+				}
+				g.setFont(getFont());
+				java.awt.FontMetrics metrics = g.getFontMetrics();
+				String value = getText();
+				g.drawString(value,
+						(w - metrics.stringWidth(value)) / 2,
+						(h - metrics.getHeight()) / 2 + metrics.getAscent());
+				g.dispose();
+			}
+		};
+		button.setFont(NebulaDesign.fontMedium(12.5f));
+		button.setContentAreaFilled(false);
+		button.setOpaque(false);
+		button.setRolloverEnabled(true);
+		button.setBorder(new EmptyBorder(9, 16, 9, 16));
+		NebulaWidgets.polishButton(button);
 		return button;
 	}
 
 	private static JLabel metricValue(String text)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 20));
-		label.setForeground(TEXT);
+		JLabel label = themedLabel(text, TEXT, NebulaDesign.fontSemiBold(19f));
+		label.setBorder(new EmptyBorder(0, 1, 0, 0));
 		return label;
 	}
 
+	/**
+	 * Nebula typography bridge: BOLD requests become Medium (small sizes) or
+	 * SemiBold, PLAIN requests become Inter Regular.
+	 */
 	private static Font font(int style, int size)
 	{
-		return new Font(Font.SANS_SERIF, style, size);
+		if (style == Font.BOLD)
+		{
+			return size <= 10
+					? NebulaDesign.fontMedium(size)
+					: NebulaDesign.fontSemiBold(size);
+		}
+		return NebulaDesign.fontBody(size);
+	}
+
+	private static JLabel themedLabel(String text, final Color color, Font font)
+	{
+		JLabel label = new JLabel(text)
+		{
+			public Color getForeground()
+			{
+				return color;
+			}
+		};
+		label.setFont(font);
+		return label;
+	}
+
+	/**
+	 * Self-painting status pill: soft tint capsule + strong hue label. The
+	 * tone lives in the "nebula.tone" client property so it survives theme
+	 * walks and can be switched by setStatus.
+	 */
+	private static JLabel pill(String text, Color tone)
+	{
+		JLabel label = new JLabel(text, SwingConstants.CENTER)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(g);
+				Object tone = getClientProperty("nebula.tone");
+				Color hue = tone instanceof Color ? (Color)tone : BLUE;
+				int w = getWidth();
+				int h = getHeight();
+				g.setColor(tint(hue, 0.84f));
+				g.fillRoundRect(0, 0, w, h, h, h);
+				g.setColor(alpha(hue, 84));
+				g.drawRoundRect(0, 0, w - 1, h - 1, h - 1, h - 1);
+				g.setColor(deep(hue));
+				g.setFont(getFont());
+				java.awt.FontMetrics metrics = g.getFontMetrics();
+				String value = getText();
+				g.drawString(value,
+						(w - metrics.stringWidth(value)) / 2,
+						(h - metrics.getHeight()) / 2 + metrics.getAscent());
+				g.dispose();
+			}
+		};
+		label.setFont(NebulaDesign.fontMedium(11f));
+		label.setOpaque(false);
+		label.setBorder(new EmptyBorder(5, 13, 5, 13));
+		label.putClientProperty("nebula.tone", tone);
+		return label;
 	}
 
 	private static Color themed(Color day, Color night)
@@ -1290,34 +1464,189 @@ final class ActualSchedulerPanel extends JPanel
 		return StudioNightTheme.isNightMode() ? night : day;
 	}
 
-	private static Color glass(int alpha)
+	private static Color glass(int alphaValue)
 	{
 		return themed(
-				new Color(255, 255, 255, alpha),
+				StudioNightTheme.withAlpha(NebulaDesign.DAY_SURFACE, alphaValue),
 				StudioNightTheme.withAlpha(
-						StudioNightTheme.NIGHT_SURFACE_ALT,
-						Math.min(255, alpha + 16)));
+						NebulaDesign.NIGHT_SURFACE_ALT,
+						Math.min(255, alphaValue + 16)));
 	}
 
 	private static Color track()
 	{
-		return themed(new Color(228, 235, 245),
-				StudioNightTheme.NIGHT_BACKGROUND_BOTTOM);
+		return themed(NebulaDesign.DAY_INSET, NebulaDesign.NIGHT_INSET);
+	}
+
+	private static Color alpha(Color color, int amount)
+	{
+		return new Color(color.getRed(), color.getGreen(), color.getBlue(),
+				Math.max(0, Math.min(255, amount)));
+	}
+
+	/**
+	 * Emphasis tone for small labels: deepened in day mode for contrast on
+	 * soft tints, kept bright in night mode where darkening would vanish.
+	 */
+	private static Color deep(Color color)
+	{
+		if (StudioNightTheme.isNightMode())
+		{
+			return new Color(color.getRed(), color.getGreen(), color.getBlue());
+		}
+		return color.darker();
+	}
+
+	/** Soft chip tint: day = toward white, night = toward the dark surface. */
+	private static Color tint(Color color, float amount)
+	{
+		if (StudioNightTheme.isNightMode())
+		{
+			float accentAmount = Math.max(0.10f, Math.min(0.42f, 1.0f - amount));
+			Color base = amount > 0.70f
+					? NebulaDesign.NIGHT_SURFACE
+					: StudioNightTheme.NIGHT_PANEL_INK;
+			return StudioNightTheme.blend(base, color, accentAmount);
+		}
+		int r = (int)(color.getRed() + (255 - color.getRed()) * amount);
+		int g = (int)(color.getGreen() + (255 - color.getGreen()) * amount);
+		int b = (int)(color.getBlue() + (255 - color.getBlue()) * amount);
+		return new Color(Math.min(255, r), Math.min(255, g), Math.min(255, b));
+	}
+
+	/** Rounded Nebula card panel: soft shadow in day, lifted surface at night. */
+	private static class RoundedPanel extends JPanel
+	{
+		RoundedPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D)graphics.create();
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Hero card: Nebula card plus a very subtle two-tone aurora wash. */
+	private static final class HeroCardPanel extends JPanel
+	{
+		HeroCardPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D)graphics.create();
+			int w = getWidth();
+			int h = getHeight();
+			NebulaWidgets.paintCard(g, 0, 0, w, h, NebulaDesign.RADIUS_CARD);
+			boolean night = StudioNightTheme.isNightMode();
+			java.awt.Shape oldClip = g.getClip();
+			g.clip(new java.awt.geom.RoundRectangle2D.Float(
+					0, 0, w - 1, h - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+			g.setPaint(new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(w * 0.24f, 0f),
+					Math.max(1f, w * 0.42f),
+					new float[] {0f, 1f},
+					new Color[] {
+							alpha(BLUE, night ? 26 : 15),
+							alpha(BLUE, 0)
+					}));
+			g.fillRect(0, 0, w, h);
+			g.setPaint(new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(w * 0.86f, h),
+					Math.max(1f, w * 0.38f),
+					new float[] {0f, 1f},
+					new Color[] {
+							alpha(PURPLE, night ? 22 : 13),
+							alpha(PURPLE, 0)
+					}));
+			g.fillRect(0, 0, w, h);
+			g.setClip(oldClip);
+			g.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Flat Nebula combo box delegate: quiet field + hand-drawn chevron. */
+	private static final class FlatComboUI
+			extends javax.swing.plaf.basic.BasicComboBoxUI
+	{
+		protected JButton createArrowButton()
+		{
+			JButton arrow = new JButton()
+			{
+				protected void paintComponent(Graphics graphics)
+				{
+					Graphics2D g = (Graphics2D)graphics.create();
+					NebulaWidgets.paintChevron(
+							g,
+							getWidth() / 2,
+							getHeight() / 2,
+							7,
+							MUTED);
+					g.dispose();
+				}
+			};
+			arrow.setBorder(BorderFactory.createEmptyBorder());
+			arrow.setContentAreaFilled(false);
+			arrow.setFocusable(false);
+			arrow.setOpaque(false);
+			return arrow;
+		}
+
+		public void paintCurrentValueBackground(
+				Graphics graphics,
+				Rectangle bounds,
+				boolean hasFocus)
+		{
+			graphics.setColor(SURFACE_ALT);
+			graphics.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+		}
+	}
+
+	/** Flat table header: raised surface, caps label, strong bottom rule. */
+	private static final class HeaderRenderer extends DefaultTableCellRenderer
+	{
+		public Component getTableCellRendererComponent(
+				JTable table,
+				Object value,
+				boolean isSelected,
+				boolean hasFocus,
+				int row,
+				int column)
+		{
+			super.getTableCellRendererComponent(
+					table, value, false, false, row, column);
+			setFont(NebulaDesign.fontMedium(11f));
+			setForeground(MUTED);
+			setBackground(NebulaDesign.SURFACE_RAISED);
+			setOpaque(true);
+			setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createMatteBorder(
+							0, 0, 1, 0, NebulaDesign.BORDER_STRONG),
+					new EmptyBorder(6, 8, 6, 8)));
+			return this;
+		}
 	}
 
 	private JComponent createAttributionBlock()
 	{
-		JPanel block = new JPanel(new GridLayout(2, 1, 0, 1));
-		block.setOpaque(false);
-		JLabel advisor = new JLabel("FACULTY ADVISOR   Dr. Abdolreza Abhari");
-		JLabel developer = new JLabel("DEVELOPER   Mohsen Alavi");
-		advisor.setFont(font(Font.BOLD, 10));
-		developer.setFont(font(Font.BOLD, 10));
-		advisor.setForeground(TEXT);
-		developer.setForeground(TEXT);
-		block.add(advisor);
-		block.add(developer);
-		return block;
+		JLabel credits = themedLabel(
+				"Faculty advisor Dr. Abdolreza Abhari   ·   Developer Mohsen Alavi",
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontMedium(11f));
+		credits.setAlignmentX(Component.LEFT_ALIGNMENT);
+		return credits;
 	}
 
 	private final class PlanCanvas extends JPanel
@@ -1329,10 +1658,8 @@ final class ActualSchedulerPanel extends JPanel
 
 		PlanCanvas()
 		{
-			setOpaque(true);
-			setBackground(SURFACE_ALT);
+			setOpaque(false);
 			setPreferredSize(new Dimension(620, 420));
-			setBorder(BorderFactory.createLineBorder(BORDER));
 		}
 
 		void setResult(
@@ -1350,11 +1677,13 @@ final class ActualSchedulerPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int width = getWidth();
 			int height = getHeight();
+			g.setColor(SURFACE_ALT);
+			g.fillRoundRect(0, 0, width - 1, height - 1, 12, 12);
+			g.setColor(BORDER);
+			g.drawRoundRect(0, 0, width - 1, height - 1, 12, 12);
 			if (height < 265)
 			{
 				drawCompactPlan(g, width, height);
@@ -1393,7 +1722,7 @@ final class ActualSchedulerPanel extends JPanel
 						labels[index], details[index]);
 				if (index < labels.length - 1)
 				{
-					g.setColor(new Color(180, 198, 224));
+					g.setColor(NebulaDesign.BORDER_STRONG);
 					g.setStroke(new BasicStroke(2f));
 					int ax = x + boxWidth;
 					int ay = y + 39;
@@ -1425,7 +1754,7 @@ final class ActualSchedulerPanel extends JPanel
 			String[] details = {
 					RecommendationModeSupport.algorithmName(algorithm),
 					plan.getPolicy().getLabel(),
-					"complete maps",
+					"full maps",
 					"dedupe",
 					"same path"
 			};
@@ -1447,7 +1776,7 @@ final class ActualSchedulerPanel extends JPanel
 				if (index < labels.length - 1
 						&& x + cardWidth + gap < width - 8)
 				{
-					g.setColor(new Color(180, 198, 224));
+					g.setColor(NebulaDesign.BORDER_STRONG);
 					g.setStroke(new BasicStroke(1.6f));
 					int ay = cardY + cardHeight / 2;
 					g.drawLine(x + cardWidth, ay,
@@ -1619,16 +1948,17 @@ final class ActualSchedulerPanel extends JPanel
 			g.drawRoundRect(x, y, width, height, 12, 12);
 			g.setColor(accent);
 			g.fillRoundRect(x, y, 8, height, 12, 12);
+			int available = width - 26;
 			g.setColor(TEXT);
 			g.setFont(font(Font.BOLD, 13));
-			g.drawString(shortText(title, Math.max(8, width / 8)),
+			g.drawString(fitText(g, title, available),
 					x + 18,
 					y + Math.min(30, Math.max(20, height / 2 - 1)));
 			g.setColor(MUTED);
 			g.setFont(font(Font.PLAIN, 11));
 			if (height >= 52)
 			{
-				g.drawString(shortText(detail, Math.max(8, width / 8)),
+				g.drawString(fitText(g, detail, available),
 						x + 18,
 						y + 51);
 			}
@@ -1648,9 +1978,8 @@ final class ActualSchedulerPanel extends JPanel
 		WorkQueueCanvas()
 		{
 			setOpaque(true);
-			setBackground(SURFACE_ALT);
+			setBackground(SURFACE);
 			setPreferredSize(new Dimension(520, 420));
-			setBorder(BorderFactory.createLineBorder(BORDER));
 		}
 
 		void setContext(
@@ -1688,9 +2017,7 @@ final class ActualSchedulerPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int width = getWidth();
 			int height = getHeight();
 			g.setColor(SURFACE);
@@ -1833,7 +2160,7 @@ final class ActualSchedulerPanel extends JPanel
 			{
 				return Math.max(1, snapshot.getNodes().size());
 			}
-			return Math.max(1, owner.currentNodeCountSetting());
+			return Math.max(1, ownerNodeCount());
 		}
 
 		private String effectiveRunId()
@@ -1915,7 +2242,7 @@ final class ActualSchedulerPanel extends JPanel
 			{
 				return NodeCapacityScheduler.virtualCandidateShardCount(
 						nodeCount,
-						Math.max(1, owner.getCandidateUserCountEstimate()));
+						Math.max(1, ownerCandidateEstimate()));
 			}
 			if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm))
 			{
@@ -2023,7 +2350,7 @@ final class ActualSchedulerPanel extends JPanel
 			int tokenY = y + 62;
 			if (live.hasActiveControls())
 			{
-				g.setColor(new Color(86, 96, 118));
+				g.setColor(MUTED);
 				g.setFont(font(Font.BOLD, 10));
 				g.drawString(shortText(live.compactSummary(), Math.max(20, width / 7)),
 						x + 14,
@@ -2136,9 +2463,7 @@ final class ActualSchedulerPanel extends JPanel
 			String activeText = active == null || active.isEmpty()
 					? (blocked ? control.statusLabel() : control.statusLabel())
 					: "shard " + active.get(0);
-			g.setColor(blocked
-					? themed(new Color(255, 249, 247), StudioNightTheme.NIGHT_PANEL_INK)
-					: SURFACE);
+			g.setColor(blocked ? tint(accent, 0.92f) : SURFACE);
 			g.fillRoundRect(x, y, width, height, 10, 10);
 			g.setColor(new Color(accent.getRed(), accent.getGreen(),
 					accent.getBlue(), 145));
@@ -2163,7 +2488,7 @@ final class ActualSchedulerPanel extends JPanel
 			}
 			if (height >= 56)
 			{
-				g.setColor(accent.darker());
+				g.setColor(deep(accent));
 				g.setFont(font(Font.BOLD, 10));
 				g.drawString(shortText(activeText, 18), x + 13, y + 47);
 			}
@@ -2171,7 +2496,7 @@ final class ActualSchedulerPanel extends JPanel
 			int fill = queue.getTotalShards() <= 0 ? 0
 					: (int)Math.round(trackWidth
 							* completeCount / (double)queue.getTotalShards());
-			g.setColor(new Color(229, 236, 245));
+			g.setColor(track());
 			g.fillRoundRect(x + 13, y + height - 13, trackWidth, 7, 7, 7);
 			g.setColor(accent);
 			g.fillRoundRect(x + 13, y + height - 13,
@@ -2197,7 +2522,7 @@ final class ActualSchedulerPanel extends JPanel
 				int height,
 				RecommendationWorkQueueRegistry.QueueSnapshot queue)
 		{
-			g.setColor(new Color(232, 247, 238));
+			g.setColor(tint(GREEN, 0.84f));
 			g.fillRoundRect(x, y, width, height, 42, 42);
 			g.setColor(GREEN);
 			g.setStroke(new BasicStroke(2f));
@@ -2205,7 +2530,7 @@ final class ActualSchedulerPanel extends JPanel
 			g.setColor(TEXT);
 			g.setFont(font(Font.BOLD, 13));
 			g.drawString("MERGE", x + 24, y + 28);
-			g.setColor(new Color(35, 105, 70));
+			g.setColor(deep(GREEN));
 			g.setFont(font(Font.BOLD, 11));
 			g.drawString(queue.getCompletedCount() + "/"
 					+ queue.getTotalShards(), x + 26, y + 49);
@@ -2334,7 +2659,7 @@ final class ActualSchedulerPanel extends JPanel
 				g.setColor(new Color(accent.getRed(), accent.getGreen(),
 						accent.getBlue(), 150));
 				g.drawRoundRect(tx, ty, token, token, 8, 8);
-				g.setColor(accent.darker());
+				g.setColor(deep(accent));
 				g.setFont(font(Font.BOLD, 9));
 				g.drawString(String.valueOf(shards.get(i).intValue()),
 						tx + 6,
@@ -2463,37 +2788,43 @@ final class ActualSchedulerPanel extends JPanel
 			case MEMORY_HEAVY:
 				return BLUE;
 			case UNRELIABLE:
-				return new Color(199, 81, 69);
+				return RED;
 			default:
 				return PURPLE;
 		}
 	}
 
+	/** Workload types map onto the fixed Nebula categorical chart palette. */
 	private static Color workloadColor(SchedulerLabEngine.WorkloadUnitType type)
 	{
 		if (type == null)
 		{
-			return BLUE;
+			return NebulaDesign.chartColor(0);
 		}
 		switch (type)
 		{
 			case PREPROCESSING_BATCH:
-				return BLUE;
+				return NebulaDesign.chartColor(0);
 			case TARGET_RECOMMENDATION_JOB:
-				return GREEN;
+				return NebulaDesign.chartColor(5);
 			case CANDIDATE_SHARD:
-				return PURPLE;
+				return NebulaDesign.chartColor(4);
 			case MODEL_TRAINING_JOB:
-				return AMBER;
+				return NebulaDesign.chartColor(2);
 			case SCORING_JOB:
-				return new Color(96, 126, 214);
+				return NebulaDesign.chartColor(1);
 			case GRAPH_REPORTING_JOB:
-				return new Color(97, 145, 187);
+				return NebulaDesign.chartColor(3);
 			default:
-				return BLUE;
+				return NebulaDesign.chartColor(0);
 		}
 	}
 
+	/**
+	 * Execution states keep dedicated hues so timeline segments and the
+	 * legend stay readable in both modes: idle states are quiet grays,
+	 * working states use the semantic/chart hues.
+	 */
 	private static Color stateColor(NodeExecutionMonitor.State state)
 	{
 		if (state == null)
@@ -2503,31 +2834,31 @@ final class ActualSchedulerPanel extends JPanel
 		switch (state)
 		{
 			case PROVISIONING:
-				return new Color(150, 160, 174);
+				return NebulaDesign.BORDER_STRONG;
 			case READY:
-				return new Color(126, 139, 156);
+				return NebulaDesign.TEXT_TERTIARY;
 			case RECEIVING:
 				return BLUE;
 			case WAITING_FOR_INPUT:
 			case WAITING_FOR_PEERS:
 			case WAITING_FOR_SHARED_MODEL:
-				return new Color(101, 132, 177);
+				return StudioNightTheme.blend(BLUE, NebulaDesign.TEXT_TERTIARY, 0.55f);
 			case PREPROCESSING:
 				return PURPLE;
 			case FEATURES:
-				return new Color(116, 95, 205);
+				return NebulaDesign.PINK;
 			case WAITING_FOR_MEMORY:
 				return AMBER;
 			case MODEL_RUNNING:
 				return GREEN;
 			case PUBLISHING:
-				return new Color(65, 145, 159);
+				return NebulaDesign.INFO;
 			case COMPLETE:
-				return new Color(72, 150, 96);
+				return StudioNightTheme.blend(GREEN, NebulaDesign.TEXT_TERTIARY, 0.35f);
 			case FAILED:
 				return RED;
 			case STOPPED:
-				return new Color(125, 125, 125);
+				return NebulaDesign.TEXT_TERTIARY;
 			default:
 				return BLUE;
 		}
@@ -2737,6 +3068,48 @@ final class ActualSchedulerPanel extends JPanel
 				? fallback : value.trim();
 	}
 
+	/**
+	 * Fits text into the available pixel width using the current font.
+	 * Prefers a clean break at a space or hyphen over a mid-word ellipsis.
+	 */
+	private static String fitText(Graphics2D g, String value, int available)
+	{
+		String text = cleanText(value, "");
+		FontMetrics metrics = g.getFontMetrics();
+		if (metrics.stringWidth(text) <= available)
+		{
+			return text;
+		}
+		int breakAt = -1;
+		for (int index = 0; index < text.length(); index++)
+		{
+			char letter = text.charAt(index);
+			if (letter == ' ' || letter == '-' || letter == '/')
+			{
+				String head = text.substring(0, index);
+				if (metrics.stringWidth(head) <= available)
+				{
+					breakAt = index;
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+		if (breakAt > 2)
+		{
+			return text.substring(0, breakAt);
+		}
+		String trimmed = text;
+		while (trimmed.length() > 1
+				&& metrics.stringWidth(trimmed + "…") > available)
+		{
+			trimmed = trimmed.substring(0, trimmed.length() - 1);
+		}
+		return trimmed + "…";
+	}
+
 	private static String shortText(String value, int maxLength)
 	{
 		String text = cleanText(value, "");
@@ -2878,9 +3251,8 @@ final class ActualSchedulerPanel extends JPanel
 		TimelineCanvas()
 		{
 			setOpaque(true);
-			setBackground(SURFACE_ALT);
+			setBackground(SURFACE);
 			setPreferredSize(new Dimension(920, timelinePreferredHeight(0)));
-			setBorder(BorderFactory.createLineBorder(BORDER));
 		}
 
 		void setSnapshot(
@@ -2916,9 +3288,7 @@ final class ActualSchedulerPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int width = getWidth();
 			int height = getHeight();
 			g.setColor(SURFACE);
@@ -2956,14 +3326,25 @@ final class ActualSchedulerPanel extends JPanel
 					24,
 					46);
 			int boxY = 16;
-			drawSmallMetric(g, width - 520, boxY, 120, "Nodes",
-					snapshot.getNodes().size() + "");
-			drawSmallMetric(g, width - 394, boxY, 118, "Elapsed",
-					formatDuration(elapsed));
-			drawSmallMetric(g, width - 268, boxY, 118, "Last node",
-					lastNodeLabel(snapshot, now));
-			drawSmallMetric(g, width - 142, boxY, 118, "Busy",
-					percentage(computeActualUtilization(snapshot, now)));
+			String[] labels = { "Nodes", "Elapsed", "Last node", "Busy" };
+			String[] values = {
+					snapshot.getNodes().size() + "",
+					formatDuration(elapsed),
+					lastNodeLabel(snapshot, now),
+					percentage(computeActualUtilization(snapshot, now))
+			};
+			int[] offsets = { 520, 394, 268, 142 };
+			int[] widths = { 120, 118, 118, 118 };
+			for (int index = 0; index < labels.length; index++)
+			{
+				int boxX = width - offsets[index];
+				if (boxX < 560)
+				{
+					continue;
+				}
+				drawSmallMetric(g, boxX, boxY, widths[index],
+						labels[index], values[index]);
+			}
 		}
 
 		private int drawNodeLanes(Graphics2D g, int width, int height)
@@ -3014,7 +3395,7 @@ final class ActualSchedulerPanel extends JPanel
 				int markerX = left + (int)Math.round(
 						lineWidth * (Math.max(start, now) - start) / (double)span);
 				markerX = Math.max(left, Math.min(right, markerX));
-				g.setColor(new Color(36, 152, 105, 190));
+				g.setColor(alpha(GREEN, 190));
 				g.setStroke(new BasicStroke(2f));
 				g.drawLine(markerX, top - 10, markerX, bottom + 6);
 				g.setFont(font(Font.BOLD, 10));
@@ -3110,7 +3491,7 @@ final class ActualSchedulerPanel extends JPanel
 			if (segmentWidth > 108)
 			{
 				g.setFont(font(Font.BOLD, 9));
-				g.setColor(Color.WHITE);
+				g.setColor(themed(Color.WHITE, NebulaDesign.NIGHT_TEXT_ON_ACCENT));
 				g.drawString(shortText(stage, 22), x + 6, y + 12);
 			}
 		}
@@ -3197,9 +3578,8 @@ final class ActualSchedulerPanel extends JPanel
 		HistoryComparisonCanvas()
 		{
 			setOpaque(true);
-			setBackground(SURFACE_ALT);
+			setBackground(SURFACE);
 			setPreferredSize(new Dimension(420, 180));
-			setBorder(BorderFactory.createLineBorder(BORDER));
 		}
 
 		void setHistory(List<ScheduleHistoryEntry> history)
@@ -3214,9 +3594,7 @@ final class ActualSchedulerPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int width = getWidth();
 			int height = getHeight();
 			g.setColor(SURFACE);
@@ -3224,52 +3602,66 @@ final class ActualSchedulerPanel extends JPanel
 			g.setColor(BORDER);
 			g.drawRoundRect(0, 0, width - 1, height - 1, 12, 12);
 			drawTitle(g, "Visual Comparison", 18, 26);
-			drawSubtitle(g,
-					"Shorter bars finish earlier; utilization shows how much node time was busy.",
-					18,
-					45);
-			if (history.isEmpty())
+			if (height >= 70)
 			{
-				g.setColor(new Color(232, 238, 247));
-				g.fillRoundRect(20, 70, width - 40, 42, 12, 12);
-				g.setColor(MUTED);
-				g.setFont(font(Font.BOLD, 12));
-				g.drawString("Run the Simulator to save the first real timing comparison.",
-						34,
-						96);
+				drawSubtitle(g,
+						"Shorter bars finish earlier; utilization shows how much node time was busy.",
+						18,
+						45);
+			}
+			if (height < 100)
+			{
 				g.dispose();
 				return;
 			}
+			if (history.isEmpty())
+			{
+				int boxHeight = Math.min(42, height - 66 - 10);
+				g.setColor(SURFACE_ALT);
+				g.fillRoundRect(20, 66, width - 40, boxHeight, 12, 12);
+				g.setColor(MUTED);
+				g.setFont(font(Font.BOLD, 12));
+				FontMetrics metrics = g.getFontMetrics();
+				g.drawString("Run the Simulator to save the first real timing comparison.",
+						34,
+						66 + (boxHeight + metrics.getAscent()
+								- metrics.getDescent()) / 2);
+				g.dispose();
+				return;
+			}
+			int startY = 68;
+			int count = Math.min(Math.min(6, history.size()),
+					Math.max(1, (height - startY - 14) / 22));
 			long max = 1L;
-			int count = Math.min(6, history.size());
 			for (int i = 0; i < count; i++)
 			{
 				max = Math.max(max, history.get(i).makespanMillis);
 			}
-			int startY = 68;
 			int rowHeight = Math.max(22, (height - startY - 18) / count);
+			int gutter = 122;
+			int barX = 100;
+			int trackWidth = Math.max(40, width - barX - gutter);
 			for (int i = 0; i < count; i++)
 			{
 				ScheduleHistoryEntry entry = history.get(i);
 				int y = startY + i * rowHeight;
-				int barX = 100;
 				int barWidth = Math.max(6,
-						(int)Math.round((width - 150)
+						(int)Math.round(trackWidth
 								* entry.makespanMillis / (double)max));
 				Color accent = i == 0 ? GREEN : BLUE;
 				g.setColor(TEXT);
 				g.setFont(font(Font.BOLD, 11));
-				g.drawString(entry.label(), 18, y + 12);
-				g.setColor(new Color(227, 234, 244));
-				g.fillRoundRect(barX, y + 3, width - 130, 10, 10, 10);
+				g.drawString(fitText(g, entry.label(), barX - 26), 18, y + 12);
+				g.setColor(track());
+				g.fillRoundRect(barX, y + 3, trackWidth, 10, 10, 10);
 				g.setColor(new Color(accent.getRed(), accent.getGreen(),
 						accent.getBlue(), 170));
 				g.fillRoundRect(barX, y + 3, barWidth, 10, 10, 10);
 				g.setColor(MUTED);
-				g.setFont(font(Font.PLAIN, 10));
+				g.setFont(NebulaDesign.fontMono(10f));
 				g.drawString(formatDuration(entry.makespanMillis) + " | "
 						+ percentage(entry.utilization),
-						barX + width - 124,
+						barX + trackWidth + 12,
 						y + 12);
 			}
 			g.dispose();
@@ -3279,8 +3671,8 @@ final class ActualSchedulerPanel extends JPanel
 	private final class NodeAssignmentTableModel extends AbstractTableModel
 	{
 		private final String[] columns = {
-				"Node", "Role", "Weight", "Assigned", "Complete", "Retries",
-				"Queue peak", "Busy ticks"
+				"Node", "Role", "Weight", "Assigned", "Done", "Retries",
+				"Peak", "Busy"
 		};
 		private SchedulerLabEngine.Result result;
 
@@ -3424,13 +3816,27 @@ final class ActualSchedulerPanel extends JPanel
 					hasFocus,
 					row,
 					column);
-			component.setFont(font(column == 0 || column == 1
-					? Font.BOLD : Font.PLAIN, 12));
+			String text = value == null ? "" : String.valueOf(value);
+			boolean numeric = text.length() > 0
+					&& (Character.isDigit(text.charAt(0))
+							|| text.charAt(0) == '-');
+			if (column <= 1 && !numeric)
+			{
+				component.setFont(NebulaDesign.fontMedium(12f));
+			}
+			else if (numeric)
+			{
+				component.setFont(NebulaDesign.fontMono(11.5f));
+			}
+			else
+			{
+				component.setFont(NebulaDesign.fontBody(12f));
+			}
 			component.setForeground(TEXT);
 			component.setBackground(isSelected
-					? themed(new Color(226, 236, 255), StudioNightTheme.NIGHT_PANEL_INK)
-					: (row % 2 == 0 ? SURFACE : SURFACE_ALT));
-			setBorder(new EmptyBorder(0, 8, 0, 8));
+					? NebulaDesign.SELECTION
+					: SURFACE);
+			setBorder(new EmptyBorder(0, 10, 0, 10));
 			return component;
 		}
 	}
@@ -3447,9 +3853,7 @@ final class ActualSchedulerPanel extends JPanel
 		{
 			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g);
 			int width = getWidth();
 			int height = getHeight();
 			int[] xs = { 20, width / 4, width / 2, width * 3 / 4, width - 24 };
@@ -3458,15 +3862,15 @@ final class ActualSchedulerPanel extends JPanel
 			g.setStroke(new BasicStroke(2f));
 			for (int i = 0; i < xs.length - 1; i++)
 			{
-				g.setColor(new Color(148, 178, 229, 80));
+				g.setColor(alpha(BLUE, 70));
 				g.drawLine(xs[i], ys[i], xs[i + 1], ys[i + 1]);
 			}
 			for (int i = 0; i < xs.length; i++)
 			{
-				g.setColor(i % 2 == 0 ? new Color(224, 235, 255)
-						: new Color(224, 242, 232));
+				Color hue = i % 2 == 0 ? BLUE : GREEN;
+				g.setColor(tint(hue, 0.86f));
 				g.fillOval(xs[i] - 7, ys[i] - 7, 14, 14);
-				g.setColor(i % 2 == 0 ? BLUE : GREEN);
+				g.setColor(hue);
 				g.drawOval(xs[i] - 7, ys[i] - 7, 14, 14);
 			}
 			g.dispose();

@@ -16,10 +16,16 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.RadialGradientPaint;
+import java.awt.Shape;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.HierarchyEvent;
+import java.awt.event.HierarchyListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.geom.Point2D;
+import java.awt.geom.RoundRectangle2D;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -46,41 +52,35 @@ import javax.swing.event.ListSelectionListener;
 
 final class RecommendationEvidenceStudioPanel extends JPanel
 {
-	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
-			new Color(244, 247, 252), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-			new Color(255, 255, 255), StudioNightTheme.NIGHT_SURFACE);
-	private static final Color SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(248, 251, 255), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color BORDER = StudioNightTheme.adaptiveColor(
-			new Color(207, 218, 232), StudioNightTheme.NIGHT_BORDER);
-	private static final Color TEXT = StudioNightTheme.adaptiveColor(
-			new Color(28, 34, 43), StudioNightTheme.NIGHT_TEXT);
-	private static final Color MUTED = StudioNightTheme.adaptiveColor(
-			new Color(86, 99, 118), StudioNightTheme.NIGHT_MUTED);
-	private static final Color BLUE = StudioNightTheme.adaptiveColor(
-			new Color(82, 110, 220), StudioNightTheme.NIGHT_BLUE);
-	private static final Color PURPLE = StudioNightTheme.adaptiveColor(
-			new Color(133, 104, 215), StudioNightTheme.NIGHT_PURPLE);
-	private static final Color GREEN = StudioNightTheme.adaptiveColor(
-			new Color(78, 151, 111), StudioNightTheme.NIGHT_GREEN);
-	private static final Color AMBER = StudioNightTheme.adaptiveColor(
-			new Color(189, 140, 51), StudioNightTheme.NIGHT_AMBER);
-	private static final Color RED = StudioNightTheme.adaptiveColor(
-			new Color(204, 77, 67), StudioNightTheme.NIGHT_RED);
-	private static final int RADIUS = 10;
+	private static final Color BACKGROUND = NebulaDesign.CANVAS_TOP;
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color RED = NebulaDesign.DANGER;
+	private static final int RADIUS = 12;
 
 	private final ControllerAgentGui controller;
 	private final DefaultListModel<EvidenceEntry> entryModel =
 			new DefaultListModel<EvidenceEntry>();
 	private final JList<EvidenceEntry> entryList =
-			new JList<EvidenceEntry>(entryModel);
+			new PlaceholderList<EvidenceEntry>(
+					entryModel,
+					"Completed recommendations land here. Start a simulator run to collect evidence.");
 	private final DefaultListModel<MatchRow> matchModel =
 			new DefaultListModel<MatchRow>();
-	private final JList<MatchRow> matchList = new JList<MatchRow>(matchModel);
-	private final JLabel heroTitle = new JLabel("Recommendation Evidence Studio");
-	private final JLabel heroSubtitle = new JLabel("Click a completed recommendation to see why it happened.");
-	private final JLabel statusLabel = new JLabel("Waiting for recommendation output.");
+	private final JList<MatchRow> matchList =
+			new PlaceholderList<MatchRow>(
+					matchModel,
+					"Pick a recommendation on the left to list its ranked candidates.");
+	private final TokenLabel heroTitle = new TokenLabel("Recommendation Evidence Studio");
+	private final TokenLabel heroSubtitle = new TokenLabel("Click a completed recommendation to see why it happened.");
+	private final TokenLabel statusLabel = new TokenLabel("Waiting for recommendation output.");
 	private final EvidenceSignalPanel signalPanel = new EvidenceSignalPanel();
 	private final MetricStripPanel metricStrip = new MetricStripPanel();
 	private final EvidenceFlowPanel flowPanel = new EvidenceFlowPanel();
@@ -95,7 +95,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 	private final GraphImpactPanel graphImpactPanel = new GraphImpactPanel();
 	private final VerdictPanel verdictPanel = new VerdictPanel();
 	private final EmptyStatePanel emptyStatePanel = new EmptyStatePanel();
-	private final JPanel dashboard = new JPanel(new GridBagLayout());
+	private final JPanel dashboard = new DashboardPanel();
 	private final Timer animationTimer;
 	private SimulatorHelpPanel.Snapshot latestSnapshot =
 			SimulatorHelpPanel.Snapshot.empty();
@@ -134,8 +134,83 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				graphImpactPanel.tick();
 			}
 		});
-		animationTimer.start();
+		addHierarchyListener(new HierarchyListener()
+		{
+			public void hierarchyChanged(HierarchyEvent event)
+			{
+				if ((event.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0)
+				{
+					updateAnimationState();
+				}
+			}
+		});
+		updateAnimationState();
 		renderReport(currentReport);
+	}
+
+	public void addNotify()
+	{
+		super.addNotify();
+		updateAnimationState();
+	}
+
+	public void removeNotify()
+	{
+		animationTimer.stop();
+		super.removeNotify();
+	}
+
+	private void updateAnimationState()
+	{
+		if (isShowing())
+		{
+			if (!animationTimer.isRunning())
+			{
+				animationTimer.start();
+			}
+		}
+		else
+		{
+			animationTimer.stop();
+		}
+	}
+
+	protected void paintComponent(Graphics graphics)
+	{
+		Graphics2D g2 = (Graphics2D) graphics.create();
+		prepare(g2);
+		boolean night = StudioNightTheme.isNightMode();
+		Color top = night ? NebulaDesign.NIGHT_CANVAS_TOP : NebulaDesign.DAY_CANVAS_TOP;
+		Color bottom = night ? NebulaDesign.NIGHT_CANVAS_BOTTOM : NebulaDesign.DAY_CANVAS_BOTTOM;
+		g2.setPaint(new GradientPaint(0, 0, top, 0, Math.max(1, getHeight()), bottom));
+		g2.fillRect(0, 0, getWidth(), getHeight());
+		int glow = night ? 22 : 12;
+		paintGlow(g2, getWidth() / 6, 0, Math.max(240, getHeight()), BLUE, glow);
+		paintGlow(g2, getWidth() * 5 / 6, getHeight(), Math.max(240, getHeight()),
+				PURPLE, Math.max(6, glow - 4));
+		g2.dispose();
+	}
+
+	private static void paintGlow(
+			Graphics2D g2,
+			int centerX,
+			int centerY,
+			int radius,
+			Color hue,
+			int alpha)
+	{
+		int safeRadius = Math.max(24, radius);
+		RadialGradientPaint paint = new RadialGradientPaint(
+				new Point2D.Float(centerX, centerY),
+				safeRadius,
+				new float[] { 0f, 1f },
+				new Color[] {
+						NebulaDesign.withAlpha(hue, alpha),
+						NebulaDesign.withAlpha(hue, 0)
+				});
+		g2.setPaint(paint);
+		g2.fillRect(centerX - safeRadius, centerY - safeRadius,
+				safeRadius * 2, safeRadius * 2);
 	}
 
 	void refreshFromSimulator()
@@ -196,19 +271,27 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 	{
 		HeaderPanel header = new HeaderPanel();
 		header.setLayout(new BorderLayout(18, 0));
-		header.setBorder(new EmptyBorder(18, 22, 18, 22));
+		header.setBorder(new EmptyBorder(14, 22, 14, 22));
 
 		JPanel titleStack = new JPanel();
 		titleStack.setOpaque(false);
 		titleStack.setLayout(new BoxLayout(titleStack, BoxLayout.Y_AXIS));
-		heroTitle.setFont(font(Font.BOLD, 28));
-		heroTitle.setForeground(TEXT);
-		heroSubtitle.setFont(font(Font.BOLD, 12));
-		heroSubtitle.setForeground(MUTED);
-		titleStack.add(heroTitle);
+		TokenLabel eyebrow = new TokenLabel("STUDIO  ·  EXPLAINABILITY");
+		eyebrow.setFont(NebulaDesign.fontSection());
+		eyebrow.setToken(BLUE);
+		heroTitle.setFont(NebulaDesign.fontSemiBold(23f));
+		heroTitle.setToken(TEXT);
+		heroSubtitle.setFont(NebulaDesign.fontBody(12.5f));
+		heroSubtitle.setToken(MUTED);
+		eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		heroTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+		heroSubtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+		titleStack.add(eyebrow);
 		titleStack.add(Box.createRigidArea(new Dimension(0, 4)));
+		titleStack.add(heroTitle);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 3)));
 		titleStack.add(heroSubtitle);
-		titleStack.add(Box.createRigidArea(new Dimension(0, 8)));
+		titleStack.add(Box.createRigidArea(new Dimension(0, 6)));
 		titleStack.add(createAttribution());
 		header.add(titleStack, BorderLayout.WEST);
 		header.add(signalPanel, BorderLayout.CENTER);
@@ -217,12 +300,14 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 
 	private Component createAttribution()
 	{
-		JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+		JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
 		panel.setOpaque(false);
-		panel.add(tinyLabel("FACULTY ADVISOR"));
-		panel.add(strongTinyLabel("Dr. Abdolreza Abhari"));
-		panel.add(tinyLabel("DEVELOPER"));
-		panel.add(strongTinyLabel("Mohsen Alavi"));
+		panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		TokenLabel line = new TokenLabel(
+				"Faculty advisor Dr. Abdolreza Abhari  ·  Developer Mohsen Alavi");
+		line.setFont(NebulaDesign.fontSmall());
+		line.setToken(NebulaDesign.TEXT_TERTIARY);
+		panel.add(line);
 		return panel;
 	}
 
@@ -254,7 +339,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		JPanel panel = new JPanel(new BorderLayout(0, 10));
 		panel.setOpaque(false);
 
-		JPanel historyCard = card(new BorderLayout(0, 8));
+		JPanel historyCard = card(new BorderLayout(0, 10));
 		historyCard.add(sectionTitle("Completed Recommendations"), BorderLayout.NORTH);
 		entryList.setCellRenderer(new EvidenceEntryRenderer());
 		entryList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -268,11 +353,10 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				}
 			}
 		});
-		JScrollPane entryScroll = new JScrollPane(entryList);
-		entryScroll.setBorder(BorderFactory.createLineBorder(BORDER));
+		JScrollPane entryScroll = listWell(entryList);
 		historyCard.add(entryScroll, BorderLayout.CENTER);
 
-		JPanel matchCard = card(new BorderLayout(0, 8));
+		JPanel matchCard = card(new BorderLayout(0, 10));
 		matchCard.add(sectionTitle("Ranked Candidates"), BorderLayout.NORTH);
 		matchList.setCellRenderer(new MatchRenderer());
 		matchList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -286,8 +370,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				}
 			}
 		});
-		JScrollPane matchScroll = new JScrollPane(matchList);
-		matchScroll.setBorder(BorderFactory.createLineBorder(BORDER));
+		JScrollPane matchScroll = listWell(matchList);
 		matchScroll.setPreferredSize(new Dimension(280, 260));
 		matchCard.add(matchScroll, BorderLayout.CENTER);
 
@@ -300,8 +383,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 	{
 		JPanel panel = new JPanel(new BorderLayout());
 		panel.setOpaque(false);
-		statusLabel.setFont(font(Font.BOLD, 12));
-		statusLabel.setForeground(MUTED);
+		statusLabel.setFont(NebulaDesign.fontMedium(12f));
+		statusLabel.setToken(MUTED);
 		statusLabel.setBorder(new EmptyBorder(8, 12, 8, 12));
 		panel.add(statusLabel, BorderLayout.CENTER);
 		return panel;
@@ -456,54 +539,168 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			emptyStatePanel.setReport(safe);
 			dashboard.add(emptyStatePanel, gbc);
 		}
+		JPanel filler = new JPanel();
+		filler.setOpaque(false);
+		gbc.gridx = 0;
+		gbc.gridy++;
+		gbc.gridwidth = 2;
+		gbc.weightx = 1.0;
+		gbc.weighty = 1.0;
+		gbc.insets = new Insets(0, 0, 0, 0);
+		dashboard.add(filler, gbc);
 		dashboard.revalidate();
 		dashboard.repaint();
 	}
 
 	private static JPanel card(java.awt.LayoutManager layout)
 	{
-		JPanel panel = new JPanel(layout);
+		JPanel panel = new JPanel(layout)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(),
+						NebulaDesign.RADIUS_CARD);
+				g2.dispose();
+				super.paintComponent(graphics);
+			}
+		};
+		panel.setOpaque(false);
 		panel.setBackground(SURFACE);
-		panel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER),
-				new EmptyBorder(12, 12, 12, 12)));
+		panel.setBorder(new EmptyBorder(14, 14, 16, 14));
 		return panel;
 	}
 
 	private static JLabel sectionTitle(String text)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(font(Font.BOLD, 14));
-		label.setForeground(TEXT);
+		TokenLabel label = new TokenLabel(text);
+		label.setFont(NebulaDesign.fontSemiBold(14f));
+		label.setToken(TEXT);
 		return label;
 	}
 
-	private static JLabel tinyLabel(String text)
+	/**
+	 * Rounded inset well hosting a list. The scroll pane paints the surface so
+	 * the card behind it keeps its rounded corners in both modes.
+	 */
+	private static JScrollPane listWell(JList<?> list)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(font(Font.BOLD, 9));
-		label.setForeground(MUTED);
-		return label;
+		JScrollPane scroll = new JScrollPane(list)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g = (Graphics2D) graphics.create();
+				prepare(g);
+				g.setColor(SURFACE_ALT);
+				g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g.setColor(BORDER);
+				g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g.dispose();
+				super.paintComponent(graphics);
+			}
+		};
+		scroll.setOpaque(false);
+		scroll.getViewport().setOpaque(false);
+		scroll.setBorder(new EmptyBorder(1, 1, 1, 1));
+		scroll.getVerticalScrollBar().setUnitIncrement(18);
+		scroll.setHorizontalScrollBarPolicy(
+				ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+		list.setOpaque(false);
+		return scroll;
 	}
 
-	private static JLabel strongTinyLabel(String text)
+	/** True only for values that read as numerals, so mono stays for numbers. */
+	private static boolean numericValue(String value)
 	{
-		JLabel label = tinyLabel(text);
-		label.setForeground(TEXT);
-		return label;
+		if (value == null || value.length() == 0)
+		{
+			return false;
+		}
+		boolean digitSeen = false;
+		for (int i = 0; i < value.length(); i++)
+		{
+			char symbol = value.charAt(i);
+			if (Character.isDigit(symbol))
+			{
+				digitSeen = true;
+				continue;
+			}
+			if (symbol == '.' || symbol == ',' || symbol == '%' || symbol == '/'
+					|| symbol == ':' || symbol == '-' || symbol == '+'
+					|| symbol == 'x' || symbol == ' ')
+			{
+				continue;
+			}
+			return false;
+		}
+		return digitSeen;
+	}
+
+	/**
+	 * Label whose painted color stays a Nebula token even when an outer theme
+	 * walk re-tints foregrounds, so day and night stay exactly as designed.
+	 */
+	private static final class TokenLabel extends JLabel
+	{
+		private Color token;
+
+		TokenLabel(String text)
+		{
+			super(text);
+		}
+
+		void setToken(Color token)
+		{
+			this.token = token;
+			repaint();
+		}
+
+		public Color getForeground()
+		{
+			return token == null ? super.getForeground() : token;
+		}
+	}
+
+	/** List that paints a friendly hint instead of an empty rectangle. */
+	private static final class PlaceholderList<T> extends JList<T>
+	{
+		private final String message;
+
+		PlaceholderList(DefaultListModel<T> model, String message)
+		{
+			super(model);
+			this.message = message;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			super.paintComponent(graphics);
+			if (getModel().getSize() > 0)
+			{
+				return;
+			}
+			Graphics2D g = (Graphics2D) graphics.create();
+			prepare(g);
+			g.setFont(NebulaDesign.fontBody(12f));
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			drawWrapped(g, message, 16, 32,
+					Math.max(60, getWidth() - 32), 4, 17);
+			g.dispose();
+		}
 	}
 
 	private static Font font(int style, int size)
 	{
-		return new Font("SansSerif", style, size);
+		return style == Font.BOLD
+				? NebulaDesign.fontSemiBold(size)
+				: NebulaDesign.fontBody(size);
 	}
 
 	private static void prepare(Graphics2D g)
 	{
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-				RenderingHints.VALUE_ANTIALIAS_ON);
-		g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
-				RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+		NebulaDesign.prepare(g);
 	}
 
 	private static Color tint(Color color, float amount)
@@ -530,21 +727,46 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 	private static Color glass(int alpha)
 	{
 		return themed(
-				new Color(255, 255, 255, alpha),
+				StudioNightTheme.withAlpha(NebulaDesign.DAY_SURFACE_ALT, alpha),
 				StudioNightTheme.withAlpha(
-						StudioNightTheme.NIGHT_SURFACE_ALT,
+						NebulaDesign.NIGHT_SURFACE_ALT,
 						Math.min(255, alpha + 16)));
 	}
 
 	private static Color track()
 	{
-		return themed(new Color(226, 234, 246),
-				StudioNightTheme.NIGHT_BACKGROUND_BOTTOM);
+		return themed(NebulaDesign.DAY_INSET, NebulaDesign.NIGHT_INSET);
+	}
+
+	/** Soft chip tint for the supplied hue, resolved in the active mode. */
+	private static Color softTint(Color color)
+	{
+		return new Color(
+				color.getRed(),
+				color.getGreen(),
+				color.getBlue(),
+				StudioNightTheme.isNightMode() ? 46 : 26);
 	}
 
 	private static int clamp(int value)
 	{
 		return Math.max(0, Math.min(255, value));
+	}
+
+	/** Paints a small soft-tint evidence chip and returns its painted width. */
+	private static int drawChip(Graphics2D g, String text, int x, int y, Color hue)
+	{
+		Font previous = g.getFont();
+		g.setFont(NebulaDesign.fontSemiBold(9.5f));
+		FontMetrics metrics = g.getFontMetrics();
+		int width = metrics.stringWidth(text) + 16;
+		int height = metrics.getHeight() + 5;
+		g.setColor(softTint(hue));
+		g.fillRoundRect(x, y, width, height, height, height);
+		g.setColor(hue);
+		g.drawString(text, x + 8, y + 3 + metrics.getAscent());
+		g.setFont(previous);
+		return width;
 	}
 
 	private static void drawClipped(
@@ -618,6 +840,43 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		return text.trim();
 	}
 
+	/** GridBag dashboard that always fits the viewport width (no right clipping). */
+	private static final class DashboardPanel extends JPanel
+			implements javax.swing.Scrollable
+	{
+		DashboardPanel()
+		{
+			super(new GridBagLayout());
+		}
+
+		public Dimension getPreferredScrollableViewportSize()
+		{
+			return getPreferredSize();
+		}
+
+		public int getScrollableUnitIncrement(
+				Rectangle visibleRect, int orientation, int direction)
+		{
+			return 18;
+		}
+
+		public int getScrollableBlockIncrement(
+				Rectangle visibleRect, int orientation, int direction)
+		{
+			return Math.max(48, visibleRect.height - 36);
+		}
+
+		public boolean getScrollableTracksViewportWidth()
+		{
+			return true;
+		}
+
+		public boolean getScrollableTracksViewportHeight()
+		{
+			return false;
+		}
+	}
+
 	private static final class EvidenceEntry
 	{
 		final SimulatorHelpPanel.Snapshot snapshot;
@@ -658,16 +917,19 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 
 		protected void paintComponent(Graphics graphics)
 		{
-			super.paintComponent(graphics);
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setPaint(new GradientPaint(
-					0, 0, SURFACE,
-					getWidth(), getHeight(),
-					themed(new Color(237, 247, 243), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			Shape oldClip = g.getClip();
+			g.clip(new RoundRectangle2D.Float(0, 0, getWidth() - 1, getHeight() - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+			boolean night = StudioNightTheme.isNightMode();
+			int alpha = night ? 26 : 15;
+			paintGlow(g, getWidth() / 5, 0, getHeight() * 2, BLUE, alpha);
+			paintGlow(g, getWidth() * 4 / 5, getHeight(), getHeight() * 2,
+					PURPLE, Math.max(6, alpha - 4));
+			g.setClip(oldClip);
 			g.dispose();
 			super.paintComponent(graphics);
 		}
@@ -798,21 +1060,17 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				String detail,
 				Color color)
 		{
-			g.setColor(SURFACE);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.62f));
-			g.fillRoundRect(x, y, 5, h, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			drawClipped(g, label.toUpperCase(Locale.US), x + 14, y + 18, w - 28);
-			g.setFont(font(Font.BOLD, 18));
+			NebulaWidgets.paintCard(g, x, y, w, h, RADIUS);
+			drawChip(g, label.toUpperCase(Locale.US), x + 12, y + 8, color);
+			boolean numeric = numericValue(value);
+			g.setFont(numeric
+					? NebulaDesign.fontMono(15f)
+					: NebulaDesign.fontSemiBold(16f));
 			g.setColor(TEXT);
-			drawClipped(g, shortLabel(value), x + 14, y + 42, w - 28);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClipped(g, detail, x + 14, y + h - 10, w - 28);
+			drawClipped(g, shortLabel(value), x + 14, y + 44, w - 28);
+			g.setFont(NebulaDesign.fontMedium(10f));
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			drawClipped(g, detail, x + 14, y + h - 12, w - 28);
 		}
 	}
 
@@ -828,9 +1086,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			setOpaque(false);
 			setPreferredSize(new Dimension(900, 420));
 			setMinimumSize(new Dimension(520, 360));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setReport(RecommendationEvidenceEngine.EvidenceReport report)
@@ -856,14 +1112,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setPaint(new GradientPaint(
-					0, 0, SURFACE,
-					getWidth(), getHeight(),
-					themed(new Color(238, 248, 244), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 18));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString("Evidence Trail", 18, 32);
 			g.setFont(font(Font.PLAIN, 11));
@@ -959,10 +1210,10 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			g.fillRoundRect(x, y, w, panelH, RADIUS, RADIUS);
 			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, panelH, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(BLUE);
 			g.drawString("GRAPH SIDE EFFECT READ", x + 14, y + 20);
-			g.setFont(font(Font.BOLD, 13));
+			g.setFont(NebulaDesign.fontMedium(12.5f));
 			g.setColor(TEXT);
 			drawClipped(g, report.graphAvailable
 					? "Persisted edge changed from "
@@ -987,20 +1238,16 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				String detail,
 				Color color)
 		{
-			g.setPaint(new GradientPaint(
-					x, y, SURFACE,
-					x + w, y + h, tint(color, 0.88f)));
+			g.setColor(tint(color, 0.92f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.58f));
-			g.fillRoundRect(x, y, 6, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 125));
+			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 105));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			drawClipped(g, label.toUpperCase(Locale.US), x + 13, y + 18, w - 26);
-			g.setFont(font(Font.BOLD, 16));
+			g.setColor(tint(color, 0.30f));
+			g.fillRoundRect(x, y + 10, 3, h - 20, 3, 3);
+			drawChip(g, label.toUpperCase(Locale.US), x + 12, y + 9, color);
+			g.setFont(NebulaDesign.fontSemiBold(15f));
 			g.setColor(TEXT);
-			drawClipped(g, value, x + 13, y + 48, w - 26);
+			drawClipped(g, value, x + 13, y + 50, w - 26);
 			g.setFont(font(Font.PLAIN, 10));
 			g.setColor(MUTED);
 			drawWrapped(g, detail, x + 13, y + 72, w - 26, 2, 14);
@@ -1016,11 +1263,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		CounterfactualPanel()
 		{
 			setOpaque(false);
-			setPreferredSize(new Dimension(520, 330));
-			setMinimumSize(new Dimension(420, 300));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setPreferredSize(new Dimension(520, 386));
+			setMinimumSize(new Dimension(420, 340));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setReport(RecommendationEvidenceEngine.EvidenceReport report)
@@ -1033,14 +1278,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setPaint(new GradientPaint(
-					0, 0, SURFACE,
-					getWidth(), getHeight(),
-					themed(new Color(248, 244, 255), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 15));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString("Counterfactual Evidence Mode", 16, 28);
 			g.setFont(font(Font.PLAIN, 11));
@@ -1049,8 +1289,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 					"What would need to change for this recommendation to move?",
 					16, 47, getWidth() - 32);
 
-			drawSummary(g, 16, 62, getWidth() - 32, 56);
-			int y = 132;
+			drawSummary(g, 16, 62, getWidth() - 32, 62);
+			int y = 138;
 			if (report.counterfactualInsights.isEmpty())
 			{
 				g.setFont(font(Font.BOLD, 13));
@@ -1061,14 +1301,16 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				g.dispose();
 				return;
 			}
-			int cardH = Math.max(42, Math.min(56,
-					(getHeight() - y - 18)
-							/ Math.max(1, Math.min(4, report.counterfactualInsights.size()))));
-			for (int i = 0; i < report.counterfactualInsights.size() && i < 4; i++)
+			int count = Math.max(1, Math.min(4, report.counterfactualInsights.size()));
+			int gap = 8;
+			int available = Math.max(44, getHeight() - y - 18);
+			int cardH = Math.max(38, Math.min(58,
+					(available - gap * (count - 1)) / count));
+			for (int i = 0; i < count; i++)
 			{
 				RecommendationEvidenceEngine.CounterfactualInsight insight =
 						report.counterfactualInsights.get(i);
-				drawInsight(g, 16, y + i * (cardH + 8),
+				drawInsight(g, 16, y + i * (cardH + gap),
 						getWidth() - 32, cardH, insight);
 			}
 			g.dispose();
@@ -1080,12 +1322,13 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(PURPLE.darker());
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(PURPLE);
 			g.drawString("ROBUSTNESS READ", x + 12, y + 18);
-			g.setFont(font(Font.BOLD, 13));
+			g.setFont(NebulaDesign.fontMedium(12.5f));
 			g.setColor(TEXT);
-			drawClipped(g, report.counterfactualSummary, x + 12, y + 40, w - 24);
+			drawWrapped(g, report.counterfactualSummary,
+					x + 12, y + 37, w - 24, 2, 16);
 		}
 
 		private void drawInsight(
@@ -1098,13 +1341,13 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Color color = insight.likelySwitch ? RED
 					: (insight.pressurePercent >= 35 ? AMBER : GREEN);
-			g.setColor(SURFACE);
+			g.setColor(tint(color, 0.94f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.62f));
-			g.fillRoundRect(x, y, 6, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 120));
+			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 95));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 11));
+			g.setColor(tint(color, 0.30f));
+			g.fillRoundRect(x, y + 8, 3, h - 16, 3, 3);
+			g.setFont(NebulaDesign.fontMedium(11.5f));
 			g.setColor(TEXT);
 			drawClipped(g, insight.title, x + 14, y + 17, w - 126);
 			g.setFont(font(Font.PLAIN, 10));
@@ -1115,14 +1358,14 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				drawClipped(g, insight.outcome, x + 14, y + 49, w - 126);
 			}
 			g.setColor(track());
-			g.fillRoundRect(x + w - 98, y + h / 2 - 5, 78, 10, 8, 8);
+			g.fillRoundRect(x + w - 98, y + h / 2 - 11, 78, 9, 9, 9);
 			g.setColor(color);
-			g.fillRoundRect(x + w - 98, y + h / 2 - 5,
-					Math.max(6, 78 * insight.pressurePercent / 100), 10, 8, 8);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.fillRoundRect(x + w - 98, y + h / 2 - 11,
+					Math.max(6, 78 * insight.pressurePercent / 100), 9, 9, 9);
+			g.setFont(NebulaDesign.fontMono(9.5f));
+			g.setColor(color);
 			drawClipped(g, insight.pressurePercent + "% pressure",
-					x + w - 100, y + h - 9, 84);
+					x + w - 100, y + h / 2 + 15, 84);
 		}
 	}
 
@@ -1137,9 +1380,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			setOpaque(false);
 			setPreferredSize(new Dimension(460, 330));
 			setMinimumSize(new Dimension(380, 300));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setReport(RecommendationEvidenceEngine.EvidenceReport report)
@@ -1152,11 +1393,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setColor(SURFACE);
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 15));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString("Why This, Not That?", 16, 28);
 			g.setFont(font(Font.PLAIN, 11));
@@ -1178,10 +1417,10 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 					report.comparison.left, report.comparison.leftSupport, GREEN);
 			drawCandidate(g, mid + 8, 70, mid - 24, 82,
 					report.comparison.right, report.comparison.rightSupport, PURPLE);
-			drawSupport(g, 16, 170, getWidth() - 32, 48);
-			drawTermLane(g, 16, 236, getWidth() / 2 - 26,
+			drawSupport(g, 16, 168, getWidth() - 32, 56);
+			drawTermLane(g, 16, 240, getWidth() / 2 - 26,
 					"winner shared cues", report.comparison.leftSharedTerms, GREEN);
-			drawTermLane(g, getWidth() / 2 + 10, 236, getWidth() / 2 - 26,
+			drawTermLane(g, getWidth() / 2 + 10, 240, getWidth() / 2 - 26,
 					"alternate shared cues", report.comparison.rightSharedTerms, PURPLE);
 			g.dispose();
 		}
@@ -1196,39 +1435,40 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				int support,
 				Color color)
 		{
-			g.setColor(tint(color, 0.86f));
+			g.setColor(tint(color, 0.92f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 135));
+			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 105));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			g.drawString("RANK " + match.rank, x + 12, y + 18);
-			g.setFont(font(Font.BOLD, 16));
+			drawChip(g, "RANK " + match.rank, x + 10, y + 8, color);
+			g.setFont(NebulaDesign.fontSemiBold(15f));
 			g.setColor(TEXT);
-			drawClipped(g, match.name, x + 12, y + 43, w - 24);
-			g.setFont(font(Font.PLAIN, 10));
+			drawClipped(g, match.name, x + 12, y + 47, w - 24);
+			g.setFont(NebulaDesign.fontMono(9.5f));
 			g.setColor(MUTED);
 			drawClipped(g, "score " + (match.score.length() == 0 ? "-" : match.score)
-					+ " | text support " + support, x + 12, y + 63, w - 24);
+					+ " | text support " + support, x + 12, y + 65, w - 24);
 		}
 
 		private void drawSupport(Graphics2D g, int x, int y, int w, int h)
 		{
 			int total = Math.max(1,
 					report.comparison.leftSupport + report.comparison.rightSupport);
-			int leftW = Math.max(4, w * report.comparison.leftSupport / total);
-			g.setColor(themed(new Color(235, 240, 248), StudioNightTheme.NIGHT_PANEL_INK));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
+			int leftW = Math.max(8, w * report.comparison.leftSupport / total);
+			g.setFont(NebulaDesign.fontMedium(11.5f));
+			g.setColor(TEXT);
+			drawClipped(g, "Support gap  ·  score gap " + report.comparison.scoreGap,
+					x, y + 11, w);
+			int barY = y + 20;
+			g.setColor(track());
+			g.fillRoundRect(x, barY, w, 10, 10, 10);
 			g.setColor(GREEN);
-			g.fillRoundRect(x, y, leftW, h, RADIUS, RADIUS);
+			g.fillRoundRect(x, barY, leftW, 10, 10, 10);
 			g.setColor(PURPLE);
-			g.fillRoundRect(x + leftW, y, Math.max(4, w - leftW), h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(StudioNightTheme.isNightMode() ? StudioNightTheme.NIGHT_TEXT : Color.WHITE);
-			drawClipped(g, "support gap | score gap " + report.comparison.scoreGap,
-					x + 12, y + 22, w - 24);
-			g.setFont(font(Font.PLAIN, 10));
-			drawClipped(g, report.comparison.verdict, x + 12, y + 40, w - 24);
+			g.fillRoundRect(x + leftW + 2, barY,
+					Math.max(6, w - leftW - 2), 10, 10, 10);
+			g.setFont(NebulaDesign.fontBody(10.5f));
+			g.setColor(MUTED);
+			drawClipped(g, report.comparison.verdict, x, barY + 26, w);
 		}
 
 		private void drawTermLane(
@@ -1244,27 +1484,25 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			g.fillRoundRect(x, y, w, 70, RADIUS, RADIUS);
 			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, 70, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(color);
 			drawClipped(g, label.toUpperCase(Locale.US), x + 10, y + 17, w - 20);
 			int chipX = x + 10;
 			int chipY = y + 30;
 			for (int i = 0; i < terms.size() && i < 4; i++)
 			{
 				String term = terms.get(i).term;
-				int chipW = Math.min(82, Math.max(46,
-						g.getFontMetrics().stringWidth(term) + 18));
+				g.setFont(NebulaDesign.fontMedium(10f));
+				int chipW = Math.min(118, Math.max(46,
+						g.getFontMetrics().stringWidth(term) + 22));
 				if (chipX + chipW > x + w - 8)
 				{
 					break;
 				}
-				g.setColor(tint(color, 0.84f));
-				g.fillRoundRect(chipX, chipY, chipW, 23, 8, 8);
+				g.setColor(softTint(color));
+				g.fillRoundRect(chipX, chipY, chipW, 23, 23, 23);
 				g.setColor(color);
-				g.drawRoundRect(chipX, chipY, chipW, 23, 8, 8);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(color.darker());
-				drawClipped(g, term, chipX + 8, chipY + 15, chipW - 16);
+				drawClipped(g, term, chipX + 11, chipY + 15, chipW - 22);
 				chipX += chipW + 6;
 			}
 		}
@@ -1287,9 +1525,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			this.target = target;
 			setOpaque(false);
 			setPreferredSize(new Dimension(420, 360));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setMinimumSize(new Dimension(320, 360));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setRows(
@@ -1305,6 +1542,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			int visibleRows = Math.min(10, this.rows.size());
 			int dynamicHeight = 110 + Math.max(3, visibleRows) * 50;
 			setPreferredSize(new Dimension(420, Math.min(640, dynamicHeight)));
+			setMinimumSize(new Dimension(320, Math.min(640, dynamicHeight)));
 			revalidate();
 			repaint();
 		}
@@ -1313,21 +1551,19 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setColor(SURFACE);
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 15));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString(title, 16, 27);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.setFont(NebulaDesign.fontMedium(10.5f));
+			g.setColor(color);
 			drawClipped(g, entity + " | " + totalRows + " matching rows",
 					16, 46, getWidth() - 32);
 			int y = 66;
 			if (rows.isEmpty())
 			{
-				g.setFont(font(Font.BOLD, 13));
+				g.setFont(NebulaDesign.fontMedium(12.5f));
 				g.setColor(MUTED);
 				drawWrapped(g,
 						target
@@ -1346,14 +1582,14 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				int rowY = y + i * rowH;
 				g.setColor(i % 2 == 0 ? SURFACE_ALT : SURFACE);
 				g.fillRoundRect(14, rowY, getWidth() - 28, rowH - 5, 8, 8);
-				g.setColor(tint(color, 0.65f));
-				g.fillRoundRect(14, rowY, 5, rowH - 5, 8, 8);
-				g.setFont(font(Font.BOLD, 11));
+				g.setColor(tint(color, 0.42f));
+				g.fillRoundRect(14, rowY + 4, 3, rowH - 13, 3, 3);
+				g.setFont(NebulaDesign.fontMedium(11f));
 				g.setColor(TEXT);
 				drawClipped(g, row.followee + "  |  " + row.user, 26, rowY + 17,
 						getWidth() - 170);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(MUTED);
+				g.setFont(NebulaDesign.fontMono(9.5f));
+				g.setColor(NebulaDesign.TEXT_TERTIARY);
 				drawClipped(g, row.date, getWidth() - 120, rowY + 17, 100);
 				g.setFont(font(Font.PLAIN, 11));
 				g.setColor(MUTED);
@@ -1361,8 +1597,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			}
 			if (rows.size() > maxVisible)
 			{
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(color.darker());
+				g.setFont(NebulaDesign.fontMedium(10f));
+				g.setColor(color);
 				drawClipped(g, "+" + (rows.size() - maxVisible)
 						+ " more inspected rows are available in this evidence sample.",
 						18, getHeight() - 18, getWidth() - 36);
@@ -1389,9 +1625,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			setOpaque(false);
 			setPreferredSize(new Dimension(900, 360));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setMinimumSize(new Dimension(380, 360));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 			addMouseListener(new MouseAdapter()
 			{
 				public void mouseClicked(MouseEvent event)
@@ -1436,11 +1671,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
 			termHits.clear();
-			g.setColor(SURFACE);
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 15));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString("Interactive Text Evidence", 16, 28);
 			g.setFont(font(Font.PLAIN, 11));
@@ -1488,8 +1721,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(color.darker());
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(color);
 			g.drawString(title.toUpperCase(Locale.US), x + 12, y + 18);
 			if (terms.isEmpty())
 			{
@@ -1516,23 +1749,28 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				}
 				if (selected)
 				{
-					g.setColor(tint(color, 0.78f));
+					g.setColor(softTint(color));
 					g.fillRoundRect(hitBounds.x, hitBounds.y,
 							hitBounds.width, hitBounds.height, 8, 8);
+					g.setColor(NebulaDesign.withAlpha(color, 120));
+					g.drawRoundRect(hitBounds.x, hitBounds.y,
+							hitBounds.width, hitBounds.height, 8, 8);
 				}
-				g.setFont(font(Font.BOLD, 11));
-				g.setColor(selected ? color.darker() : TEXT);
+				g.setFont(NebulaDesign.fontMedium(11f));
+				g.setColor(selected ? color : TEXT);
 				drawClipped(g, term.term, x + 12, rowY + 10, 76);
+				int trackW = Math.max(24, w - 94 - 74);
+				int fillW = Math.max(8, trackW * term.value / max);
 				g.setColor(track());
-				g.fillRoundRect(x + 94, rowY, w - 110, 12, 6, 6);
+				g.fillRoundRect(x + 94, rowY, trackW, 12, 6, 6);
 				g.setColor(color);
-				g.fillRoundRect(x + 94, rowY, barW, 12, 6, 6);
-				g.setFont(font(Font.PLAIN, 9));
+				g.fillRoundRect(x + 94, rowY, fillW, 12, 6, 6);
+				g.setFont(NebulaDesign.fontMono(9f));
 				g.setColor(MUTED);
 				String value = shared
 						? "overlap " + term.value
 						: Integer.toString(term.value);
-				drawClipped(g, value, x + w - 54, rowY + 10, 42);
+				drawClipped(g, value, x + 94 + trackW + 8, rowY + 10, 62);
 				rowY += 19;
 			}
 		}
@@ -1578,9 +1816,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			setOpaque(false);
 			setPreferredSize(new Dimension(420, 360));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setMinimumSize(new Dimension(320, 360));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setTerm(RecommendationEvidenceEngine.TermLocation location)
@@ -1590,6 +1827,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 					: Math.max(location.targetRows.size(), location.candidateRows.size());
 			int dynamicHeight = 180 + Math.max(3, Math.min(6, rowCount)) * 46;
 			setPreferredSize(new Dimension(420, Math.min(460, dynamicHeight)));
+			setMinimumSize(new Dimension(320, Math.min(460, dynamicHeight)));
 			revalidate();
 			repaint();
 		}
@@ -1598,14 +1836,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setPaint(new GradientPaint(
-					0, 0, SURFACE,
-					getWidth(), getHeight(),
-					themed(new Color(247, 251, 255), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 15));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString("Term Impact Lens", 16, 28);
 			if (location == null)
@@ -1648,35 +1881,36 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				int h,
 				Color color)
 		{
-			g.setColor(tint(color, 0.84f));
+			g.setColor(tint(color, 0.92f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 135));
+			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 105));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(color);
-			g.fillRoundRect(x, y, 7, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			drawClipped(g, location.role.toUpperCase(Locale.US), x + 16, y + 18, w - 32);
-			g.setFont(font(Font.BOLD, 18));
+			g.setColor(tint(color, 0.30f));
+			g.fillRoundRect(x, y + 8, 3, h - 16, 3, 3);
+			drawChip(g, location.role.toUpperCase(Locale.US), x + 12, y + 8, color);
+			g.setFont(NebulaDesign.fontSemiBold(16f));
 			g.setColor(TEXT);
-			drawClipped(g, location.term, x + 16, y + 42, Math.max(80, w / 3));
-			g.setFont(font(Font.PLAIN, 10));
+			drawClipped(g, location.term, x + 16, y + 46, Math.max(80, w / 3));
+			int infoX = x + Math.max(120, w / 3);
+			int meterX = x + w - 112;
+			g.setFont(NebulaDesign.fontMono(9.5f));
 			g.setColor(MUTED);
 			drawClipped(g,
 					"target " + location.targetCount + " | candidate "
 							+ location.candidateCount,
-					x + Math.max(120, w / 3), y + 24, w / 3);
+					infoX, y + 24, Math.max(40, meterX - infoX - 12));
+			g.setFont(font(Font.PLAIN, 10));
 			drawClipped(g, location.counterfactualEffect,
-					x + Math.max(120, w / 3), y + 43, w - Math.max(150, w / 3) - 12);
+					infoX, y + 43, Math.max(40, meterX - infoX - 12));
 			g.setColor(track());
-			g.fillRoundRect(x + w - 112, y + 24, 82, 9, 8, 8);
+			g.fillRoundRect(meterX, y + 18, 82, 9, 8, 8);
 			g.setColor(color);
-			g.fillRoundRect(x + w - 112, y + 24,
+			g.fillRoundRect(meterX, y + 18,
 					Math.max(5, 82 * location.pressurePercent / 100), 9, 8, 8);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
+			g.setFont(NebulaDesign.fontMono(9f));
+			g.setColor(color);
 			drawClipped(g, location.pressurePercent + "% effect",
-					x + w - 112, y + 49, 86);
+					meterX, y + 42, 86);
 		}
 
 		private void drawRowColumn(
@@ -1690,12 +1924,12 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				String term,
 				Color color)
 		{
-			g.setColor(SURFACE);
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(color);
 			drawClipped(g, title.toUpperCase(Locale.US), x + 10, y + 16, w - 20);
 			if (rows.isEmpty())
 			{
@@ -1713,11 +1947,11 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			{
 				RecommendationEvidenceEngine.DsmpRow row = rows.get(i);
 				int rowY = y + 30 + i * rowH;
-				g.setColor(i % 2 == 0 ? SURFACE_ALT : SURFACE);
+				g.setColor(SURFACE);
 				g.fillRoundRect(x + 8, rowY, w - 16, rowH - 5, 8, 8);
-				g.setColor(tint(color, 0.58f));
-				g.fillRoundRect(x + 8, rowY, 5, rowH - 5, 8, 8);
-				g.setFont(font(Font.BOLD, 10));
+				g.setColor(tint(color, 0.42f));
+				g.fillRoundRect(x + 8, rowY + 4, 3, rowH - 13, 3, 3);
+				g.setFont(NebulaDesign.fontMedium(10f));
 				g.setColor(TEXT);
 				drawClipped(g, row.user + " | " + row.followee,
 						x + 20, rowY + 14, w - 40);
@@ -1728,8 +1962,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			}
 			if (rows.size() > visibleRows)
 			{
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(color.darker());
+				g.setFont(NebulaDesign.fontMedium(9.5f));
+				g.setColor(color);
 				drawClipped(g, "+" + (rows.size() - visibleRows) + " more rows with this term",
 						x + 10, y + h - 10, w - 20);
 			}
@@ -1786,9 +2020,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			setOpaque(false);
 			setPreferredSize(new Dimension(520, 380));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setMinimumSize(new Dimension(320, 380));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setReport(RecommendationEvidenceEngine.EvidenceReport report)
@@ -1808,14 +2041,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setPaint(new GradientPaint(
-					0, 0, SURFACE,
-					getWidth(), getHeight(),
-					themed(new Color(238, 248, 244), StudioNightTheme.NIGHT_PANEL_INK)));
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 15));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString("Graph Impact", 16, 28);
 			g.setFont(font(Font.PLAIN, 11));
@@ -1828,7 +2056,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			int centerY = graphTop + (graphBottom - graphTop) / 2;
 			int nodeW = Math.max(94, Math.min(132, getWidth() / 5));
 			int leftX = 24;
-			int rightW = Math.max(110, Math.min(148, getWidth() / 4));
+			int rightW = Math.max(132, Math.min(184, getWidth() / 3));
 			int rightX = Math.max(leftX + nodeW + 86, getWidth() - rightW - 24);
 			drawNode(g, leftX, centerY - 31, nodeW, 62, "Target", report.targetUser, BLUE);
 			drawNode(g, rightX, graphTop + 6, rightW, 58, "Original edge",
@@ -1836,9 +2064,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			drawNode(g, rightX, graphBottom - 64, rightW, 58, "Recommended edge",
 					report.lastRecommendedEdge, GREEN);
 			g.setStroke(new BasicStroke(2f));
-			g.setColor(new Color(190, 150, 70, 125));
+			g.setColor(NebulaDesign.withAlpha(AMBER, 125));
 			g.drawLine(leftX + nodeW, centerY, rightX, graphTop + 35);
-			g.setColor(new Color(76, 151, 111, 135));
+			g.setColor(NebulaDesign.withAlpha(GREEN, 135));
 			g.drawLine(leftX + nodeW, centerY, rightX, graphBottom - 35);
 			drawMovingDot(g, leftX + nodeW, centerY, rightX, graphTop + 35,
 					AMBER, 0);
@@ -1901,16 +2129,16 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				String value,
 				Color color)
 		{
-			g.setColor(SURFACE);
+			g.setColor(tint(color, 0.93f));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.54f));
-			g.fillRoundRect(x, y, 6, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 120));
+			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 105));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
+			g.setColor(tint(color, 0.30f));
+			g.fillRoundRect(x, y + 8, 3, h - 16, 3, 3);
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(color);
 			drawClipped(g, label.toUpperCase(Locale.US), x + 14, y + 18, w - 28);
-			g.setFont(font(Font.BOLD, 13));
+			g.setFont(NebulaDesign.fontMedium(12.5f));
 			g.setColor(TEXT);
 			drawClipped(g, shortLabel(value), x + 14, y + 40, w - 28);
 		}
@@ -1925,14 +2153,14 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				String value,
 				Color color)
 		{
-			g.setColor(SURFACE);
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
+			g.setFont(NebulaDesign.fontSemiBold(9f));
+			g.setColor(color);
 			drawClipped(g, label.toUpperCase(Locale.US), x + 9, y + 15, w - 18);
-			g.setFont(font(Font.BOLD, 13));
+			g.setFont(NebulaDesign.fontMono(12f));
 			g.setColor(TEXT);
 			drawClipped(g, value, x + 9, y + 34, w - 18);
 		}
@@ -1948,9 +2176,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			setOpaque(false);
 			setPreferredSize(new Dimension(420, 380));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setMinimumSize(new Dimension(320, 380));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setReport(RecommendationEvidenceEngine.EvidenceReport report)
@@ -1964,19 +2191,17 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setColor(SURFACE);
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 15));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontTitle());
 			g.setColor(TEXT);
 			g.drawString("Plain-Language Verdict", 16, 28);
 
 			int confidenceH = getWidth() < 420 ? 82 : 70;
 			drawConfidence(g, 18, 48, getWidth() - 36, confidenceH);
 			int verdictY = 48 + confidenceH + 34;
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(GREEN.darker());
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(GREEN);
 			g.drawString("WHAT THIS MEANS", 18, verdictY);
 			g.setFont(font(Font.PLAIN, 13));
 			g.setColor(TEXT);
@@ -1986,8 +2211,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			int y = Math.max(verdictY + 114, getHeight() - 92);
 			if (!report.warnings.isEmpty())
 			{
-				g.setFont(font(Font.BOLD, 11));
-				g.setColor(AMBER.darker());
+				g.setFont(NebulaDesign.fontSection());
+				g.setColor(AMBER);
 				g.drawString("CAREFUL NOTES", 18, y);
 				g.setFont(font(Font.PLAIN, 11));
 				g.setColor(MUTED);
@@ -2005,15 +2230,15 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		private void drawConfidence(Graphics2D g, int x, int y, int w, int h)
 		{
 			g.setPaint(new GradientPaint(
-					x, y, tint(BLUE, 0.82f),
-					x + w, y + h, tint(GREEN, 0.82f)));
+					x, y, tint(BLUE, 0.90f),
+					x + w, y + h, tint(GREEN, 0.90f)));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(themed(new Color(210, 224, 240), StudioNightTheme.NIGHT_BORDER));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
+			g.setFont(NebulaDesign.fontSection());
 			g.setColor(MUTED);
 			g.drawString("MODEL SCORE", x + 14, y + 18);
-			g.setFont(font(Font.BOLD, 28));
+			g.setFont(NebulaDesign.fontSemiBold(26f));
 			g.setColor(TEXT);
 			g.drawString(report.scorePercent + "%", x + 14, y + 52);
 			int barX = x + 116;
@@ -2046,9 +2271,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			setOpaque(false);
 			setPreferredSize(new Dimension(900, 180));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					new EmptyBorder(10, 10, 10, 10)));
+			setMinimumSize(new Dimension(400, 180));
+			setBorder(new EmptyBorder(10, 10, 12, 10));
 		}
 
 		void setReport(RecommendationEvidenceEngine.EvidenceReport report)
@@ -2060,16 +2284,26 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
 			prepare(g);
-			g.setColor(SURFACE);
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 22));
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g.setFont(NebulaDesign.fontSemiBold(19f));
 			g.setColor(TEXT);
-			g.drawString("Run a recommendation to unlock evidence", 24, 50);
+			g.drawString("Run a recommendation to unlock evidence", 24, 46);
 			g.setFont(font(Font.PLAIN, 13));
 			g.setColor(MUTED);
-			drawWrapped(g, report.plainVerdict, 24, 78, getWidth() - 48, 3, 18);
+			drawWrapped(g, report.plainVerdict, 24, 74, getWidth() - 48, 2, 18);
+			int stepY = getHeight() - 42;
+			int stepX = 24;
+			String[] steps = {
+					"1  Start a simulator run",
+					"2  Wait for a completed recommendation",
+					"3  Click it in the list on the left"
+			};
+			Color[] hues = { BLUE, PURPLE, GREEN };
+			for (int i = 0; i < steps.length; i++)
+			{
+				stepX += drawChip(g, steps[i], stepX, stepY, hues[i]) + 10;
+			}
 			g.dispose();
 		}
 	}
@@ -2083,24 +2317,50 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				boolean isSelected,
 				boolean cellHasFocus)
 		{
-			JPanel panel = new JPanel(new BorderLayout(8, 0));
-			panel.setBorder(new EmptyBorder(10, 10, 10, 10));
-			panel.setBackground(isSelected ? tint(BLUE, 0.82f) : SURFACE);
-			EvidenceEntry entry = (EvidenceEntry) value;
-			JLabel title = new JLabel(entry.event.targetUser);
-			title.setFont(font(Font.BOLD, 13));
-			title.setForeground(TEXT);
-			JLabel detail = new JLabel(entry.snapshot.algorithmName + " | "
-					+ entry.event.matches.size() + " ranked");
-			detail.setFont(font(Font.PLAIN, 10));
-			detail.setForeground(MUTED);
-			JPanel stack = new JPanel();
-			stack.setOpaque(false);
-			stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
-			stack.add(title);
-			stack.add(detail);
-			panel.add(stack, BorderLayout.CENTER);
-			return panel;
+			return new EntryCell((EvidenceEntry) value, isSelected);
+		}
+	}
+
+	/** Self-painting history cell: no nested layout, theme-resolved at paint. */
+	private static final class EntryCell extends JPanel
+	{
+		private final EvidenceEntry entry;
+		private final boolean selected;
+
+		EntryCell(EvidenceEntry entry, boolean selected)
+		{
+			this.entry = entry;
+			this.selected = selected;
+			setOpaque(true);
+		}
+
+		public Dimension getPreferredSize()
+		{
+			return new Dimension(220, 52);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D) graphics.create();
+			prepare(g);
+			g.setColor(selected
+					? themed(NebulaDesign.DAY_ACCENT_SOFT, NebulaDesign.NIGHT_SELECTION)
+					: SURFACE);
+			g.fillRect(0, 0, getWidth(), getHeight());
+			if (selected)
+			{
+				g.setColor(BLUE);
+				g.fillRoundRect(0, 8, 3, getHeight() - 16, 3, 3);
+			}
+			g.setFont(NebulaDesign.fontMedium(13f));
+			g.setColor(TEXT);
+			drawClipped(g, entry.event.targetUser, 14, 22, getWidth() - 28);
+			g.setFont(font(Font.PLAIN, 10));
+			g.setColor(MUTED);
+			drawClipped(g, entry.snapshot.algorithmName + " | "
+					+ entry.event.matches.size() + " ranked",
+					14, 39, getWidth() - 28);
+			g.dispose();
 		}
 	}
 
@@ -2113,34 +2373,63 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 				boolean isSelected,
 				boolean cellHasFocus)
 		{
-			MatchRow row = (MatchRow) value;
+			return new MatchCell((MatchRow) value, isSelected);
+		}
+	}
+
+	/** Self-painting candidate cell with a soft-tint rank chip. */
+	private static final class MatchCell extends JPanel
+	{
+		private final MatchRow row;
+		private final boolean selected;
+
+		MatchCell(MatchRow row, boolean selected)
+		{
+			this.row = row;
+			this.selected = selected;
+			setOpaque(true);
+		}
+
+		public Dimension getPreferredSize()
+		{
+			return new Dimension(220, 54);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D) graphics.create();
+			prepare(g);
 			RecommendationEvidenceEngine.MatchEvidence match =
 					row.entry.event.matches.get(row.matchIndex);
-			JPanel panel = new JPanel(new BorderLayout(10, 0));
-			panel.setBorder(new EmptyBorder(10, 10, 10, 10));
-			panel.setBackground(isSelected ? tint(GREEN, 0.80f) : SURFACE);
-			JLabel rank = new JLabel(Integer.toString(match.rank), SwingConstants.CENTER);
-			rank.setFont(font(Font.BOLD, 16));
-			rank.setForeground(Color.WHITE);
-			rank.setOpaque(true);
-			rank.setBackground(row.matchIndex == 0 ? GREEN
-					: (row.matchIndex == 1 ? PURPLE : BLUE));
-			rank.setPreferredSize(new Dimension(34, 34));
-			JLabel title = new JLabel(match.name);
-			title.setFont(font(Font.BOLD, 13));
-			title.setForeground(TEXT);
-			JLabel detail = new JLabel(match.score == null || match.score.length() == 0
-					? "score unavailable" : "score " + match.score);
-			detail.setFont(font(Font.PLAIN, 10));
-			detail.setForeground(MUTED);
-			JPanel stack = new JPanel();
-			stack.setOpaque(false);
-			stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
-			stack.add(title);
-			stack.add(detail);
-			panel.add(rank, BorderLayout.WEST);
-			panel.add(stack, BorderLayout.CENTER);
-			return panel;
+			Color hue = row.matchIndex == 0 ? GREEN
+					: (row.matchIndex == 1 ? PURPLE : BLUE);
+			g.setColor(selected
+					? themed(NebulaDesign.DAY_SUCCESS_SOFT, NebulaDesign.NIGHT_SELECTION)
+					: SURFACE);
+			g.fillRect(0, 0, getWidth(), getHeight());
+			if (selected)
+			{
+				g.setColor(hue);
+				g.fillRoundRect(0, 8, 3, getHeight() - 16, 3, 3);
+			}
+			g.setColor(softTint(hue));
+			g.fillRoundRect(12, 11, 32, 32, 12, 12);
+			g.setFont(NebulaDesign.fontSemiBold(14f));
+			g.setColor(hue);
+			String rankText = Integer.toString(match.rank);
+			FontMetrics rankMetrics = g.getFontMetrics();
+			g.drawString(rankText,
+					12 + (32 - rankMetrics.stringWidth(rankText)) / 2,
+					11 + (32 + rankMetrics.getAscent() - rankMetrics.getDescent()) / 2);
+			g.setFont(NebulaDesign.fontMedium(13f));
+			g.setColor(TEXT);
+			drawClipped(g, match.name, 54, 23, getWidth() - 68);
+			g.setFont(NebulaDesign.fontMono(9.5f));
+			g.setColor(MUTED);
+			drawClipped(g, match.score == null || match.score.length() == 0
+					? "score unavailable" : "score " + match.score,
+					54, 40, getWidth() - 68);
+			g.dispose();
 		}
 	}
 }

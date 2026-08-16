@@ -6,13 +6,13 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.Frame;
-import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
-import java.awt.RenderingHints;
+import java.awt.RadialGradientPaint;
+import java.awt.Shape;
 import java.awt.Window;
+import java.awt.geom.RoundRectangle2D;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.text.DecimalFormat;
@@ -20,7 +20,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-import javax.swing.AbstractCellEditor;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -30,32 +29,27 @@ import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
-import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
-import javax.swing.table.TableCellEditor;
 import javax.swing.table.TableColumn;
 
 final class NodeCapacitySettingsDialog extends JDialog
 {
-	private static final Color BACKGROUND = new Color(246, 248, 251);
-	private static final Color SURFACE = new Color(255, 255, 255);
-	private static final Color SURFACE_ALT = new Color(248, 250, 252);
-	private static final Color TEXT = new Color(24, 29, 36);
-	private static final Color MUTED = new Color(91, 101, 116);
-	private static final Color BORDER = new Color(207, 216, 227);
-	private static final Color BLUE = new Color(83, 113, 220);
-	private static final Color GREEN = new Color(88, 154, 112);
-	private static final Color AMBER = new Color(190, 145, 66);
+	private static final Color BACKGROUND = NebulaDesign.CANVAS_TOP;
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color AMBER = NebulaDesign.WARNING;
 	private static final DecimalFormat DECIMAL = new DecimalFormat("0.##");
 
 	private final int nodeCount;
@@ -63,7 +57,8 @@ final class NodeCapacitySettingsDialog extends JDialog
 	private final CapacityTableModel tableModel;
 	private final JTable table;
 	private final JLabel summaryLabel = new JLabel();
-	private final JLabel warningLabel = new JLabel();
+	private final Paragraph warningLabel = new Paragraph(
+			"", NebulaDesign.fontBody(11.5f), NebulaDesign.TEXT_SECONDARY, 900);
 	private boolean applied;
 
 	static boolean showDialog(Window owner, int nodeCount, int heapMb)
@@ -113,21 +108,27 @@ final class NodeCapacitySettingsDialog extends JDialog
 
 	private JPanel buildHeader()
 	{
-		JPanel header = new GradientPanel(new BorderLayout(18, 0));
-		header.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER, 1),
-				new EmptyBorder(20, 22, 20, 22)));
+		JPanel header = new HeroPanel(new BorderLayout(18, 0));
+		header.setBorder(new EmptyBorder(16, 20, 16, 18));
 
 		JPanel copy = new JPanel();
 		copy.setOpaque(false);
 		copy.setLayout(new BoxLayout(copy, BoxLayout.Y_AXIS));
+		JLabel eyebrow = new JLabel("Capacity planning");
+		NebulaWidgets.styleSectionLabel(eyebrow);
+		eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
 		JLabel title = new JLabel("Node Capacity Configuration");
-		title.setFont(new Font("SansSerif", Font.BOLD, 26));
+		title.setFont(NebulaDesign.fontSemiBold(20f));
 		title.setForeground(TEXT);
-		JLabel detail = new JLabel(
-				"Define the scheduling contract for each recommender node without changing recommendation scoring.");
-		detail.setFont(new Font("SansSerif", Font.PLAIN, 12));
-		detail.setForeground(MUTED);
+		title.setAlignmentX(Component.LEFT_ALIGNMENT);
+		Paragraph detail = new Paragraph(
+				"Set each recommender node's scheduling contract. "
+				+ "Recommendation scoring stays untouched.",
+				NebulaDesign.fontBody(12.5f),
+				MUTED,
+				420);
+		copy.add(eyebrow);
+		copy.add(Box.createRigidArea(new Dimension(0, 4)));
 		copy.add(title);
 		copy.add(Box.createRigidArea(new Dimension(0, 5)));
 		copy.add(detail);
@@ -140,7 +141,7 @@ final class NodeCapacitySettingsDialog extends JDialog
 				RuntimeResourceSettings.formatMegabytes(heapMb),
 				"current run limit", GREEN));
 		stats.add(new SummaryCard("Contract",
-				"Scoring-safe", "metadata and scheduler hints", AMBER));
+				"Scoring-safe", "scheduler hints only", AMBER));
 		header.add(copy, BorderLayout.CENTER);
 		header.add(stats, BorderLayout.EAST);
 		return header;
@@ -152,7 +153,7 @@ final class NodeCapacitySettingsDialog extends JDialog
 		panel.setOpaque(false);
 		panel.add(new PolicyCard(
 				"CPU multiplier",
-				"Shows relative processing capacity for scheduling experiments.",
+				"Relative processing capacity used by scheduling experiments.",
 				BLUE));
 		panel.add(new PolicyCard(
 				"Memory budget",
@@ -160,31 +161,27 @@ final class NodeCapacitySettingsDialog extends JDialog
 				GREEN));
 		panel.add(new PolicyCard(
 				"Queues and jobs",
-				"Describes how much work a node should accept in scheduling scenarios.",
+				"How much work a node should accept in scheduling scenarios.",
 				AMBER));
 		panel.add(new PolicyCard(
 				"Failure and slowdown",
-				"Stored for v4 what-if simulation. It is not injected into live scoring by default.",
-				new Color(139, 107, 214)));
+				"Stored for what-if simulation. Not injected into live scoring by default.",
+				NebulaDesign.PURPLE));
 		return panel;
 	}
 
 	private JPanel buildTablePanel()
 	{
-		JPanel panel = new JPanel(new BorderLayout(0, 9));
-		panel.setOpaque(true);
-		panel.setBackground(SURFACE);
-		panel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER, 1),
-				new EmptyBorder(12, 12, 12, 12)));
+		JPanel panel = new CardPanel(new BorderLayout(0, 9));
+		panel.setBorder(new EmptyBorder(12, 14, 15, 14));
 
 		JLabel title = new JLabel("Per-node contract");
 		title.setForeground(TEXT);
-		title.setFont(new Font("SansSerif", Font.BOLD, 14));
+		title.setFont(NebulaDesign.fontSemiBold(14f));
 		JLabel note = new JLabel(
 				"Edit values directly. Role changes apply a safe preset that you can still customize.");
-		note.setForeground(MUTED);
-		note.setFont(new Font("SansSerif", Font.PLAIN, 11));
+		note.setForeground(NebulaDesign.TEXT_TERTIARY);
+		note.setFont(NebulaDesign.fontBody(11f));
 		JPanel heading = new JPanel(new BorderLayout());
 		heading.setOpaque(false);
 		heading.add(title, BorderLayout.WEST);
@@ -192,7 +189,11 @@ final class NodeCapacitySettingsDialog extends JDialog
 
 		JScrollPane scrollPane = new JScrollPane(table);
 		scrollPane.setBorder(BorderFactory.createLineBorder(BORDER, 1));
-		scrollPane.getViewport().setBackground(Color.WHITE);
+		scrollPane.getViewport().setBackground(SURFACE);
+		scrollPane.getVerticalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+		scrollPane.getVerticalScrollBar().setOpaque(false);
+		scrollPane.getHorizontalScrollBar().setUI(new NebulaWidgets.PillScrollBarUI());
+		scrollPane.getHorizontalScrollBar().setOpaque(false);
 		panel.add(heading, BorderLayout.NORTH);
 		panel.add(scrollPane, BorderLayout.CENTER);
 		return panel;
@@ -200,33 +201,25 @@ final class NodeCapacitySettingsDialog extends JDialog
 
 	private JPanel buildFooter()
 	{
-		JPanel footer = new JPanel(new BorderLayout(12, 0));
+		JPanel footer = new JPanel(new BorderLayout(0, 12));
 		footer.setOpaque(false);
 
-		JPanel summary = new JPanel();
-		summary.setOpaque(true);
-		summary.setBackground(SURFACE_ALT);
-		summary.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(BORDER, 1),
-				new EmptyBorder(10, 12, 10, 12)));
-		summary.setLayout(new BoxLayout(summary, BoxLayout.Y_AXIS));
-		summaryLabel.setFont(new Font("SansSerif", Font.BOLD, 12));
+		JPanel summary = new InsetPanel();
+		summary.setBorder(new EmptyBorder(11, 14, 12, 14));
+		summary.setLayout(new BorderLayout(0, 5));
+		summaryLabel.setFont(NebulaDesign.fontMedium(12.5f));
 		summaryLabel.setForeground(TEXT);
-		warningLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
-		warningLabel.setForeground(MUTED);
-		summary.add(summaryLabel);
-		summary.add(Box.createRigidArea(new Dimension(0, 4)));
-		summary.add(warningLabel);
+		summary.add(summaryLabel, BorderLayout.NORTH);
+		summary.add(warningLabel, BorderLayout.CENTER);
 
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
 		buttons.setOpaque(false);
-		JButton balanced = actionButton("Balanced defaults", BLUE);
-		JButton heterogeneous = actionButton("Heterogeneous lab", AMBER);
+		JButton balanced = actionButton("Balanced defaults", null, BLUE);
+		JButton heterogeneous = actionButton("Heterogeneous lab", null, AMBER);
 		JButton originalDefault = actionButton(
-				"Restore DSMP Default",
-				new Color(112, 120, 132));
-		JButton cancel = actionButton("Cancel", new Color(148, 163, 184));
-		JButton apply = actionButton("Apply capacity", GREEN);
+				"Restore DSMP default", null, null);
+		JButton cancel = actionButton("Cancel", null, null);
+		JButton apply = actionButton("Apply capacity", GREEN, null);
 		balanced.setToolTipText(
 				"Set every node to the neutral v4 capacity profile.");
 		heterogeneous.setToolTipText(
@@ -277,14 +270,16 @@ final class NodeCapacitySettingsDialog extends JDialog
 		buttons.add(cancel);
 		buttons.add(apply);
 
-		footer.add(summary, BorderLayout.CENTER);
-		footer.add(buttons, BorderLayout.EAST);
+		footer.add(summary, BorderLayout.NORTH);
+		footer.add(buttons, BorderLayout.SOUTH);
 		return footer;
 	}
 
-	private JButton actionButton(String text, Color accent)
+	private JButton actionButton(String text, Color fill, Color dotHue)
 	{
-		return new CapacityActionButton(text, accent);
+		CapacityActionButton button = new CapacityActionButton(text, fill, dotHue);
+		NebulaWidgets.polishButton(button);
+		return button;
 	}
 
 	private void configureTable()
@@ -292,19 +287,36 @@ final class NodeCapacitySettingsDialog extends JDialog
 		table.setRowHeight(34);
 		table.setFillsViewportHeight(true);
 		table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-		table.setGridColor(new Color(226, 232, 240));
+		table.setGridColor(BORDER);
 		table.setShowVerticalLines(false);
-		table.setFont(new Font("SansSerif", Font.PLAIN, 12));
-		table.getTableHeader().setFont(new Font("SansSerif", Font.BOLD, 11));
+		table.setBackground(SURFACE);
+		table.setForeground(TEXT);
+		table.setSelectionBackground(NebulaDesign.SELECTION);
+		table.setSelectionForeground(TEXT);
+		table.setFont(NebulaDesign.fontBody(12f));
+		table.getTableHeader().setFont(NebulaDesign.fontMedium(11f));
 		table.getTableHeader().setForeground(MUTED);
+		table.getTableHeader().setBackground(NebulaDesign.SURFACE_RAISED);
 		table.getTableHeader().setReorderingAllowed(false);
+		table.getTableHeader().setDefaultRenderer(new HeaderRenderer());
 		table.setDefaultRenderer(Object.class, new CapacityRenderer());
 		table.setDefaultRenderer(Number.class, new CapacityRenderer());
-		table.setDefaultRenderer(Boolean.class, table.getDefaultRenderer(Boolean.class));
+		table.setDefaultRenderer(Boolean.class, new SwitchRenderer());
+		JCheckBox booleanEditor = new JCheckBox();
+		booleanEditor.setHorizontalAlignment(SwingConstants.CENTER);
+		booleanEditor.setOpaque(true);
+		booleanEditor.setBackground(NebulaDesign.SELECTION);
+		booleanEditor.setBorderPainted(false);
+		booleanEditor.setIcon(new CheckBoxIcon());
+		table.setDefaultEditor(Boolean.class, new DefaultCellEditor(booleanEditor));
 
 		JComboBox<NodeCapacityProfile.Role> roleCombo =
 				new JComboBox<NodeCapacityProfile.Role>(
 						NodeCapacityProfile.Role.values());
+		roleCombo.setFont(NebulaDesign.fontMedium(12f));
+		roleCombo.setBackground(NebulaDesign.SURFACE_ALT);
+		roleCombo.setForeground(TEXT);
+		roleCombo.setRenderer(new RoleItemRenderer());
 		table.getColumnModel().getColumn(1).setCellEditor(
 				new DefaultCellEditor(roleCombo));
 		int[] widths = {64, 128, 78, 100, 76, 82, 92, 82, 82, 82, 70};
@@ -360,8 +372,7 @@ final class NodeCapacitySettingsDialog extends JDialog
 		{
 			warning += " Delay, slowdown, and failure simulation are applied in the Exact Multi-Node Lab so what-if scheduling scenarios stay isolated from normal scoring runs.";
 		}
-		warningLabel.setText("<html><body style='width:720px'>"
-				+ escape(warning) + "</body></html>");
+		warningLabel.setText(warning);
 	}
 
 	private boolean isOriginalDsmpDefault(List<NodeCapacityProfile> profiles)
@@ -413,11 +424,10 @@ final class NodeCapacitySettingsDialog extends JDialog
 		}
 		catch (IllegalArgumentException exception)
 		{
-			JOptionPane.showMessageDialog(
+			NebulaDialogs.showError(
 					this,
 					exception.getMessage(),
-					"Invalid Node Capacity",
-					JOptionPane.ERROR_MESSAGE);
+					"Invalid Node Capacity");
 		}
 	}
 
@@ -763,6 +773,11 @@ final class NodeCapacitySettingsDialog extends JDialog
 	private static final class CapacityRenderer
 			extends DefaultTableCellRenderer
 	{
+		private static final long serialVersionUID = 1L;
+		private boolean selectedRow;
+		private boolean firstColumn;
+		private boolean rolePill;
+
 		CapacityRenderer()
 		{
 			setBorder(new EmptyBorder(0, 8, 0, 8));
@@ -783,62 +798,428 @@ final class NodeCapacitySettingsDialog extends JDialog
 					focused,
 					row,
 					column);
-			label.setFont(new Font("SansSerif",
-					column == 0 || column == 1 ? Font.BOLD : Font.PLAIN,
-					12));
+			selectedRow = selected;
+			firstColumn = column == 0;
+			rolePill = column == 1 && value instanceof NodeCapacityProfile.Role;
+			if (column == 1)
+			{
+				label.setFont(NebulaDesign.fontMedium(11.5f));
+				label.setBorder(new EmptyBorder(0, 16, 0, 8));
+			}
+			else
+			{
+				label.setFont(NebulaDesign.fontMono(12f));
+				label.setBorder(new EmptyBorder(0, 8, 0, 8));
+			}
+			label.setOpaque(!rolePill);
 			label.setHorizontalAlignment(column == 1
 					? SwingConstants.LEFT : SwingConstants.CENTER);
 			if (!selected)
 			{
-				label.setBackground(row % 2 == 0
-						? Color.WHITE : new Color(249, 251, 253));
-				label.setForeground(TEXT);
+				label.setBackground(NebulaDesign.SURFACE);
 			}
+			label.setForeground(column == 1 ? roleTone(value)
+					: column == 0 ? NebulaDesign.TEXT_SECONDARY : TEXT);
+			putClientProperty("nebula.roleValue", value);
+			return label;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			if (rolePill)
+			{
+				g2.setColor(selectedRow
+						? NebulaDesign.SELECTION : NebulaDesign.SURFACE);
+				g2.fillRect(0, 0, getWidth(), getHeight());
+				Object value = getClientProperty("nebula.roleValue");
+				java.awt.FontMetrics metrics = getFontMetrics(getFont());
+				int pillWidth = Math.min(getWidth() - 12,
+						metrics.stringWidth(getText()) + 20);
+				g2.setColor(roleSoft(value));
+				g2.fillRoundRect(6, 6, Math.max(20, pillWidth),
+						Math.max(14, getHeight() - 12), 999, 999);
+			}
+			g2.dispose();
+			super.paintComponent(graphics);
+			if (selectedRow && firstColumn)
+			{
+				Graphics2D bar = (Graphics2D)graphics.create();
+				NebulaDesign.prepare(bar);
+				bar.setColor(NebulaDesign.currentAccent());
+				bar.fillRoundRect(0, 4, 3, getHeight() - 8, 3, 3);
+				bar.dispose();
+			}
+		}
+
+		private static Color roleTone(Object value)
+		{
+			if (value instanceof NodeCapacityProfile.Role)
+			{
+				switch ((NodeCapacityProfile.Role)value)
+				{
+					case STRONG:
+						return NebulaDesign.SUCCESS;
+					case WEAK:
+						return NebulaDesign.WARNING;
+					case MEMORY_HEAVY:
+						return NebulaDesign.INFO;
+					case UNRELIABLE:
+						return NebulaDesign.DANGER;
+					default:
+						return NebulaDesign.TEXT_SECONDARY;
+				}
+			}
+			return NebulaDesign.TEXT_PRIMARY;
+		}
+
+		private static Color roleSoft(Object value)
+		{
+			if (value instanceof NodeCapacityProfile.Role)
+			{
+				switch ((NodeCapacityProfile.Role)value)
+				{
+					case STRONG:
+						return NebulaDesign.SUCCESS_SOFT;
+					case WEAK:
+						return NebulaDesign.WARNING_SOFT;
+					case MEMORY_HEAVY:
+						return NebulaDesign.INFO_SOFT;
+					case UNRELIABLE:
+						return NebulaDesign.DANGER_SOFT;
+					default:
+						return NebulaDesign.SURFACE_ALT;
+				}
+			}
+			return NebulaDesign.SURFACE_ALT;
+		}
+	}
+
+	/** Table checkbox cell drawn with the Nebula check mark. */
+	private static final class SwitchRenderer extends JCheckBox
+			implements javax.swing.table.TableCellRenderer
+	{
+		private static final long serialVersionUID = 1L;
+
+		SwitchRenderer()
+		{
+			setHorizontalAlignment(SwingConstants.CENTER);
+			setOpaque(true);
+			setBorderPainted(false);
+			setFocusPainted(false);
+			setIcon(new CheckBoxIcon());
+		}
+
+		public Component getTableCellRendererComponent(
+				JTable table,
+				Object value,
+				boolean selected,
+				boolean focused,
+				int row,
+				int column)
+		{
+			setSelected(value instanceof Boolean
+					&& ((Boolean)value).booleanValue());
+			setBackground(selected
+					? NebulaDesign.SELECTION : NebulaDesign.SURFACE);
+			return this;
+		}
+	}
+
+	/** Role popup renderer so the editor list matches the active theme. */
+	private static final class RoleItemRenderer
+			extends javax.swing.DefaultListCellRenderer
+	{
+		private static final long serialVersionUID = 1L;
+
+		public Component getListCellRendererComponent(
+				javax.swing.JList<?> list,
+				Object value,
+				int index,
+				boolean isSelected,
+				boolean cellHasFocus)
+		{
+			JLabel label = (JLabel)super.getListCellRendererComponent(
+					list, value, index, isSelected, cellHasFocus);
+			label.setFont(NebulaDesign.fontMedium(12f));
+			label.setBorder(new EmptyBorder(6, 12, 6, 12));
+			label.setOpaque(true);
+			label.setBackground(isSelected
+					? NebulaDesign.ACCENT_SOFT : NebulaDesign.SURFACE);
+			label.setForeground(NebulaDesign.TEXT_PRIMARY);
+			return label;
+		}
+	}
+
+	/** 16px custom checkbox: rounded well, accent fill and tick when on. */
+	private static final class CheckBoxIcon implements javax.swing.Icon
+	{
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			javax.swing.AbstractButton button =
+					(javax.swing.AbstractButton)component;
+			boolean on = button.isSelected();
+			boolean enabled = button.isEnabled();
+			int size = getIconWidth();
+			if (on && enabled)
+			{
+				g2.setColor(NebulaDesign.ACCENT);
+				g2.fillRoundRect(x, y, size, size, 5, 5);
+			}
+			else
+			{
+				g2.setColor(enabled ? NebulaDesign.SURFACE_ALT : NebulaDesign.INSET);
+				g2.fillRoundRect(x, y, size, size, 5, 5);
+				g2.setColor(enabled
+						? NebulaDesign.BORDER_STRONG : NebulaDesign.BORDER_SUBTLE);
+				g2.drawRoundRect(x, y, size - 1, size - 1, 5, 5);
+			}
+			if (on)
+			{
+				g2.setColor(enabled
+						? NebulaDesign.TEXT_ON_ACCENT : NebulaDesign.TEXT_TERTIARY);
+				g2.setStroke(new java.awt.BasicStroke(2f,
+						java.awt.BasicStroke.CAP_ROUND,
+						java.awt.BasicStroke.JOIN_ROUND));
+				g2.drawLine(x + 4, y + 8, x + 7, y + 11);
+				g2.drawLine(x + 7, y + 11, x + 12, y + 5);
+			}
+			g2.dispose();
+		}
+
+		public int getIconWidth()
+		{
+			return 16;
+		}
+
+		public int getIconHeight()
+		{
+			return 16;
+		}
+	}
+
+	/**
+	 * Word-wrapped body copy. Swing's HTML labels measure and draw with
+	 * different metrics under the bundled Inter faces, which clipped the last
+	 * word of every wrapped line; this paints the wrap itself so the measure
+	 * and the drawing always agree.
+	 */
+	private static final class Paragraph extends javax.swing.JComponent
+	{
+		private static final long serialVersionUID = 1L;
+		private final int measure;
+		private String text;
+
+		Paragraph(String text, Font font, Color color, int measure)
+		{
+			this.text = text == null ? "" : text;
+			this.measure = measure;
+			setFont(font);
+			setForeground(color);
+			setOpaque(false);
+			setAlignmentX(Component.LEFT_ALIGNMENT);
+		}
+
+		void setText(String value)
+		{
+			text = value == null ? "" : value;
+			revalidate();
+			repaint();
+		}
+
+		public Dimension getPreferredSize()
+		{
+			java.awt.FontMetrics metrics = getFontMetrics(getFont());
+			int lines = layoutLines(metrics, measure, null);
+			return new Dimension(measure,
+					Math.max(1, lines) * metrics.getHeight());
+		}
+
+		public Dimension getMinimumSize()
+		{
+			return getPreferredSize();
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setFont(getFont());
+			g2.setColor(getForeground());
+			layoutLines(g2.getFontMetrics(), Math.max(1, getWidth()), g2);
+			g2.dispose();
+		}
+
+		private int layoutLines(
+				java.awt.FontMetrics metrics,
+				int width,
+				Graphics2D g2)
+		{
+			int lines = 0;
+			int baseline = metrics.getAscent();
+			int start = 0;
+			while (start < text.length())
+			{
+				int end = start;
+				int lastBreak = -1;
+				while (end < text.length())
+				{
+					if (text.charAt(end) == ' ')
+					{
+						if (metrics.stringWidth(text.substring(start, end)) > width)
+						{
+							break;
+						}
+						lastBreak = end;
+					}
+					end++;
+				}
+				int stop;
+				if (end >= text.length()
+						&& metrics.stringWidth(text.substring(start)) <= width)
+				{
+					stop = text.length();
+				}
+				else if (lastBreak > start)
+				{
+					stop = lastBreak;
+				}
+				else
+				{
+					stop = Math.min(text.length(), start + 1);
+					while (stop < text.length()
+							&& metrics.stringWidth(
+									text.substring(start, stop + 1)) <= width)
+					{
+						stop++;
+					}
+				}
+				if (g2 != null)
+				{
+					g2.drawString(text.substring(start, stop).trim(), 0, baseline);
+					baseline += metrics.getHeight();
+				}
+				lines++;
+				start = stop;
+				while (start < text.length() && text.charAt(start) == ' ')
+				{
+					start++;
+				}
+			}
+			return lines;
+		}
+	}
+
+	private static final class HeaderRenderer extends DefaultTableCellRenderer
+	{
+		private static final long serialVersionUID = 1L;
+
+		public Component getTableCellRendererComponent(
+				JTable table,
+				Object value,
+				boolean selected,
+				boolean focused,
+				int row,
+				int column)
+		{
+			JLabel label = (JLabel)super.getTableCellRendererComponent(
+					table,
+					value,
+					false,
+					false,
+					row,
+					column);
+			label.setOpaque(true);
+			label.setBackground(NebulaDesign.SURFACE_RAISED);
+			label.setForeground(NebulaDesign.TEXT_SECONDARY);
+			label.setFont(NebulaDesign.fontMedium(11f));
+			label.setHorizontalAlignment(SwingConstants.CENTER);
+			label.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createMatteBorder(
+							0, 0, 1, 0, NebulaDesign.BORDER_STRONG),
+					new EmptyBorder(7, 6, 7, 6)));
 			return label;
 		}
 	}
 
 	private static final class CapacityActionButton extends JButton
 	{
-		private final Color accent;
+		private static final long serialVersionUID = 1L;
+		private final Color fill;
+		private final Color dotHue;
 
-		CapacityActionButton(String text, Color accent)
+		CapacityActionButton(String text, Color fill, Color dotHue)
 		{
 			super(text);
-			this.accent = accent;
+			this.fill = fill;
+			this.dotHue = dotHue;
 			setFocusPainted(false);
 			setRolloverEnabled(true);
 			setOpaque(false);
 			setContentAreaFilled(false);
 			setBorderPainted(false);
-			setForeground(Color.WHITE);
-			setFont(new Font("SansSerif", Font.BOLD, 12));
-			setBorder(new EmptyBorder(10, 16, 10, 16));
-			setCursor(java.awt.Cursor.getPredefinedCursor(
-					java.awt.Cursor.HAND_CURSOR));
+			setFont(NebulaDesign.fontMedium(12.5f));
+			setBorder(new EmptyBorder(9, 16, 9, 16));
 		}
 
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g2 = (Graphics2D)graphics.create();
-			g2.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-			Color fill = accent;
-			if (getModel().isPressed())
+			NebulaDesign.prepare(g2);
+			int width = getWidth();
+			int height = getHeight();
+			boolean hover = getModel().isRollover();
+			boolean pressed = getModel().isPressed();
+			Color background;
+			Color textColor;
+			Color outline = null;
+			if (!isEnabled())
 			{
-				fill = darken(accent, 0.16f);
+				background = NebulaDesign.SURFACE_ALT;
+				textColor = NebulaDesign.TEXT_TERTIARY;
+				outline = NebulaDesign.BORDER_SUBTLE;
 			}
-			else if (getModel().isRollover())
+			else if (fill != null)
 			{
-				fill = brighten(accent, 0.08f);
+				background = pressed ? darken(fill, 0.14f)
+						: hover ? brighten(fill, 0.10f) : fill;
+				textColor = NebulaDesign.TEXT_ON_ACCENT;
 			}
-			g2.setColor(fill);
-			g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
-			g2.setColor(new Color(0, 0, 0, 45));
-			g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+			else
+			{
+				background = hover || pressed
+						? NebulaDesign.SURFACE_RAISED : NebulaDesign.SURFACE;
+				textColor = NebulaDesign.TEXT_PRIMARY;
+				outline = hover
+						? NebulaDesign.withAlpha(NebulaDesign.currentAccent(), 110)
+						: NebulaDesign.BORDER_STRONG;
+			}
+			g2.setColor(background);
+			g2.fillRoundRect(0, 0, width - 1, height - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			if (outline != null)
+			{
+				g2.setColor(outline);
+				g2.drawRoundRect(0, 0, width - 1, height - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			}
+			g2.setFont(getFont());
+			java.awt.FontMetrics metrics = g2.getFontMetrics();
+			int dotSpan = dotHue == null ? 0 : 13;
+			int textWidth = metrics.stringWidth(getText());
+			int groupX = (width - textWidth - dotSpan) / 2;
+			int textY = (height - metrics.getHeight()) / 2 + metrics.getAscent();
+			if (dotHue != null)
+			{
+				g2.setColor(isEnabled() ? dotHue : NebulaDesign.TEXT_TERTIARY);
+				g2.fillOval(groupX, height / 2 - 3, 7, 7);
+			}
+			g2.setColor(textColor);
+			g2.drawString(getText(), groupX + dotSpan, textY);
 			g2.dispose();
-			super.paintComponent(graphics);
 		}
 
 		private static Color brighten(Color color, float amount)
@@ -864,9 +1245,12 @@ final class NodeCapacitySettingsDialog extends JDialog
 		}
 	}
 
-	private static final class GradientPanel extends JPanel
+	/** Hero card: surface fill, faint aurora glows, rounded border. */
+	private static final class HeroPanel extends JPanel
 	{
-		GradientPanel(BorderLayout layout)
+		private static final long serialVersionUID = 1L;
+
+		HeroPanel(BorderLayout layout)
 		{
 			super(layout);
 			setOpaque(false);
@@ -875,24 +1259,138 @@ final class NodeCapacitySettingsDialog extends JDialog
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g2 = (Graphics2D)graphics.create();
-			g2.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-			g2.setPaint(new GradientPaint(
-					0,
-					0,
-					Color.WHITE,
-					getWidth(),
-					getHeight(),
-					new Color(232, 244, 239)));
-			g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+			NebulaDesign.prepare(g2);
+			int width = getWidth();
+			int height = getHeight();
+			Shape round = new RoundRectangle2D.Float(
+					0, 0, width - 1, height - 1,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+			g2.setColor(NebulaDesign.SURFACE);
+			g2.fill(round);
+			Shape oldClip = g2.getClip();
+			g2.clip(round);
+			boolean night = NebulaDesign.night();
+			Color accent = night
+					? NebulaDesign.NIGHT_ACCENT : NebulaDesign.DAY_ACCENT;
+			Color purple = night
+					? NebulaDesign.NIGHT_PURPLE : NebulaDesign.DAY_PURPLE;
+			int glowAlpha = night ? 26 : 15;
+			paintGlow(g2, width * 0.14f, 0f,
+					Math.max(width, height) * 0.45f,
+					NebulaDesign.withAlpha(accent, glowAlpha));
+			paintGlow(g2, width * 0.86f, height,
+					Math.max(width, height) * 0.40f,
+					NebulaDesign.withAlpha(purple, Math.max(6, glowAlpha - 3)));
+			g2.setClip(oldClip);
+			g2.setColor(NebulaDesign.BORDER_SUBTLE);
+			g2.draw(round);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+
+		private static void paintGlow(
+				Graphics2D g2,
+				float centerX,
+				float centerY,
+				float radius,
+				Color color)
+		{
+			RadialGradientPaint paint = new RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(centerX, centerY),
+					Math.max(1f, radius),
+					new float[] {0f, 1f},
+					new Color[] {color, NebulaDesign.withAlpha(color, 0)});
+			g2.setPaint(paint);
+			g2.fillRect(
+					Math.round(centerX - radius),
+					Math.round(centerY - radius),
+					Math.round(radius * 2),
+					Math.round(radius * 2));
+		}
+	}
+
+	/** Rounded inset well used by the footer summary. */
+	private static final class InsetPanel extends JPanel
+	{
+		private static final long serialVersionUID = 1L;
+
+		InsetPanel()
+		{
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(NebulaDesign.INSET);
+			g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.setColor(NebulaDesign.BORDER_SUBTLE);
+			g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
 			g2.dispose();
 			super.paintComponent(graphics);
 		}
 	}
 
+	/** Rounded Nebula card with day shadow / night surface lift. */
+	private static final class CardPanel extends JPanel
+	{
+		private static final long serialVersionUID = 1L;
+
+		CardPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Small filled circle icon used to key tiles and cards to a hue. */
+	private static final class DotIcon implements javax.swing.Icon
+	{
+		private final Color hue;
+		private final int size;
+
+		DotIcon(Color hue, int size)
+		{
+			this.hue = hue;
+			this.size = size;
+		}
+
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(hue);
+			g2.fillOval(x, y, size, size);
+			g2.dispose();
+		}
+
+		public int getIconWidth()
+		{
+			return size;
+		}
+
+		public int getIconHeight()
+		{
+			return size;
+		}
+	}
+
 	private static final class SummaryCard extends JPanel
 	{
+		private static final long serialVersionUID = 1L;
+
 		SummaryCard(
 				String title,
 				String value,
@@ -900,50 +1398,67 @@ final class NodeCapacitySettingsDialog extends JDialog
 				Color accent)
 		{
 			super(new BorderLayout(0, 2));
-			setOpaque(true);
-			setBackground(new Color(
-					accent.getRed(), accent.getGreen(), accent.getBlue(), 18));
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(new Color(
-							accent.getRed(), accent.getGreen(), accent.getBlue(), 80)),
-					new EmptyBorder(10, 12, 10, 12)));
+			setOpaque(false);
+			setBorder(new EmptyBorder(10, 12, 9, 10));
 			JLabel titleLabel = new JLabel(title.toUpperCase(Locale.US));
-			titleLabel.setForeground(MUTED);
-			titleLabel.setFont(new Font("SansSerif", Font.BOLD, 9));
+			titleLabel.setForeground(NebulaDesign.TEXT_TERTIARY);
+			titleLabel.setFont(NebulaDesign.fontSemiBold(10f));
+			titleLabel.setIcon(new DotIcon(accent, 7));
+			titleLabel.setIconTextGap(6);
 			JLabel valueLabel = new JLabel(value);
 			valueLabel.setForeground(TEXT);
-			valueLabel.setFont(new Font("SansSerif", Font.BOLD, 18));
+			valueLabel.setFont(NebulaDesign.fontSemiBold(18f));
 			JLabel detailLabel = new JLabel(detail);
-			detailLabel.setForeground(MUTED);
-			detailLabel.setFont(new Font("SansSerif", Font.PLAIN, 10));
+			detailLabel.setForeground(NebulaDesign.TEXT_TERTIARY);
+			detailLabel.setFont(NebulaDesign.fontMedium(10f));
 			add(titleLabel, BorderLayout.NORTH);
 			add(valueLabel, BorderLayout.CENTER);
 			add(detailLabel, BorderLayout.SOUTH);
-			setPreferredSize(new Dimension(150, 82));
+			setPreferredSize(new Dimension(162, 80));
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(NebulaDesign.SURFACE_ALT);
+			g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+			g2.setColor(NebulaDesign.BORDER_SUBTLE);
+			g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+			g2.dispose();
+			super.paintComponent(graphics);
 		}
 	}
 
 	private static final class PolicyCard extends JPanel
 	{
+		private static final long serialVersionUID = 1L;
+
 		PolicyCard(String title, String detail, Color accent)
 		{
 			super(new BorderLayout(0, 4));
-			setOpaque(true);
-			setBackground(SURFACE);
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createMatteBorder(0, 5, 0, 0, accent),
-					BorderFactory.createCompoundBorder(
-							BorderFactory.createLineBorder(BORDER, 1),
-							new EmptyBorder(10, 12, 10, 12))));
+			setOpaque(false);
+			setBorder(new EmptyBorder(10, 14, 12, 12));
 			JLabel titleLabel = new JLabel(title);
 			titleLabel.setForeground(TEXT);
-			titleLabel.setFont(new Font("SansSerif", Font.BOLD, 12));
-			JLabel detailLabel = new JLabel("<html><body style='width:220px'>"
-					+ escape(detail) + "</body></html>");
-			detailLabel.setForeground(MUTED);
-			detailLabel.setFont(new Font("SansSerif", Font.PLAIN, 10));
+			titleLabel.setFont(NebulaDesign.fontMedium(12.5f));
+			titleLabel.setIcon(new DotIcon(accent, 7));
+			titleLabel.setIconTextGap(7);
+			Paragraph detailLabel = new Paragraph(
+					detail,
+					NebulaDesign.fontBody(11f),
+					NebulaDesign.TEXT_TERTIARY,
+					206);
 			add(titleLabel, BorderLayout.NORTH);
 			add(detailLabel, BorderLayout.CENTER);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(), 12);
+			g2.dispose();
+			super.paintComponent(graphics);
 		}
 	}
 }

@@ -5,21 +5,31 @@ import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.RadialGradientPaint;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.geom.Point2D;
+import java.awt.geom.RoundRectangle2D;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.HierarchyEvent;
 import java.awt.event.HierarchyListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -27,10 +37,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import javax.swing.AbstractButton;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
+import javax.swing.Icon;
 import javax.swing.JButton;
+import javax.swing.JList;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
@@ -49,8 +63,14 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
+import javax.swing.border.Border;
+import javax.swing.plaf.basic.BasicComboBoxUI;
+import javax.swing.plaf.basic.BasicProgressBarUI;
+import javax.swing.plaf.basic.BasicSpinnerUI;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.JTableHeader;
+import javax.swing.table.TableCellRenderer;
 
 /**
  * Full-page interface for the isolated exact population benchmark. It does not
@@ -58,32 +78,26 @@ import javax.swing.table.DefaultTableCellRenderer;
  */
 final class PopulationSweepPanel extends JPanel
 {
-	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
-			new Color(242, 246, 250), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-			Color.WHITE, StudioNightTheme.NIGHT_SURFACE);
-	private static final Color SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(247, 250, 253), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color BORDER = StudioNightTheme.adaptiveColor(
-			new Color(205, 215, 226), StudioNightTheme.NIGHT_BORDER);
-	private static final Color TEXT = StudioNightTheme.adaptiveColor(
-			new Color(24, 29, 36), StudioNightTheme.NIGHT_TEXT);
-	private static final Color MUTED = StudioNightTheme.adaptiveColor(
-			new Color(91, 101, 116), StudioNightTheme.NIGHT_MUTED);
-	private static final Color BLUE = StudioNightTheme.adaptiveColor(
-			new Color(0, 113, 227), StudioNightTheme.NIGHT_BLUE);
-	private static final Color GREEN = StudioNightTheme.adaptiveColor(
-			new Color(20, 150, 105), StudioNightTheme.NIGHT_GREEN);
-	private static final Color AMBER = StudioNightTheme.adaptiveColor(
-			new Color(190, 111, 22), StudioNightTheme.NIGHT_AMBER);
-	private static final Color RED = StudioNightTheme.adaptiveColor(
-			new Color(205, 55, 49), StudioNightTheme.NIGHT_RED);
-	private static final Color PURPLE = StudioNightTheme.adaptiveColor(
-			new Color(112, 77, 190), StudioNightTheme.NIGHT_PURPLE);
+	private static final Color BACKGROUND = NebulaDesign.CANVAS_TOP;
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color RED = NebulaDesign.DANGER;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+
+	private static final int BUTTON_PRIMARY = 0;
+	private static final int BUTTON_SUCCESS = 1;
+	private static final int BUTTON_NEUTRAL = 2;
+	private static final int BUTTON_DANGER = 3;
 
 	private final ControllerAgentGui owner;
 	private final JComboBox<ExactPopulationSweepEngine.Algorithm> algorithmBox =
-			new JComboBox<ExactPopulationSweepEngine.Algorithm>(
+			new PinnedComboBox<ExactPopulationSweepEngine.Algorithm>(
 					ExactPopulationSweepEngine.Algorithm.values());
 	private final JSpinner nodesSpinner = new JSpinner(
 			new SpinnerNumberModel(
@@ -94,60 +108,59 @@ final class PopulationSweepPanel extends JPanel
 			new JSpinner(new SpinnerNumberModel(0, 0, 1000000, 10));
 	private final JSpinner topResultsSpinner =
 			new JSpinner(new SpinnerNumberModel(3, 1, 100, 1));
-	private final JTextField beginDateField = new JTextField("2007-01-01");
-	private final JTextField endDateField = new JTextField("2099-12-31");
+	private final JTextField beginDateField = new NebulaField("2007-01-01");
+	private final JTextField endDateField = new NebulaField("2099-12-31");
 	private final JCheckBox removeHashtagsBox =
-			new JCheckBox("Remove hashtags", true);
+			new TokenCheckBox("Remove hashtags", true);
 	private final JCheckBox removeRetweetsBox =
-			new JCheckBox("Remove retweets", true);
+			new TokenCheckBox("Remove retweets", true);
 	private final JCheckBox removeStopWordsBox =
-			new JCheckBox("Remove stop words", true);
+			new TokenCheckBox("Remove stop words", true);
 	private final JCheckBox verifyBox =
-			new JCheckBox("Verify against one-worker baseline", true);
+			new TokenCheckBox("Verify against one-worker baseline", true);
 	private final JButton chooseDatasetButton =
-			createButton("Choose Dataset", BLUE, Color.WHITE);
+			createButton("Choose Dataset", BUTTON_PRIMARY);
 	private final JButton useCurrentDatasetButton =
-			createButton("Use Simulator Dataset", SURFACE_ALT, TEXT);
+			createButton("Use Simulator Dataset", BUTTON_NEUTRAL);
 	private final JButton runButton =
-			createButton("Run Verified Sweep", GREEN, Color.WHITE);
+			createButton("Run Verified Sweep", BUTTON_SUCCESS);
 	private final JButton cancelButton =
-			createButton("Cancel", StudioNightTheme.adaptiveColor(
-					new Color(244, 228, 227), StudioNightTheme.NIGHT_PANEL_INK), RED);
+			createButton("Cancel", BUTTON_DANGER);
 	private final JButton algorithmSettingsButton =
-			createButton("Algorithm Settings", SURFACE_ALT, TEXT);
+			createButton("Algorithm Settings", BUTTON_NEUTRAL);
 	private final JButton capacityButton =
-			createButton("Node Capacity", SURFACE_ALT, TEXT);
-	private final JLabel datasetNameLabel = new JLabel("No dataset selected");
-	private final JLabel datasetPathLabel =
-			new JLabel("Choose a six-column simulator dataset.");
-	private final JLabel algorithmDetailLabel = new JLabel();
-	private final JLabel outputTypeLabel = new JLabel();
-	private final JLabel algorithmSettingsPill = badge("DEFAULT", GREEN);
+			createButton("Node Capacity", BUTTON_NEUTRAL);
+	private final TokenLabel datasetNameLabel = new TokenLabel("No dataset selected");
+	private final TokenLabel datasetPathLabel =
+			new TokenLabel("Choose a six-column simulator dataset.");
+	private final TokenLabel algorithmDetailLabel = new TokenLabel("");
+	private final TokenLabel outputTypeLabel = new TokenLabel("");
+	private final PillLabel algorithmSettingsPill = badge("DEFAULT", GREEN);
 	private final JPanel doc2VecCachePanel =
 			surface(new BorderLayout(12, 0));
-	private final JLabel doc2VecCachePill = new JLabel("CACHE UNKNOWN");
-	private final JLabel doc2VecCacheTitle = new JLabel("Doc2Vec cache transparency");
-	private final JLabel doc2VecCacheDetail =
-			new JLabel("Choose a dataset to inspect whether training will run or be skipped.");
-	private final JLabel doc2VecCacheRows = new JLabel("--");
-	private final JLabel doc2VecCacheUsers = new JLabel("--");
-	private final JLabel doc2VecCacheVectors = new JLabel("--");
-	private final JLabel doc2VecCacheSize = new JLabel("--");
-	private final JLabel doc2VecCacheKey = new JLabel("--");
+	private final PillLabel doc2VecCachePill = pillLabel("CACHE UNKNOWN");
+	private final TokenLabel doc2VecCacheTitle =
+			new TokenLabel("Doc2Vec cache transparency");
+	private final TokenLabel doc2VecCacheDetail =
+			new TokenLabel("Choose a dataset to inspect whether training will run or be skipped.");
+	private final TokenLabel doc2VecCacheRows = new TokenLabel("--");
+	private final TokenLabel doc2VecCacheUsers = new TokenLabel("--");
+	private final TokenLabel doc2VecCacheVectors = new TokenLabel("--");
+	private final TokenLabel doc2VecCacheSize = new TokenLabel("--");
+	private final TokenLabel doc2VecCacheKey = new TokenLabel("--");
 	private final JButton refreshDoc2VecCacheButton =
-			createButton("Refresh Cache", SURFACE_ALT, TEXT);
+			createButton("Refresh Cache", BUTTON_NEUTRAL);
 	private final JButton removeDoc2VecCacheButton =
-			createButton("Remove This Cache", StudioNightTheme.adaptiveColor(
-					new Color(244, 228, 227), StudioNightTheme.NIGHT_PANEL_INK), RED);
-	private final JLabel statusPill = new JLabel("READY");
-	private final JLabel statusLabel =
-			new JLabel("Configure an exact population benchmark.");
-	private final JLabel baselineMetric = metricValue("--");
-	private final JLabel parallelMetric = metricValue("--");
-	private final JLabel speedupMetric = metricValue("--");
-	private final JLabel efficiencyMetric = metricValue("--");
-	private final JLabel verificationMetric = metricValue("NOT RUN");
-	private final JLabel digestMetric = metricValue("--");
+			createButton("Remove This Cache", BUTTON_DANGER);
+	private final PillLabel statusPill = pillLabel("READY");
+	private final TokenLabel statusLabel =
+			new TokenLabel("Configure an exact population benchmark.");
+	private final TokenLabel baselineMetric = metricValue("--");
+	private final TokenLabel parallelMetric = metricValue("--");
+	private final TokenLabel speedupMetric = metricValue("--");
+	private final TokenLabel efficiencyMetric = metricValue("--");
+	private final TokenLabel verificationMetric = metricValue("NOT RUN");
+	private final TokenLabel digestMetric = metricValue("--");
 	private final JProgressBar overallProgress = new JProgressBar(0, 100);
 	private final JPanel workerCardsPanel =
 			new JPanel(new GridLayout(0, 4, 12, 12));
@@ -155,7 +168,7 @@ final class PopulationSweepPanel extends JPanel
 			new LinkedHashMap<Integer,WorkerCard>();
 	private final ResultsTableModel resultsModel = new ResultsTableModel();
 	private final JTable resultsTable = new JTable(resultsModel);
-	private final JTextArea eventLog = new JTextArea();
+	private final JTextArea eventLog = new ConsoleArea();
 
 	private volatile File datasetFile;
 	private volatile ExactPopulationSweepEngine.CancellationToken cancellationToken;
@@ -175,6 +188,21 @@ final class PopulationSweepPanel extends JPanel
 		updateAlgorithmContext();
 		setRunning(false);
 		buildWorkerCards(((Number)nodesSpinner.getValue()).intValue());
+	}
+
+	protected void paintComponent(Graphics graphics)
+	{
+		Graphics2D g2 = (Graphics2D) graphics.create();
+		NebulaDesign.prepare(g2);
+		boolean night = StudioNightTheme.isNightMode();
+		Color top = night ? NebulaDesign.NIGHT_CANVAS_TOP : NebulaDesign.DAY_CANVAS_TOP;
+		Color bottom = night ? NebulaDesign.NIGHT_CANVAS_BOTTOM : NebulaDesign.DAY_CANVAS_BOTTOM;
+		g2.setPaint(new GradientPaint(0, 0, top, 0, Math.max(1, getHeight()), bottom));
+		g2.fillRect(0, 0, getWidth(), getHeight());
+		int glow = night ? 22 : 12;
+		paintGlow(g2, getWidth() / 6, 0, Math.max(240, getHeight()), BLUE, glow);
+		paintGlow(g2, getWidth() * 5 / 6, getHeight(), Math.max(240, getHeight()), PURPLE, glow - 4);
+		g2.dispose();
 	}
 
 	void cancelCurrentRun()
@@ -205,8 +233,9 @@ final class PopulationSweepPanel extends JPanel
 
 	private JComponent createHeader()
 	{
-		JPanel header = surface(new BorderLayout(24, 0));
-		header.setBorder(BorderFactory.createEmptyBorder(16, 18, 16, 18));
+		JPanel header = heroCard();
+		header.setLayout(new BorderLayout(24, 0));
+		header.setBorder(BorderFactory.createEmptyBorder(14, 20, 14, 20));
 
 		JPanel headerContent = new JPanel(new BorderLayout(28, 0));
 		headerContent.setOpaque(false);
@@ -214,17 +243,27 @@ final class PopulationSweepPanel extends JPanel
 		JPanel titleStack = new JPanel();
 		titleStack.setOpaque(false);
 		titleStack.setLayout(new BoxLayout(titleStack, BoxLayout.Y_AXIS));
-		JLabel title = new JLabel("Exact Multi-Node Population Lab");
-		title.setFont(font(Font.BOLD, 25));
-		title.setForeground(TEXT);
-		JLabel subtitle = new JLabel(
-				"Complete target jobs, one canonical dataset, automatic one-node equivalence checking.");
-		subtitle.setFont(font(Font.PLAIN, 12));
-		subtitle.setForeground(MUTED);
-		titleStack.add(title);
+		JLabel eyebrow = label(
+				"LABS  ·  EXACT BENCHMARK", BLUE, NebulaDesign.fontSection());
+		JLabel title = label(
+				"Exact Multi-Node Population Lab",
+				TEXT,
+				NebulaDesign.fontSemiBold(23f));
+		JLabel subtitle = label(
+				"Complete target jobs, one canonical dataset, automatic one-node equivalence checking.",
+				MUTED,
+				NebulaDesign.fontBody(12.5f));
+		JLabel attribution = label(
+				"Faculty advisor Dr. Abdolreza Abhari  ·  Developer Mohsen Alavi",
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontSmall());
+		titleStack.add(eyebrow);
 		titleStack.add(Box.createRigidArea(new Dimension(0, 4)));
+		titleStack.add(title);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 3)));
 		titleStack.add(subtitle);
-		titleStack.add(createAttributionBlock());
+		titleStack.add(Box.createRigidArea(new Dimension(0, 6)));
+		titleStack.add(attribution);
 
 		headerContent.add(titleStack, BorderLayout.WEST);
 		headerContent.add(new HeaderSignalPanel(BLUE, GREEN), BorderLayout.CENTER);
@@ -232,37 +271,52 @@ final class PopulationSweepPanel extends JPanel
 		return header;
 	}
 
-	private static JPanel createAttributionBlock()
+	private static JPanel heroCard()
 	{
-		JPanel block = new JPanel();
-		block.setOpaque(false);
-		block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
-		block.setAlignmentX(Component.LEFT_ALIGNMENT);
-		block.setBorder(BorderFactory.createEmptyBorder(5, 1, 0, 0));
-		block.add(createAttributionLine("Faculty Advisor", "Dr. Abdolreza Abhari"));
-		block.add(Box.createRigidArea(new Dimension(0, 3)));
-		block.add(createAttributionLine("Developer", "Mohsen Alavi"));
-		return block;
+		JPanel panel = new JPanel()
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(),
+						NebulaDesign.RADIUS_CARD);
+				Shape oldClip = g2.getClip();
+				g2.clip(new RoundRectangle2D.Float(0, 0, getWidth() - 1, getHeight() - 3,
+						NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+				boolean night = StudioNightTheme.isNightMode();
+				int alpha = night ? 26 : 15;
+				paintGlow(g2, getWidth() / 5, 0, getHeight() * 2, BLUE, alpha);
+				paintGlow(g2, getWidth() * 4 / 5, getHeight(), getHeight() * 2,
+						PURPLE, Math.max(6, alpha - 4));
+				g2.setClip(oldClip);
+				g2.dispose();
+				super.paintComponent(graphics);
+			}
+		};
+		panel.setOpaque(false);
+		return panel;
 	}
 
-	private static JPanel createAttributionLine(String role, String name)
+	private static void paintGlow(
+			Graphics2D g2,
+			int centerX,
+			int centerY,
+			int radius,
+			Color hue,
+			int alpha)
 	{
-		JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 7, 0));
-		row.setOpaque(false);
-		row.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-		JLabel roleLabel = new JLabel(role.toUpperCase(Locale.US));
-		roleLabel.setFont(font(Font.BOLD, 9));
-		roleLabel.setForeground(MUTED);
-		roleLabel.setBorder(BorderFactory.createEmptyBorder(1, 0, 0, 0));
-
-		JLabel nameLabel = new JLabel(name);
-		nameLabel.setFont(font(Font.BOLD, 12));
-		nameLabel.setForeground(TEXT);
-
-		row.add(roleLabel);
-		row.add(nameLabel);
-		return row;
+		int safeRadius = Math.max(24, radius);
+		RadialGradientPaint paint = new RadialGradientPaint(
+				new Point2D.Float(centerX, centerY),
+				safeRadius,
+				new float[] { 0f, 1f },
+				new Color[] {
+						NebulaDesign.withAlpha(hue, alpha),
+						NebulaDesign.withAlpha(hue, 0)
+				});
+		g2.setPaint(paint);
+		g2.fillRect(centerX - safeRadius, centerY - safeRadius,
+				safeRadius * 2, safeRadius * 2);
 	}
 
 	private JComponent createConfigurationBand()
@@ -277,10 +331,10 @@ final class PopulationSweepPanel extends JPanel
 		JPanel datasetText = new JPanel();
 		datasetText.setOpaque(false);
 		datasetText.setLayout(new BoxLayout(datasetText, BoxLayout.Y_AXIS));
-		datasetNameLabel.setFont(font(Font.BOLD, 13));
-		datasetNameLabel.setForeground(TEXT);
-		datasetPathLabel.setFont(font(Font.PLAIN, 10));
-		datasetPathLabel.setForeground(MUTED);
+		datasetNameLabel.setFont(NebulaDesign.fontSemiBold(13f));
+		datasetNameLabel.setToken(TEXT);
+		datasetPathLabel.setFont(NebulaDesign.fontBody(11f));
+		datasetPathLabel.setToken(NebulaDesign.TEXT_TERTIARY);
 		datasetText.add(datasetNameLabel);
 		datasetText.add(Box.createRigidArea(new Dimension(0, 3)));
 		datasetText.add(datasetPathLabel);
@@ -301,18 +355,34 @@ final class PopulationSweepPanel extends JPanel
 		addControl(controls, field("From", beginDateField), 4, 1.0);
 		addControl(controls, field("To", endDateField), 5, 1.0);
 
-		JPanel context = new JPanel(new BorderLayout(12, 0));
-		context.setBackground(new Color(242, 248, 255));
-		context.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(187, 213, 240)),
-				BorderFactory.createEmptyBorder(9, 11, 9, 11)));
+		JPanel context = new JPanel(new BorderLayout(12, 0))
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
+				boolean night = StudioNightTheme.isNightMode();
+				g2.setColor(night
+						? NebulaDesign.NIGHT_ACCENT_SOFT
+						: NebulaDesign.DAY_ACCENT_SOFT);
+				g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g2.setColor(NebulaDesign.withAlpha(BLUE, night ? 90 : 60));
+				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+						NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				g2.dispose();
+				super.paintComponent(graphics);
+			}
+		};
+		context.setOpaque(false);
+		context.setBorder(BorderFactory.createEmptyBorder(9, 12, 9, 12));
 		JPanel contextText = new JPanel();
 		contextText.setOpaque(false);
 		contextText.setLayout(new BoxLayout(contextText, BoxLayout.Y_AXIS));
-		algorithmDetailLabel.setFont(font(Font.BOLD, 11));
-		algorithmDetailLabel.setForeground(TEXT);
-		outputTypeLabel.setFont(font(Font.PLAIN, 10));
-		outputTypeLabel.setForeground(MUTED);
+		algorithmDetailLabel.setFont(NebulaDesign.fontMedium(12f));
+		algorithmDetailLabel.setToken(TEXT);
+		outputTypeLabel.setFont(NebulaDesign.fontBody(11f));
+		outputTypeLabel.setToken(MUTED);
 		contextText.add(algorithmDetailLabel);
 		contextText.add(Box.createRigidArea(new Dimension(0, 2)));
 			contextText.add(outputTypeLabel);
@@ -370,25 +440,20 @@ final class PopulationSweepPanel extends JPanel
 
 	private JComponent createDoc2VecCachePanel()
 	{
-		doc2VecCachePanel.setBackground(SURFACE_ALT);
-		doc2VecCachePanel.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(190, 218, 204)),
-				BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+		doc2VecCachePanel.setBorder(BorderFactory.createEmptyBorder(10, 14, 12, 14));
 
 		JPanel textStack = new JPanel();
 		textStack.setOpaque(false);
 		textStack.setLayout(new BoxLayout(textStack, BoxLayout.Y_AXIS));
 		JPanel heading = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 		heading.setOpaque(false);
-		doc2VecCacheTitle.setFont(font(Font.BOLD, 12));
-		doc2VecCacheTitle.setForeground(TEXT);
-		doc2VecCachePill.setFont(font(Font.BOLD, 9));
+		doc2VecCacheTitle.setFont(NebulaDesign.fontSemiBold(13f));
+		doc2VecCacheTitle.setToken(TEXT);
 		doc2VecCachePill.setHorizontalAlignment(SwingConstants.CENTER);
-		doc2VecCachePill.setBorder(BorderFactory.createEmptyBorder(5, 7, 5, 7));
 		heading.add(doc2VecCacheTitle);
 		heading.add(doc2VecCachePill);
-		doc2VecCacheDetail.setFont(font(Font.PLAIN, 10));
-		doc2VecCacheDetail.setForeground(MUTED);
+		doc2VecCacheDetail.setFont(NebulaDesign.fontBody(11f));
+		doc2VecCacheDetail.setToken(MUTED);
 		textStack.add(heading);
 		textStack.add(Box.createRigidArea(new Dimension(0, 4)));
 		textStack.add(doc2VecCacheDetail);
@@ -416,6 +481,7 @@ final class PopulationSweepPanel extends JPanel
 		actions.add(Box.createRigidArea(new Dimension(0, 7)));
 		actions.add(removeDoc2VecCacheButton);
 
+		doc2VecCachePanel.putClientProperty("nebula.inset", Boolean.TRUE);
 		doc2VecCachePanel.add(textStack, BorderLayout.CENTER);
 		doc2VecCachePanel.add(actions, BorderLayout.EAST);
 		applyDoc2VecCacheMessage(
@@ -455,14 +521,20 @@ final class PopulationSweepPanel extends JPanel
 
 	private JComponent createMetricsPanel()
 	{
+		baselineMetric.setFont(NebulaDesign.fontMono(15f));
+		parallelMetric.setFont(NebulaDesign.fontMono(15f));
+		speedupMetric.setFont(NebulaDesign.fontMono(15f));
+		efficiencyMetric.setFont(NebulaDesign.fontMono(15f));
+		digestMetric.setFont(NebulaDesign.fontMono(15f));
+		verificationMetric.setFont(NebulaDesign.fontSemiBold(14f));
 		JPanel metrics = new JPanel(new GridLayout(1, 6, 10, 0));
 		metrics.setOpaque(false);
-		metrics.add(metricCard("ONE WORKER", baselineMetric, "Measured baseline"));
-		metrics.add(metricCard("MULTI WORKER", parallelMetric, "Parallel wall time"));
-		metrics.add(metricCard("SPEEDUP", speedupMetric, "Baseline / parallel"));
-		metrics.add(metricCard("EFFICIENCY", efficiencyMetric, "Speedup / workers"));
-		metrics.add(metricCard("VERIFICATION", verificationMetric, "Result fingerprints"));
-		metrics.add(metricCard("RESULT DIGEST", digestMetric, "Canonical SHA-256"));
+		metrics.add(metricCard("One worker", baselineMetric, "Measured baseline", 0));
+		metrics.add(metricCard("Multi worker", parallelMetric, "Parallel wall time", 1));
+		metrics.add(metricCard("Speedup", speedupMetric, "Baseline / parallel", 4));
+		metrics.add(metricCard("Efficiency", efficiencyMetric, "Speedup / workers", 3));
+		metrics.add(metricCard("Verification", verificationMetric, "Result fingerprints", 5));
+		metrics.add(metricCard("Result digest", digestMetric, "Canonical SHA-256", 2));
 		return metrics;
 	}
 
@@ -472,13 +544,12 @@ final class PopulationSweepPanel extends JPanel
 		panel.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
 		JPanel heading = new JPanel(new BorderLayout());
 		heading.setOpaque(false);
-		JLabel title = new JLabel("Parallel Worker Activity");
-		title.setForeground(TEXT);
-		title.setFont(font(Font.BOLD, 15));
-		JLabel description = new JLabel(
-				"Each card owns complete target users. No target is split between workers.");
-		description.setForeground(MUTED);
-		description.setFont(font(Font.PLAIN, 10));
+		JLabel title = label(
+				"Parallel Worker Activity", TEXT, NebulaDesign.fontTitle());
+		JLabel description = label(
+				"Each card owns complete target users. No target is split between workers.",
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontSmall());
 		heading.add(title, BorderLayout.WEST);
 		heading.add(description, BorderLayout.EAST);
 
@@ -488,8 +559,11 @@ final class PopulationSweepPanel extends JPanel
 		holder.add(workerCardsPanel, BorderLayout.NORTH);
 		JScrollPane scroll = new JScrollPane(holder);
 		scroll.setBorder(null);
-		scroll.getViewport().setBackground(SURFACE);
+		scroll.setOpaque(false);
+		scroll.getViewport().setOpaque(false);
 		scroll.getVerticalScrollBar().setUnitIncrement(16);
+		scroll.setHorizontalScrollBarPolicy(
+				javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 
 		panel.add(heading, BorderLayout.NORTH);
 		panel.add(scroll, BorderLayout.CENTER);
@@ -502,40 +576,61 @@ final class PopulationSweepPanel extends JPanel
 		panel.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
 		JPanel heading = new JPanel(new BorderLayout());
 		heading.setOpaque(false);
-		JLabel title = new JLabel("Population Results");
-		title.setFont(font(Font.BOLD, 15));
-		title.setForeground(TEXT);
-		JLabel detail = new JLabel("Raw model scores");
-		detail.setFont(font(Font.BOLD, 10));
-		detail.setForeground(BLUE);
+		JLabel title = label("Population Results", TEXT, NebulaDesign.fontTitle());
+		JLabel detail = label(
+				"Raw model scores", NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontSmall());
 		heading.add(title, BorderLayout.WEST);
 		heading.add(detail, BorderLayout.EAST);
 
-		resultsTable.setRowHeight(27);
-		resultsTable.setFont(font(Font.PLAIN, 11));
-		resultsTable.getTableHeader().setFont(font(Font.BOLD, 10));
-		resultsTable.getTableHeader().setForeground(MUTED);
-		resultsTable.setGridColor(new Color(229, 234, 240));
-		resultsTable.setSelectionBackground(new Color(220, 238, 255));
+		resultsTable.setRowHeight(32);
+		resultsTable.setFont(NebulaDesign.fontBody(12f));
+		resultsTable.setForeground(TEXT);
+		resultsTable.setBackground(SURFACE);
+		resultsTable.setOpaque(false);
+		resultsTable.setGridColor(BORDER);
+		resultsTable.setShowVerticalLines(false);
+		resultsTable.setIntercellSpacing(new Dimension(0, 1));
+		resultsTable.setSelectionBackground(NebulaDesign.SELECTION);
+		resultsTable.setSelectionForeground(TEXT);
 		resultsTable.setFillsViewportHeight(true);
-		resultsTable.getColumnModel().getColumn(1).setMaxWidth(50);
-		resultsTable.getColumnModel().getColumn(3).setPreferredWidth(80);
-		DefaultTableCellRenderer scoreRenderer = new DefaultTableCellRenderer();
+		resultsTable.getColumnModel().getColumn(1).setMaxWidth(56);
+		resultsTable.getColumnModel().getColumn(3).setPreferredWidth(96);
+		styleTableHeader(resultsTable.getTableHeader());
+		DefaultTableCellRenderer scoreRenderer = new DefaultTableCellRenderer()
+		{
+			public Component getTableCellRendererComponent(
+					JTable table,
+					Object value,
+					boolean isSelected,
+					boolean hasFocus,
+					int row,
+					int column)
+			{
+				Component component = super.getTableCellRendererComponent(
+						table, value, isSelected, hasFocus, row, column);
+				component.setFont(NebulaDesign.fontMono(11.5f));
+				return component;
+			}
+		};
 		scoreRenderer.setHorizontalAlignment(SwingConstants.RIGHT);
 		resultsTable.getColumnModel().getColumn(3).setCellRenderer(scoreRenderer);
 
-		JScrollPane tableScroll = new JScrollPane(resultsTable);
-		tableScroll.setBorder(BorderFactory.createLineBorder(BORDER));
+		JScrollPane tableScroll = well(
+				resultsTable,
+				false,
+				"Ranked results stream in here as workers finish complete target users.");
+		tableScroll.setColumnHeaderView(resultsTable.getTableHeader());
+		tableScroll.getColumnHeader().setOpaque(false);
 
 		eventLog.setEditable(false);
 		eventLog.setRows(4);
-		eventLog.setFont(new Font("Monospaced", Font.PLAIN, 10));
-		eventLog.setForeground(new Color(225, 235, 244));
-		eventLog.setBackground(new Color(20, 26, 34));
-		eventLog.setBorder(BorderFactory.createEmptyBorder(8, 9, 8, 9));
-		JScrollPane logScroll = new JScrollPane(eventLog);
-		logScroll.setBorder(null);
-		logScroll.setPreferredSize(new Dimension(100, 92));
+		eventLog.setFont(NebulaDesign.fontMono(11.5f));
+		pinBorder(eventLog, BorderFactory.createEmptyBorder(11, 13, 11, 13));
+		JScrollPane logScroll = well(
+				eventLog,
+				true,
+				"Run events, dataset digests, and cache notes appear here.");
+		logScroll.setPreferredSize(new Dimension(100, 98));
 
 		panel.add(heading, BorderLayout.NORTH);
 		panel.add(tableScroll, BorderLayout.CENTER);
@@ -547,15 +642,15 @@ final class PopulationSweepPanel extends JPanel
 	{
 		JPanel panel = surface(new BorderLayout(0, 4));
 		panel.setBorder(BorderFactory.createEmptyBorder(11, 13, 11, 13));
-		panel.setPreferredSize(new Dimension(100, 90));
-		JLabel title = new JLabel("Why only three algorithms?");
-		title.setFont(font(Font.BOLD, 11));
-		title.setForeground(AMBER);
-		JLabel text = new JLabel(
+		panel.setPreferredSize(new Dimension(100, 92));
+		JLabel title = label(
+				"Why only three algorithms?", AMBER, NebulaDesign.fontSemiBold(12f));
+		JLabel text = label(
 				"<html>Excluded because their current multi-node mathematics cannot guarantee one-node equivalence: "
-				+ "K-Means, MLP, Euclidean K-Means, and Common Neighbors. They remain unchanged in Simulator.</html>");
-		text.setFont(font(Font.PLAIN, 10));
-		text.setForeground(MUTED);
+				+ "K-Means, MLP, Euclidean K-Means, and Common Neighbors. They remain unchanged in Simulator.</html>",
+				MUTED,
+				NebulaDesign.fontBody(11f));
+		text.setVerticalAlignment(SwingConstants.TOP);
 		panel.add(title, BorderLayout.NORTH);
 		panel.add(text, BorderLayout.CENTER);
 		return panel;
@@ -564,17 +659,17 @@ final class PopulationSweepPanel extends JPanel
 	private JComponent createStatusBar()
 	{
 		JPanel panel = surface(new BorderLayout(12, 0));
-		panel.setBorder(BorderFactory.createEmptyBorder(9, 12, 9, 12));
-		statusPill.setFont(font(Font.BOLD, 9));
+		panel.setBorder(BorderFactory.createEmptyBorder(9, 14, 11, 14));
 		statusPill.setHorizontalAlignment(SwingConstants.CENTER);
-		statusPill.setPreferredSize(new Dimension(82, 24));
-		statusLabel.setFont(font(Font.BOLD, 11));
-		statusLabel.setForeground(TEXT);
+		statusLabel.setFont(NebulaDesign.fontMedium(12f));
+		statusLabel.setToken(TEXT);
 		overallProgress.setStringPainted(true);
-		overallProgress.setFont(font(Font.BOLD, 9));
-		overallProgress.setPreferredSize(new Dimension(260, 17));
+		overallProgress.setFont(NebulaDesign.fontMono(10.5f));
+		overallProgress.setPreferredSize(new Dimension(280, 20));
 		overallProgress.setForeground(BLUE);
-		overallProgress.setBackground(new Color(228, 234, 241));
+		overallProgress.setBackground(NebulaDesign.INSET);
+		overallProgress.setBorder(BorderFactory.createEmptyBorder());
+		overallProgress.setUI(new NebulaProgressBarUI(true));
 		panel.add(statusPill, BorderLayout.WEST);
 		panel.add(statusLabel, BorderLayout.CENTER);
 		panel.add(overallProgress, BorderLayout.EAST);
@@ -792,13 +887,8 @@ final class PopulationSweepPanel extends JPanel
 		AlgorithmParameterSettings settings = owner.getAlgorithmParameterSettings();
 		algorithmSettingsPill.setText(
 				settings.isCustomEnabled() ? "CUSTOM" : "DEFAULT");
-		algorithmSettingsPill.setForeground(settings.isCustomEnabled()
-				? AMBER.darker() : GREEN.darker());
-		algorithmSettingsPill.setBackground(settings.isCustomEnabled()
-				? StudioNightTheme.adaptiveColor(
-						new Color(255, 241, 210), StudioNightTheme.NIGHT_PANEL_INK)
-				: StudioNightTheme.adaptiveColor(
-						new Color(20, 150, 105, 24), StudioNightTheme.NIGHT_PANEL_INK));
+		algorithmSettingsPill.setHue(settings.isCustomEnabled()
+				? AMBER : GREEN);
 		algorithmSettingsButton.setToolTipText(
 				settings.summaryForAlgorithm(selectedSimulatorAlgorithm()));
 	}
@@ -811,13 +901,11 @@ final class PopulationSweepPanel extends JPanel
 
 	private String formatParameterErrors(List<String> errors)
 	{
-		StringBuilder builder = new StringBuilder(
-				"<html><b>Fix these settings:</b><br>");
+		StringBuilder builder = new StringBuilder("Fix these settings:");
 		for (String error : errors)
 		{
-			builder.append("&bull; ").append(error).append("<br>");
+			builder.append("\n• ").append(error);
 		}
-		builder.append("</html>");
 		return builder.toString();
 	}
 
@@ -851,11 +939,10 @@ final class PopulationSweepPanel extends JPanel
 						"SETTINGS NEEDED",
 						"Fix advanced algorithm parameters before starting.",
 						AMBER);
-				JOptionPane.showMessageDialog(
+				NebulaDialogs.showWarning(
 						this,
 						formatParameterErrors(parameterErrors),
-						"Invalid Algorithm Parameters",
-						JOptionPane.WARNING_MESSAGE);
+						"Invalid Algorithm Parameters");
 				return;
 			}
 
@@ -929,7 +1016,7 @@ final class PopulationSweepPanel extends JPanel
 						public void run()
 						{
 							verificationMetric.setText("FAILED");
-							verificationMetric.setForeground(RED);
+							verificationMetric.setToken(RED);
 							setStatus(
 									"FAILED",
 									failure.getMessage() == null
@@ -1072,7 +1159,7 @@ final class PopulationSweepPanel extends JPanel
 		verificationMetric.setText(report.isVerified()
 				? "EXACT MATCH"
 				: report.isBaselineExecuted() ? "FAILED" : "NOT CHECKED");
-		verificationMetric.setForeground(
+		verificationMetric.setToken(
 				report.isVerified() ? GREEN
 						: report.isBaselineExecuted() ? RED : AMBER);
 		String digest = report.getResultDigest();
@@ -1254,15 +1341,14 @@ final class PopulationSweepPanel extends JPanel
 		{
 			return;
 		}
-		int answer = JOptionPane.showConfirmDialog(
+		int answer = NebulaDialogs.showConfirm(
 				this,
-				"<html><b>Remove Doc2Vec cache for this selected dataset?</b><br>"
+				"Remove the Doc2Vec cache for this selected dataset? "
 						+ "The dataset file is not touched. The next Doc2Vec run "
-						+ "will retrain the shared model before scoring.</html>",
+						+ "will retrain the shared model before scoring.",
 				"Remove Doc2Vec Cache",
-				JOptionPane.OK_CANCEL_OPTION,
-				JOptionPane.WARNING_MESSAGE);
-		if (answer != JOptionPane.OK_OPTION)
+				NebulaDialogs.TONE_WARNING);
+		if (answer != JOptionPane.YES_OPTION)
 		{
 			return;
 		}
@@ -1402,20 +1488,19 @@ final class PopulationSweepPanel extends JPanel
 			Color color)
 	{
 		doc2VecCachePill.setText(state);
-		doc2VecCachePill.setForeground(color.darker());
-		doc2VecCachePill.setOpaque(true);
-		doc2VecCachePill.setBackground(new Color(
-				color.getRed(), color.getGreen(), color.getBlue(), 26));
-		doc2VecCachePill.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(
-						new Color(
-								color.getRed(),
-								color.getGreen(),
-								color.getBlue(),
-								95)),
-				BorderFactory.createEmptyBorder(5, 7, 5, 7)));
+		doc2VecCachePill.setHue(color);
 		doc2VecCacheDetail.setText(detail);
 		doc2VecCacheDetail.setToolTipText(detail);
+	}
+
+	/** Resolves a soft chip tint for the supplied hue in the active mode. */
+	private static Color softTint(Color color)
+	{
+		return new Color(
+				color.getRed(),
+				color.getGreen(),
+				color.getBlue(),
+				StudioNightTheme.isNightMode() ? 46 : 30);
 	}
 
 	private void clearMetrics()
@@ -1425,7 +1510,7 @@ final class PopulationSweepPanel extends JPanel
 		speedupMetric.setText("--");
 		efficiencyMetric.setText("--");
 		verificationMetric.setText("RUNNING");
-		verificationMetric.setForeground(BLUE);
+		verificationMetric.setToken(BLUE);
 		digestMetric.setText("--");
 		digestMetric.setToolTipText(null);
 	}
@@ -1455,12 +1540,7 @@ final class PopulationSweepPanel extends JPanel
 	private void setStatus(String status, String detail, Color color)
 	{
 		statusPill.setText(status);
-		statusPill.setForeground(color.darker());
-		statusPill.setBackground(new Color(
-				color.getRed(), color.getGreen(), color.getBlue(), 28));
-		statusPill.setOpaque(true);
-		statusPill.setBorder(BorderFactory.createLineBorder(
-				new Color(color.getRed(), color.getGreen(), color.getBlue(), 100)));
+		statusPill.setHue(color);
 		statusLabel.setText(detail);
 		statusLabel.setToolTipText(detail);
 	}
@@ -1485,23 +1565,132 @@ final class PopulationSweepPanel extends JPanel
 
 	private static JPanel surface(java.awt.LayoutManager layout)
 	{
-		JPanel panel = new JPanel(layout);
+		JPanel panel = new JPanel(layout)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				if (Boolean.TRUE.equals(getClientProperty("nebula.inset")))
+				{
+					NebulaDesign.prepare(g2);
+					g2.setColor(NebulaDesign.currentSurfaceAlt());
+					g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+							NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+					g2.setColor(NebulaDesign.currentBorderSubtle());
+					g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+							NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+				}
+				else
+				{
+					NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(),
+							NebulaDesign.RADIUS_CARD);
+				}
+				g2.dispose();
+				super.paintComponent(graphics);
+			}
+		};
+		panel.setOpaque(false);
 		panel.setBackground(SURFACE);
-		panel.setBorder(BorderFactory.createLineBorder(BORDER));
 		return panel;
+	}
+
+	private static PillLabel pillLabel(String text)
+	{
+		PillLabel label = new PillLabel(text);
+		label.setFont(NebulaDesign.fontSemiBold(10f));
+		label.setBorder(BorderFactory.createEmptyBorder(5, 12, 5, 12));
+		label.setHue(MUTED);
+		return label;
 	}
 
 	private static JPanel field(String label, JComponent component)
 	{
-		JPanel panel = new JPanel(new BorderLayout(0, 5));
+		JPanel panel = new JPanel(new BorderLayout(0, 6));
 		panel.setOpaque(false);
-		JLabel title = new JLabel(label);
-		title.setForeground(MUTED);
-		title.setFont(font(Font.BOLD, 10));
-		panel.add(title, BorderLayout.NORTH);
-		component.setPreferredSize(new Dimension(115, 34));
+		panel.add(
+				label(label, NebulaDesign.TEXT_SECONDARY, NebulaDesign.fontMedium(11.5f)),
+				BorderLayout.NORTH);
+		component.setPreferredSize(new Dimension(115, 36));
+		styleInput(component);
 		panel.add(component, BorderLayout.CENTER);
 		return panel;
+	}
+
+	private static void styleInput(JComponent component)
+	{
+		component.setFont(NebulaDesign.fontBody(13f));
+		if (component instanceof JTextField)
+		{
+			JTextField fieldComponent = (JTextField) component;
+			fieldComponent.setOpaque(false);
+			fieldComponent.setCaretColor(NebulaDesign.ACCENT);
+			pinBorder(fieldComponent,
+					BorderFactory.createEmptyBorder(7, 11, 7, 11));
+		}
+		else if (component instanceof JSpinner)
+		{
+			JSpinner spinner = (JSpinner) component;
+			spinner.setUI(new NebulaSpinnerUI());
+			spinner.setOpaque(false);
+			pinBorder(spinner, BorderFactory.createEmptyBorder(1, 1, 1, 1));
+			JComponent editor = spinner.getEditor();
+			if (editor instanceof JSpinner.DefaultEditor)
+			{
+				JTextField editorField =
+						((JSpinner.DefaultEditor) editor).getTextField();
+				editorField.setFont(NebulaDesign.fontMono(12.5f));
+				editorField.setOpaque(false);
+				editorField.setForeground(TEXT);
+				editorField.setCaretColor(NebulaDesign.ACCENT);
+				editor.setOpaque(false);
+				pinBorder(editorField,
+						BorderFactory.createEmptyBorder(6, 10, 6, 6));
+			}
+		}
+		else if (component instanceof JComboBox)
+		{
+			JComboBox<?> combo = (JComboBox<?>) component;
+			combo.setUI(new NebulaComboBoxUI());
+			combo.setOpaque(false);
+			combo.setForeground(TEXT);
+			combo.setRenderer(new ComboItemRenderer());
+			pinBorder(combo, BorderFactory.createEmptyBorder(0, 8, 0, 0));
+		}
+	}
+
+	/**
+	 * Keeps a Nebula border pinned to a control even when an outer theme walk
+	 * swaps borders while toggling day and night.
+	 */
+	private static void pinBorder(final JComponent component, final Border border)
+	{
+		component.setBorder(border);
+		component.addPropertyChangeListener("border", new PropertyChangeListener()
+		{
+			public void propertyChange(PropertyChangeEvent event)
+			{
+				if (component.getBorder() != border)
+				{
+					component.setBorder(border);
+				}
+			}
+		});
+	}
+
+	/** Rounded inset chrome shared by inputs so both modes match the spec. */
+	private static void paintInputChrome(Graphics2D g2, JComponent component)
+	{
+		NebulaDesign.prepare(g2);
+		int width = component.getWidth();
+		int height = component.getHeight();
+		g2.setColor(NebulaDesign.currentSurfaceAlt());
+		g2.fillRoundRect(0, 0, width - 1, height - 1,
+				NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+		g2.setColor(component.isFocusOwner()
+				? NebulaDesign.currentAccent()
+				: NebulaDesign.currentBorderSubtle());
+		g2.drawRoundRect(0, 0, width - 1, height - 1,
+				NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
 	}
 
 	private static void addControl(
@@ -1522,57 +1711,597 @@ final class PopulationSweepPanel extends JPanel
 	private static JPanel metricCard(
 			String title,
 			JLabel value,
-			String detail)
+			String detail,
+			int hueIndex)
 	{
-		JPanel panel = surface(new BorderLayout(0, 4));
-		panel.setBorder(BorderFactory.createEmptyBorder(10, 11, 10, 11));
-		JLabel titleLabel = new JLabel(title);
-		titleLabel.setForeground(MUTED);
-		titleLabel.setFont(font(Font.BOLD, 9));
-		JLabel detailLabel = new JLabel(detail);
-		detailLabel.setForeground(MUTED);
-		detailLabel.setFont(font(Font.PLAIN, 9));
+		JPanel panel = surface(new BorderLayout(0, 5));
+		panel.setBorder(BorderFactory.createEmptyBorder(12, 14, 13, 12));
+		TokenLabel titleLabel = label(
+				title.toUpperCase(Locale.US),
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontSection());
+		titleLabel.setIcon(new DotIcon(hueIndex));
+		titleLabel.setIconTextGap(6);
 		panel.add(titleLabel, BorderLayout.NORTH);
 		panel.add(value, BorderLayout.CENTER);
-		panel.add(detailLabel, BorderLayout.SOUTH);
+		panel.add(
+				label(detail, NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontMedium(10f)),
+				BorderLayout.SOUTH);
 		return panel;
 	}
 
-	private static JLabel metricValue(String text)
+	private static TokenLabel metricValue(String text)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(font(Font.BOLD, 17));
-		label.setForeground(TEXT);
-		return label;
+		return label(text, TEXT, NebulaDesign.fontSemiBold(18f));
 	}
 
-	private static JPanel statBlock(String title, JLabel value)
+	private static JPanel statBlock(String title, TokenLabel value)
 	{
-		JPanel panel = new JPanel(new BorderLayout(0, 2));
+		JPanel panel = new JPanel(new BorderLayout(0, 3));
 		panel.setOpaque(false);
-		JLabel titleLabel = new JLabel(title);
-		titleLabel.setForeground(MUTED);
-		titleLabel.setFont(font(Font.BOLD, 9));
-		value.setForeground(TEXT);
-		value.setFont(font(Font.BOLD, 12));
-		panel.add(titleLabel, BorderLayout.NORTH);
+		panel.add(
+				label(title, NebulaDesign.TEXT_TERTIARY, NebulaDesign.fontSmall()),
+				BorderLayout.NORTH);
+		value.setToken(TEXT);
+		value.setFont(NebulaDesign.fontMono(12f));
 		panel.add(value, BorderLayout.CENTER);
 		return panel;
 	}
 
-	private static JLabel badge(String text, Color color)
+	private static PillLabel badge(String text, Color color)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(font(Font.BOLD, 9));
-		label.setForeground(color.darker());
-		label.setOpaque(true);
-		label.setBackground(new Color(
-				color.getRed(), color.getGreen(), color.getBlue(), 24));
-		label.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(
-						new Color(color.getRed(), color.getGreen(), color.getBlue(), 90)),
-				BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+		PillLabel label = pillLabel(text);
+		label.setHue(color);
 		return label;
+	}
+
+	/** Builds a label whose color stays pinned to a Nebula token. */
+	private static TokenLabel label(String text, Color token, Font font)
+	{
+		TokenLabel label = new TokenLabel(text);
+		label.setFont(font);
+		label.setToken(token);
+		return label;
+	}
+
+	/**
+	 * Rounded well that hosts a table or console. The scroll pane paints the
+	 * surface so the card behind it keeps clean rounded corners in both modes.
+	 */
+	private static JScrollPane well(
+			final Component view,
+			final boolean console,
+			final String emptyHint)
+	{
+		JScrollPane scroll = new JScrollPane(view)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = (Graphics2D) graphics.create();
+				NebulaDesign.prepare(g2);
+				int radius = console
+						? NebulaDesign.RADIUS_CONSOLE : NebulaDesign.RADIUS_CONTROL;
+				g2.setColor(console ? NebulaDesign.CONSOLE : NebulaDesign.SURFACE);
+				g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, radius, radius);
+				g2.setColor(NebulaDesign.BORDER_SUBTLE);
+				g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, radius, radius);
+				if (emptyHint != null && isEmptyView(view))
+				{
+					g2.setFont(NebulaDesign.fontBody(11.5f));
+					g2.setColor(NebulaDesign.TEXT_TERTIARY);
+					g2.drawString(emptyHint, 16, Math.min(getHeight() - 12, 48));
+				}
+				g2.dispose();
+				super.paintComponent(graphics);
+			}
+		};
+		scroll.setOpaque(false);
+		scroll.getViewport().setOpaque(false);
+		pinBorder(scroll, BorderFactory.createEmptyBorder(1, 1, 1, 1));
+		scroll.getVerticalScrollBar().setUnitIncrement(16);
+		return scroll;
+	}
+
+	private static boolean isEmptyView(Component view)
+	{
+		if (view instanceof JTable)
+		{
+			return ((JTable) view).getRowCount() == 0;
+		}
+		if (view instanceof JTextArea)
+		{
+			return ((JTextArea) view).getDocument().getLength() == 0;
+		}
+		return false;
+	}
+
+	/** Nebula table header: caps eyebrow text over a single strong hairline. */
+	private static void styleTableHeader(final JTableHeader header)
+	{
+		if (header == null)
+		{
+			return;
+		}
+		header.setOpaque(false);
+		header.setReorderingAllowed(false);
+		header.setPreferredSize(new Dimension(80, 32));
+		header.setFont(NebulaDesign.fontSection());
+		header.setDefaultRenderer(new TableCellRenderer()
+		{
+			public Component getTableCellRendererComponent(
+					JTable table,
+					Object value,
+					boolean isSelected,
+					boolean hasFocus,
+					int row,
+					int column)
+			{
+				boolean numeric = table != null
+						&& column == table.getColumnCount() - 1;
+				return new HeaderCell(
+						value == null ? "" : value.toString(), numeric);
+			}
+		});
+	}
+
+	/** Painted header cell so day and night both stay flat and modern. */
+	private static final class HeaderCell extends JComponent
+	{
+		private final String caption;
+		private final boolean trailing;
+
+		HeaderCell(String caption, boolean trailing)
+		{
+			this.caption = caption;
+			this.trailing = trailing;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(NebulaDesign.SURFACE);
+			g2.fillRect(0, 0, getWidth(), getHeight());
+			g2.setColor(NebulaDesign.BORDER_STRONG);
+			g2.fillRect(0, getHeight() - 1, getWidth(), 1);
+			g2.setFont(NebulaDesign.fontSection());
+			g2.setColor(NebulaDesign.TEXT_TERTIARY);
+			FontMetrics metrics = g2.getFontMetrics();
+			String text = caption.toUpperCase(Locale.US);
+			int textX = trailing
+					? Math.max(6, getWidth() - metrics.stringWidth(text) - 6)
+					: 12;
+			g2.drawString(
+					text,
+					textX,
+					(getHeight() - metrics.getHeight()) / 2 + metrics.getAscent());
+			g2.dispose();
+		}
+	}
+
+	/**
+	 * Label whose painted color stays a Nebula token even when an outer theme
+	 * walk re-tints foregrounds, so day and night stay exactly as designed.
+	 */
+	private static final class TokenLabel extends JLabel
+	{
+		private Color token;
+
+		TokenLabel(String text)
+		{
+			super(text);
+		}
+
+		void setToken(Color token)
+		{
+			this.token = token;
+			repaint();
+		}
+
+		public Color getForeground()
+		{
+			return token == null ? super.getForeground() : token;
+		}
+	}
+
+	/** Status chip: soft hue tint plus strong hue label, resolved at paint. */
+	private static final class PillLabel extends JLabel
+	{
+		private Color hue = NebulaDesign.TEXT_SECONDARY;
+
+		PillLabel(String text)
+		{
+			super(text);
+			setOpaque(false);
+		}
+
+		void setHue(Color hue)
+		{
+			this.hue = hue == null ? NebulaDesign.TEXT_SECONDARY : hue;
+			repaint();
+		}
+
+		public Color getForeground()
+		{
+			return hue;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(softTint(hue));
+			g2.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+			g2.setColor(NebulaDesign.withAlpha(hue, 70));
+			g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
+					getHeight(), getHeight());
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Text field with rounded Nebula chrome that survives theme walks. */
+	private static final class NebulaField extends JTextField
+	{
+		NebulaField(String text)
+		{
+			super(text);
+			setOpaque(false);
+		}
+
+		public Color getBackground()
+		{
+			return NebulaDesign.SURFACE_ALT;
+		}
+
+		public Color getForeground()
+		{
+			return isEnabled() ? NebulaDesign.TEXT_PRIMARY : NebulaDesign.TEXT_TERTIARY;
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			paintInputChrome(g2, this);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Console log surface that stays transparent so the well shows through. */
+	private static final class ConsoleArea extends JTextArea
+	{
+		ConsoleArea()
+		{
+			setOpaque(false);
+		}
+
+		public boolean isOpaque()
+		{
+			return false;
+		}
+
+		public Color getBackground()
+		{
+			return NebulaDesign.CONSOLE;
+		}
+
+		public Color getForeground()
+		{
+			return NebulaDesign.CONSOLE_TEXT;
+		}
+	}
+
+	/** Check box whose caption keeps the Nebula primary text token. */
+	private static final class TokenCheckBox extends JCheckBox
+	{
+		TokenCheckBox(String text, boolean selected)
+		{
+			super(text, selected);
+		}
+
+		public Color getForeground()
+		{
+			return isEnabled() ? NebulaDesign.TEXT_PRIMARY : NebulaDesign.TEXT_TERTIARY;
+		}
+	}
+
+	/** Combo box that keeps its Nebula border through theme walks. */
+	private static final class PinnedComboBox<T> extends JComboBox<T>
+	{
+		PinnedComboBox(T[] items)
+		{
+			super(items);
+		}
+
+		public Color getForeground()
+		{
+			return isEnabled() ? NebulaDesign.TEXT_PRIMARY : NebulaDesign.TEXT_TERTIARY;
+		}
+	}
+
+	/** Popup rows on surface with an accent-soft selection pill. */
+	private static final class ComboItemRenderer extends DefaultListCellRenderer
+	{
+		public Component getListCellRendererComponent(
+				JList<?> list,
+				Object value,
+				int index,
+				boolean isSelected,
+				boolean cellHasFocus)
+		{
+			super.getListCellRendererComponent(
+					list, value, index, isSelected, cellHasFocus);
+			setFont(NebulaDesign.fontBody(12.5f));
+			setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+			if (index < 0)
+			{
+				setOpaque(false);
+				setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 0));
+			}
+			else
+			{
+				setOpaque(true);
+				setBackground(isSelected
+						? NebulaDesign.currentSelection()
+						: NebulaDesign.currentSurface());
+			}
+			setForeground(NebulaDesign.TEXT_PRIMARY);
+			return this;
+		}
+	}
+
+	/** Combo UI with rounded chrome and a hand-drawn chevron. */
+	private static final class NebulaComboBoxUI extends BasicComboBoxUI
+	{
+		protected JButton createArrowButton()
+		{
+			JButton button = new JButton()
+			{
+				protected void paintComponent(Graphics graphics)
+				{
+					Graphics2D g2 = (Graphics2D) graphics.create();
+					NebulaWidgets.paintChevron(
+							g2,
+							getWidth() / 2,
+							getHeight() / 2 - 1,
+							9,
+							NebulaDesign.TEXT_SECONDARY);
+					g2.dispose();
+				}
+			};
+			button.setPreferredSize(new Dimension(26, 26));
+			button.setContentAreaFilled(false);
+			button.setBorderPainted(false);
+			button.setOpaque(false);
+			button.setFocusable(false);
+			return button;
+		}
+
+		public void paint(Graphics graphics, JComponent component)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			paintInputChrome(g2, component);
+			g2.dispose();
+			super.paint(graphics, component);
+		}
+
+		public void paintCurrentValueBackground(
+				Graphics graphics, Rectangle bounds, boolean hasFocus)
+		{
+			// The rounded chrome already painted the field surface.
+		}
+	}
+
+	/** Spinner UI with stacked Nebula chevrons instead of stock arrows. */
+	private static final class NebulaSpinnerUI extends BasicSpinnerUI
+	{
+		protected Component createNextButton()
+		{
+			JButton button = chevronButton(true);
+			installNextButtonListeners(button);
+			return button;
+		}
+
+		protected Component createPreviousButton()
+		{
+			JButton button = chevronButton(false);
+			installPreviousButtonListeners(button);
+			return button;
+		}
+
+		public void paint(Graphics graphics, JComponent component)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			paintInputChrome(g2, component);
+			g2.dispose();
+			super.paint(graphics, component);
+		}
+
+		private static JButton chevronButton(final boolean up)
+		{
+			JButton button = new JButton()
+			{
+				protected void paintComponent(Graphics graphics)
+				{
+					Graphics2D g2 = (Graphics2D) graphics.create();
+					NebulaDesign.prepare(g2);
+					int centerX = getWidth() / 2;
+					int centerY = getHeight() / 2;
+					g2.setColor(NebulaDesign.TEXT_SECONDARY);
+					g2.setStroke(new BasicStroke(1.6f,
+							BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+					int reach = 4;
+					int lift = up ? 2 : -2;
+					g2.drawLine(centerX - reach, centerY + lift,
+							centerX, centerY - lift);
+					g2.drawLine(centerX, centerY - lift,
+							centerX + reach, centerY + lift);
+					g2.dispose();
+				}
+			};
+			button.setPreferredSize(new Dimension(22, 15));
+			button.setContentAreaFilled(false);
+			button.setBorderPainted(false);
+			button.setOpaque(false);
+			button.setFocusable(false);
+			button.setCursor(java.awt.Cursor.getPredefinedCursor(
+					java.awt.Cursor.HAND_CURSOR));
+			return button;
+		}
+	}
+
+	/**
+	 * Pill progress meter: inset track, hue fill, and a mono caption that flips
+	 * contrast across the fill boundary so it stays readable everywhere.
+	 */
+	private static final class NebulaProgressBarUI extends BasicProgressBarUI
+	{
+		private final boolean aurora;
+
+		NebulaProgressBarUI(boolean aurora)
+		{
+			this.aurora = aurora;
+		}
+
+		protected void paintDeterminate(Graphics graphics, JComponent component)
+		{
+			paintMeter(graphics, progressBar.getPercentComplete());
+		}
+
+		protected void paintIndeterminate(Graphics graphics, JComponent component)
+		{
+			paintMeter(graphics, 0.0);
+		}
+
+		private void paintMeter(Graphics graphics, double fraction)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g2);
+			int width = progressBar.getWidth();
+			int height = Math.min(progressBar.getHeight(), 20);
+			int top = (progressBar.getHeight() - height) / 2;
+			g2.setColor(NebulaDesign.INSET);
+			g2.fillRoundRect(0, top, width, height, height, height);
+			g2.setColor(NebulaDesign.BORDER_SUBTLE);
+			g2.drawRoundRect(0, top, width - 1, height - 1, height, height);
+			Color hue = progressBar.getForeground();
+			int filled = (int) Math.round(width * Math.max(0.0, Math.min(1.0, fraction)));
+			if (filled > 0)
+			{
+				if (aurora)
+				{
+					g2.setPaint(new GradientPaint(
+							0, top, hue, width, top, NebulaDesign.PURPLE));
+				}
+				else
+				{
+					g2.setColor(hue);
+				}
+				g2.fillRoundRect(0, top, Math.max(height, filled), height, height, height);
+			}
+			if (progressBar.isStringPainted())
+			{
+				String caption = progressBar.getString();
+				if (caption != null && caption.length() > 0)
+				{
+					g2.setFont(progressBar.getFont());
+					FontMetrics metrics = g2.getFontMetrics();
+					int textX = Math.max(8, (width - metrics.stringWidth(caption)) / 2);
+					int textY = top + (height - metrics.getHeight()) / 2
+							+ metrics.getAscent();
+					Shape clip = g2.getClip();
+					g2.clipRect(0, 0, Math.max(height, filled), progressBar.getHeight());
+					g2.setColor(NebulaDesign.TEXT_ON_ACCENT);
+					g2.drawString(caption, textX, textY);
+					g2.setClip(clip);
+					g2.clipRect(Math.max(height, filled), 0, width, progressBar.getHeight());
+					g2.setColor(NebulaDesign.TEXT_SECONDARY);
+					g2.drawString(caption, textX, textY);
+					g2.setClip(clip);
+				}
+			}
+			g2.dispose();
+		}
+	}
+
+	/** Small categorical hue dot for KPI tile eyebrows. */
+	private static final class DotIcon implements Icon
+	{
+		private final int hueIndex;
+
+		DotIcon(int hueIndex)
+		{
+			this.hueIndex = hueIndex;
+		}
+
+		public int getIconWidth()
+		{
+			return 8;
+		}
+
+		public int getIconHeight()
+		{
+			return 8;
+		}
+
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g2);
+			g2.setColor(NebulaDesign.chartColor(hueIndex));
+			g2.fillOval(x, y + 1, 7, 7);
+			g2.dispose();
+		}
+	}
+
+	/** Custom-drawn Nebula checkbox mark resolved per theme at paint time. */
+	private static final class CheckIcon implements Icon
+	{
+		public int getIconWidth()
+		{
+			return 17;
+		}
+
+		public int getIconHeight()
+		{
+			return 17;
+		}
+
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g2);
+			AbstractButton box = (AbstractButton) component;
+			boolean selected = box.isSelected();
+			boolean enabled = box.isEnabled();
+			int size = 15;
+			int top = y + 1;
+			if (selected)
+			{
+				g2.setColor(enabled
+						? NebulaDesign.currentAccent()
+						: NebulaDesign.currentBorderStrong());
+				g2.fillRoundRect(x, top, size, size, 5, 5);
+				g2.setColor(StudioNightTheme.isNightMode()
+						? NebulaDesign.NIGHT_TEXT_ON_ACCENT
+						: Color.WHITE);
+				g2.setStroke(new BasicStroke(1.8f,
+						BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+				g2.drawLine(x + 3, top + 8, x + 6, top + 11);
+				g2.drawLine(x + 6, top + 11, x + 11, top + 4);
+			}
+			else
+			{
+				g2.setColor(NebulaDesign.currentSurfaceAlt());
+				g2.fillRoundRect(x, top, size, size, 5, 5);
+				g2.setColor(enabled
+						? NebulaDesign.currentBorderStrong()
+						: NebulaDesign.currentBorderSubtle());
+				g2.drawRoundRect(x, top, size, size, 5, 5);
+			}
+			g2.dispose();
+		}
 	}
 
 	private static final class HeaderSignalPanel extends JPanel
@@ -1642,7 +2371,7 @@ final class PopulationSweepPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g2 = (Graphics2D) graphics.create();
-			g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+			NebulaDesign.prepare(g2);
 			int width = getWidth();
 			int height = getHeight();
 			int pad = 18;
@@ -1680,7 +2409,7 @@ final class PopulationSweepPanel extends JPanel
 				g2.fillOval(xs[i] - 7, ys[i] - 7, 14, 14);
 				g2.setColor(new Color(fill.getRed(), fill.getGreen(), fill.getBlue(), 160));
 				g2.drawOval(xs[i] - 7, ys[i] - 7, 14, 14);
-				g2.setColor(new Color(255, 255, 255, 225));
+				g2.setColor(NebulaDesign.withAlpha(NebulaDesign.currentSurface(), 235));
 				g2.fillOval(xs[i] - 3, ys[i] - 3, 6, 6);
 			}
 			g2.dispose();
@@ -1688,36 +2417,127 @@ final class PopulationSweepPanel extends JPanel
 		}
 	}
 
-	private static JButton createButton(
-			String text,
-			Color background,
-			Color foreground)
+	private static JButton createButton(String text, int tone)
 	{
-		JButton button = new JButton(text);
-		button.setFont(font(Font.BOLD, 11));
-		button.setForeground(foreground);
-		button.setBackground(background);
-		button.setFocusPainted(false);
-		button.setOpaque(true);
-		button.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(
-						background.equals(BLUE) || background.equals(GREEN)
-								? background.darker() : BORDER),
-				BorderFactory.createEmptyBorder(8, 12, 8, 12)));
-		button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		return button;
+		return new NebulaButton(text, tone);
+	}
+
+	/**
+	 * Self-painting Nebula button. It resolves every colour at paint time from
+	 * the active theme, so it stays correct in both modes and never inherits
+	 * stock Swing chrome.
+	 */
+	private static final class NebulaButton extends JButton
+	{
+		private final int tone;
+		private boolean hover;
+
+		NebulaButton(String text, int tone)
+		{
+			super(text);
+			this.tone = tone;
+			setFont(NebulaDesign.fontMedium(12.5f));
+			setContentAreaFilled(false);
+			setBorderPainted(false);
+			setOpaque(false);
+			setBorder(BorderFactory.createEmptyBorder(9, 16, 9, 16));
+			NebulaWidgets.polishButton(this);
+			addMouseListener(new MouseAdapter()
+			{
+				public void mouseEntered(MouseEvent event)
+				{
+					hover = true;
+					repaint();
+				}
+
+				public void mouseExited(MouseEvent event)
+				{
+					hover = false;
+					repaint();
+				}
+			});
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g2);
+			boolean enabled = isEnabled();
+			boolean pressed = getModel().isArmed() && getModel().isPressed();
+			boolean lit = enabled && hover;
+			Color fill;
+			Color line;
+			Color text;
+			if (!enabled)
+			{
+				fill = NebulaDesign.currentSurfaceAlt();
+				line = NebulaDesign.currentBorderSubtle();
+				text = NebulaDesign.TEXT_TERTIARY;
+			}
+			else if (tone == BUTTON_PRIMARY)
+			{
+				fill = pressed ? NebulaDesign.ACCENT_PRESS
+						: lit ? NebulaDesign.ACCENT_HOVER : NebulaDesign.ACCENT;
+				line = fill;
+				text = NebulaDesign.TEXT_ON_ACCENT;
+			}
+			else if (tone == BUTTON_SUCCESS)
+			{
+				fill = pressed ? GREEN.darker() : lit ? GREEN.brighter() : GREEN;
+				line = fill;
+				text = NebulaDesign.TEXT_ON_ACCENT;
+			}
+			else if (tone == BUTTON_DANGER)
+			{
+				fill = NebulaDesign.withAlpha(RED,
+						pressed ? 92 : lit ? 68 : StudioNightTheme.isNightMode() ? 46 : 32);
+				line = NebulaDesign.withAlpha(RED, lit ? 190 : 130);
+				text = RED;
+			}
+			else
+			{
+				fill = lit || pressed
+						? NebulaDesign.currentSurfaceAlt()
+						: NebulaDesign.currentSurface();
+				line = lit
+						? NebulaDesign.withAlpha(NebulaDesign.currentAccent(), 130)
+						: NebulaDesign.currentBorderStrong();
+				text = NebulaDesign.TEXT_PRIMARY;
+			}
+			int width = getWidth();
+			int height = getHeight();
+			if (lit && (tone == BUTTON_PRIMARY || tone == BUTTON_SUCCESS))
+			{
+				g2.setColor(NebulaDesign.withAlpha(fill, 60));
+				g2.fillRoundRect(0, 0, width - 1, height - 1,
+						NebulaDesign.RADIUS_CONTROL + 3, NebulaDesign.RADIUS_CONTROL + 3);
+			}
+			g2.setColor(fill);
+			g2.fillRoundRect(1, 1, width - 3, height - 3,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.setColor(line);
+			g2.drawRoundRect(1, 1, width - 3, height - 3,
+					NebulaDesign.RADIUS_CONTROL, NebulaDesign.RADIUS_CONTROL);
+			g2.setFont(getFont());
+			FontMetrics metrics = g2.getFontMetrics();
+			String caption = getText() == null ? "" : getText();
+			g2.setColor(text);
+			g2.drawString(
+					caption,
+					Math.max(6, (width - metrics.stringWidth(caption)) / 2),
+					(height - metrics.getHeight()) / 2 + metrics.getAscent());
+			g2.dispose();
+		}
 	}
 
 	private static void styleCheckBox(JCheckBox checkBox)
 	{
 		checkBox.setOpaque(false);
 		checkBox.setForeground(TEXT);
-		checkBox.setFont(font(Font.BOLD, 10));
-	}
-
-	private static Font font(int style, int size)
-	{
-		return new Font("SansSerif", style, size);
+		checkBox.setFont(NebulaDesign.fontBody(12f));
+		checkBox.setIcon(new CheckIcon());
+		checkBox.setIconTextGap(7);
+		NebulaWidgets.polishButton(checkBox);
 	}
 
 	private static String formatDuration(long milliseconds)
@@ -1762,41 +2582,40 @@ final class PopulationSweepPanel extends JPanel
 
 	private static final class WorkerCard extends JPanel
 	{
-		private final JLabel stateLabel = new JLabel("READY");
-		private final JLabel targetLabel = new JLabel("Waiting for run");
-		private final JLabel detailLabel = new JLabel("No targets assigned yet.");
-		private final JLabel elapsedLabel = new JLabel("0 ms");
+		private final TokenLabel stateLabel = new TokenLabel("READY");
+		private final TokenLabel targetLabel = new TokenLabel("Waiting for run");
+		private final TokenLabel detailLabel = new TokenLabel("No targets assigned yet.");
+		private final TokenLabel elapsedLabel = new TokenLabel("0 ms");
 		private final JProgressBar progress = new JProgressBar(0, 100);
+		private Color stateColor = NebulaDesign.BORDER_STRONG;
 
 		private WorkerCard(
 				int workerIndex,
 				NodeCapacityProfile profile)
 		{
 			super(new BorderLayout(0, 8));
-			setOpaque(true);
-			setBackground(SURFACE_ALT);
-			setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(BORDER),
-					BorderFactory.createEmptyBorder(11, 11, 11, 11)));
+			setOpaque(false);
+			setBorder(BorderFactory.createEmptyBorder(11, 14, 12, 11));
 			setPreferredSize(new Dimension(205, 142));
 
 			JPanel top = new JPanel(new BorderLayout());
 			top.setOpaque(false);
-			JLabel workerLabel = new JLabel("WORKER " + workerIndex);
-			workerLabel.setForeground(TEXT);
-			workerLabel.setFont(font(Font.BOLD, 11));
-			stateLabel.setFont(font(Font.BOLD, 9));
-			stateLabel.setForeground(MUTED);
+			JLabel workerLabel = label(
+					"WORKER " + workerIndex,
+					NebulaDesign.TEXT_TERTIARY,
+					NebulaDesign.fontSection());
+			stateLabel.setFont(NebulaDesign.fontSemiBold(10f));
+			stateLabel.setToken(MUTED);
 			top.add(workerLabel, BorderLayout.WEST);
 			top.add(stateLabel, BorderLayout.EAST);
 
 			JPanel center = new JPanel();
 			center.setOpaque(false);
 			center.setLayout(new BoxLayout(center, BoxLayout.Y_AXIS));
-			targetLabel.setFont(font(Font.BOLD, 12));
-			targetLabel.setForeground(TEXT);
-			detailLabel.setFont(font(Font.PLAIN, 9));
-			detailLabel.setForeground(MUTED);
+			targetLabel.setFont(NebulaDesign.fontSemiBold(12f));
+			targetLabel.setToken(TEXT);
+			detailLabel.setFont(NebulaDesign.fontBody(10f));
+			detailLabel.setToken(MUTED);
 			detailLabel.setVerticalAlignment(SwingConstants.TOP);
 			if (profile != null)
 			{
@@ -1816,11 +2635,14 @@ final class PopulationSweepPanel extends JPanel
 			center.add(detailLabel);
 
 			progress.setStringPainted(true);
-			progress.setFont(font(Font.BOLD, 9));
+			progress.setFont(NebulaDesign.fontMono(9.5f));
 			progress.setForeground(BLUE);
-			progress.setBackground(new Color(226, 233, 241));
-			elapsedLabel.setForeground(MUTED);
-			elapsedLabel.setFont(font(Font.BOLD, 9));
+			progress.setBackground(NebulaDesign.INSET);
+			progress.setBorder(BorderFactory.createEmptyBorder());
+			progress.setPreferredSize(new Dimension(90, 18));
+			progress.setUI(new NebulaProgressBarUI(false));
+			elapsedLabel.setToken(NebulaDesign.TEXT_TERTIARY);
+			elapsedLabel.setFont(NebulaDesign.fontMono(9.5f));
 
 			JPanel footer = new JPanel(new BorderLayout(8, 0));
 			footer.setOpaque(false);
@@ -1830,6 +2652,16 @@ final class PopulationSweepPanel extends JPanel
 			add(top, BorderLayout.NORTH);
 			add(center, BorderLayout.CENTER);
 			add(footer, BorderLayout.SOUTH);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D) graphics.create();
+			NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(), 12);
+			g2.setColor(stateColor);
+			g2.fillRoundRect(0, 12, 3, Math.max(6, getHeight() - 27), 3, 3);
+			g2.dispose();
+			super.paintComponent(graphics);
 		}
 
 		private void update(
@@ -1848,8 +2680,10 @@ final class PopulationSweepPanel extends JPanel
 					? AMBER
 					: state == ExactPopulationSweepEngine.WorkerState.RUNNING
 					? BLUE : MUTED;
+			stateColor = color;
 			stateLabel.setText(state.toString());
-			stateLabel.setForeground(color.darker());
+			stateLabel.setToken(color);
+			repaint();
 			targetLabel.setText(target == null || target.length() == 0
 					? state == ExactPopulationSweepEngine.WorkerState.COMPLETE
 							? "Assignment complete" : "Preparing assignment"
@@ -1963,11 +2797,11 @@ final class PopulationSweepPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g2 = (Graphics2D)graphics.create();
-			g2.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-			g2.setColor(new Color(231, 243, 255));
-			g2.fillRoundRect(0, 0, 42, 42, 8, 8);
+			NebulaDesign.prepare(g2);
+			g2.setColor(StudioNightTheme.isNightMode()
+					? NebulaDesign.NIGHT_ACCENT_SOFT
+					: NebulaDesign.DAY_ACCENT_SOFT);
+			g2.fillRoundRect(0, 0, 42, 42, 10, 10);
 			g2.setColor(BLUE);
 			g2.setStroke(new BasicStroke(1.8f));
 			g2.drawRoundRect(10, 8, 22, 26, 3, 3);

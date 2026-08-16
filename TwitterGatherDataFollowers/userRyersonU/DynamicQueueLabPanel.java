@@ -3,7 +3,10 @@ package TwitterGatherDataFollowers.userRyersonU;
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
+import java.awt.Cursor;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
@@ -11,11 +14,11 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
-import java.awt.RenderingHints;
 import java.awt.Window;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -27,40 +30,30 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
-import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
-import javax.swing.plaf.basic.BasicButtonUI;
 import javax.swing.table.AbstractTableModel;
+import javax.swing.table.DefaultTableCellRenderer;
 
 final class DynamicQueueLabPanel extends JPanel
 {
-	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
-			new Color(242, 246, 250), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-			Color.WHITE, StudioNightTheme.NIGHT_SURFACE);
-	private static final Color SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(247, 250, 253), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color BORDER = StudioNightTheme.adaptiveColor(
-			new Color(207, 216, 227), StudioNightTheme.NIGHT_BORDER);
-	private static final Color TEXT = StudioNightTheme.adaptiveColor(
-			new Color(25, 30, 38), StudioNightTheme.NIGHT_TEXT);
-	private static final Color MUTED = StudioNightTheme.adaptiveColor(
-			new Color(89, 101, 119), StudioNightTheme.NIGHT_MUTED);
-	private static final Color BLUE = StudioNightTheme.adaptiveColor(
-			new Color(82, 113, 219), StudioNightTheme.NIGHT_BLUE);
-	private static final Color GREEN = StudioNightTheme.adaptiveColor(
-			new Color(86, 151, 111), StudioNightTheme.NIGHT_GREEN);
-	private static final Color PURPLE = StudioNightTheme.adaptiveColor(
-			new Color(132, 101, 212), StudioNightTheme.NIGHT_PURPLE);
-	private static final Color AMBER = StudioNightTheme.adaptiveColor(
-			new Color(190, 145, 66), StudioNightTheme.NIGHT_AMBER);
-	private static final Color RED = StudioNightTheme.adaptiveColor(
-			new Color(202, 74, 63), StudioNightTheme.NIGHT_RED);
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color RED = NebulaDesign.DANGER;
+	private static final Color TEAL = NebulaDesign.INFO;
+	private static final int BTN_PRIMARY = 0;
+	private static final int BTN_NEUTRAL = 1;
 	private static final DecimalFormat PERCENT = new DecimalFormat("0.0%");
 
 	private final JComboBox<SchedulerLabEngine.SchedulingPolicy> policyBox =
@@ -82,17 +75,19 @@ final class DynamicQueueLabPanel extends JPanel
 	private final JSpinner retrySpinner =
 			new JSpinner(new SpinnerNumberModel(2, 0, 10, 1));
 	private final JButton runButton =
-			button("Run dynamic queue", BLUE, Color.WHITE);
+			button("Run dynamic queue", BTN_PRIMARY);
 	private final JButton cancelButton =
-			button("Cancel", SURFACE_ALT, TEXT);
+			button("Cancel", BTN_NEUTRAL);
 	private final JButton capacityButton =
-			button("Node capacity", SURFACE_ALT, TEXT);
+			button("Node capacity", BTN_NEUTRAL);
 	private final JButton defaultsButton =
-			button("Restore DSMP defaults", SURFACE_ALT, TEXT);
+			button("Restore DSMP defaults", BTN_NEUTRAL);
 
-	private final JLabel statusPill = new JLabel("READY");
-	private final JLabel statusLabel =
-			new JLabel("Configure a queue run, then press Run dynamic queue.");
+	private final JLabel statusPill = pill("READY", GREEN);
+	private final JLabel statusLabel = themedLabel(
+			"Configure a queue run, then press Run dynamic queue.",
+			TEXT,
+			NebulaDesign.fontMedium(12f));
 	private final JLabel jobsMetric = metricValue("--");
 	private final JLabel elapsedMetric = metricValue("--");
 	private final JLabel runningMetric = metricValue("--");
@@ -112,7 +107,7 @@ final class DynamicQueueLabPanel extends JPanel
 	DynamicQueueLabPanel(ControllerAgentGui owner)
 	{
 		super(new BorderLayout(0, 12));
-		setBackground(BACKGROUND);
+		setOpaque(false);
 		setBorder(new EmptyBorder(14, 14, 14, 14));
 		buildInterface();
 		installActions(owner);
@@ -142,21 +137,30 @@ final class DynamicQueueLabPanel extends JPanel
 
 	private JComponent createHeader()
 	{
-		JPanel header = surface(new BorderLayout(24, 0));
-		header.setBorder(new EmptyBorder(16, 18, 16, 18));
+		JPanel header = new HeroCardPanel(new BorderLayout(24, 0));
+		header.setBorder(new EmptyBorder(13, 20, 15, 18));
 		JPanel titleStack = new JPanel();
 		titleStack.setOpaque(false);
 		titleStack.setLayout(new BoxLayout(titleStack, BoxLayout.Y_AXIS));
-		JLabel title = new JLabel("Dynamic Queue Lab (Demo)");
-		title.setFont(font(Font.BOLD, 28));
-		title.setForeground(TEXT);
-		JLabel subtitle = new JLabel(
-				"What-if pull-queue demonstration for v4 scheduling ideas. It does not produce simulator recommendations.");
-		subtitle.setFont(font(Font.PLAIN, 12));
-		subtitle.setForeground(MUTED);
-		titleStack.add(title);
-		titleStack.add(Box.createRigidArea(new Dimension(0, 4)));
+		JLabel eyebrow = themedLabel("SCHEDULING", BLUE, NebulaDesign.fontSection());
+		eyebrow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		JLabel title = themedLabel("Dynamic Queue Lab", TEXT, NebulaDesign.fontDisplay());
+		JPanel titleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+		titleRow.setOpaque(false);
+		titleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		titleRow.add(title);
+		titleRow.add(pill("DEMO", PURPLE));
+		JLabel subtitle = themedLabel(
+				"What-if pull-queue demonstration for v4 scheduling ideas. It does not produce simulator recommendations.",
+				MUTED,
+				NebulaDesign.fontBody(12.5f));
+		subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+		titleStack.add(eyebrow);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 2)));
+		titleStack.add(titleRow);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 2)));
 		titleStack.add(subtitle);
+		titleStack.add(Box.createRigidArea(new Dimension(0, 6)));
 		titleStack.add(createAttributionBlock());
 		header.add(titleStack, BorderLayout.WEST);
 		header.add(new HeaderSignalPanel(), BorderLayout.CENTER);
@@ -205,6 +209,7 @@ final class DynamicQueueLabPanel extends JPanel
 	{
 		JPanel strip = new JPanel(new GridLayout(1, 5, 10, 0));
 		strip.setOpaque(false);
+		strip.setBorder(new EmptyBorder(12, 0, 0, 0));
 		strip.add(metricCard("Jobs", jobsMetric, BLUE));
 		strip.add(metricCard("Elapsed", elapsedMetric, PURPLE));
 		strip.add(metricCard("Running", runningMetric, AMBER));
@@ -220,11 +225,11 @@ final class DynamicQueueLabPanel extends JPanel
 		top.add(section("Queue Work Units",
 				"Independent jobs are placed in the scheduler queue before model state exists.",
 				workloadCanvas,
-				new Dimension(620, 230)));
+				new Dimension(620, 216)));
 		top.add(section("Live Node Load",
 				"Strong nodes finish sooner and pull more jobs; weak nodes pull fewer.",
 				nodeCanvas,
-				new Dimension(620, 230)));
+				new Dimension(620, 216)));
 
 		JPanel timelinePanel = section("Real Dynamic Queue Timeline",
 				"Actual wall-clock worker lanes from this run, not a hypothetical animation.",
@@ -232,19 +237,19 @@ final class DynamicQueueLabPanel extends JPanel
 				null);
 		JScrollPane timelineScroll = new JScrollPane(timelineCanvas);
 		timelineScroll.setBorder(BorderFactory.createLineBorder(BORDER));
-		timelineScroll.setPreferredSize(new Dimension(1240, 330));
+		timelineScroll.setPreferredSize(new Dimension(1240, 260));
+		timelineScroll.getViewport().setBackground(SURFACE);
 		timelinePanel.add(timelineScroll, BorderLayout.CENTER);
 
 		JPanel lowerLeft = section("Session Comparison History",
 				"Every completed queue run is kept so policies can be compared in the same session.",
 				null,
 				null);
-		historyTable.setRowHeight(26);
-		historyTable.setFont(font(Font.BOLD, 11));
-		historyTable.getTableHeader().setFont(font(Font.BOLD, 10));
+		configureHistoryTable();
 		JScrollPane historyScroll = new JScrollPane(historyTable);
-		historyScroll.setPreferredSize(new Dimension(600, 190));
+		historyScroll.setPreferredSize(new Dimension(600, 160));
 		historyScroll.setBorder(BorderFactory.createLineBorder(BORDER));
+		historyScroll.getViewport().setBackground(SURFACE);
 		lowerLeft.add(historyScroll, BorderLayout.CENTER);
 
 		JPanel lowerRight = section("Dynamic Queue Event Log",
@@ -253,13 +258,14 @@ final class DynamicQueueLabPanel extends JPanel
 				null);
 		eventLog.setEditable(false);
 		eventLog.setLineWrap(false);
-		eventLog.setFont(new Font("Monospaced", Font.PLAIN, 11));
-		eventLog.setForeground(new Color(228, 233, 242));
-		eventLog.setBackground(new Color(19, 23, 34));
-		eventLog.setBorder(new EmptyBorder(10, 10, 10, 10));
+		eventLog.setFont(NebulaDesign.fontMono(12f));
+		eventLog.setForeground(NebulaDesign.CONSOLE_TEXT);
+		eventLog.setBackground(NebulaDesign.CONSOLE);
+		eventLog.setBorder(new EmptyBorder(12, 12, 12, 12));
 		JScrollPane logScroll = new JScrollPane(eventLog);
-		logScroll.setPreferredSize(new Dimension(600, 190));
-		logScroll.setBorder(BorderFactory.createLineBorder(new Color(31, 38, 52)));
+		logScroll.setPreferredSize(new Dimension(600, 160));
+		logScroll.setBorder(BorderFactory.createLineBorder(BORDER));
+		logScroll.getViewport().setBackground(NebulaDesign.CONSOLE);
 		lowerRight.add(logScroll, BorderLayout.CENTER);
 
 		JPanel lower = new JPanel(new GridLayout(1, 2, 12, 0));
@@ -272,32 +278,39 @@ final class DynamicQueueLabPanel extends JPanel
 		stack.add(top, BorderLayout.NORTH);
 		stack.add(timelinePanel, BorderLayout.CENTER);
 		stack.add(lower, BorderLayout.SOUTH);
-
-		JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, top, stack);
-		split.setDividerSize(0);
-		split.setEnabled(false);
-		split.setResizeWeight(0.0);
-		split.setBorder(BorderFactory.createEmptyBorder());
 		return stack;
+	}
+
+	private void configureHistoryTable()
+	{
+		historyTable.setRowHeight(30);
+		historyTable.setFont(NebulaDesign.fontBody(12f));
+		historyTable.setForeground(TEXT);
+		historyTable.setBackground(SURFACE);
+		historyTable.setShowVerticalLines(false);
+		historyTable.setGridColor(BORDER);
+		historyTable.setSelectionBackground(NebulaDesign.SELECTION);
+		historyTable.setSelectionForeground(TEXT);
+		historyTable.setIntercellSpacing(new Dimension(0, 1));
+		historyTable.getTableHeader().setReorderingAllowed(false);
+		historyTable.getTableHeader().setDefaultRenderer(new HeaderRenderer());
 	}
 
 	private JComponent createStatusBar()
 	{
-		JPanel bar = surface(new BorderLayout(10, 0));
-		bar.setBorder(new EmptyBorder(9, 12, 9, 12));
-		statusPill.setOpaque(true);
-		statusPill.setHorizontalAlignment(SwingConstants.CENTER);
-		statusPill.setFont(font(Font.BOLD, 10));
-		statusPill.setForeground(GREEN.darker());
-		statusPill.setBackground(new Color(228, 245, 236));
-		statusPill.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(new Color(183, 220, 199)),
-				new EmptyBorder(4, 10, 4, 10)));
-		statusLabel.setFont(font(Font.BOLD, 11));
-		statusLabel.setForeground(TEXT);
+		JPanel bar = surface(new BorderLayout(12, 0));
+		bar.setBorder(new EmptyBorder(8, 14, 10, 14));
 		bar.add(statusPill, BorderLayout.WEST);
 		bar.add(statusLabel, BorderLayout.CENTER);
 		return bar;
+	}
+
+	private void setStatusTone(String pillText, Color tone)
+	{
+		statusPill.setText(pillText);
+		statusPill.putClientProperty("nebula.tone", tone);
+		statusPill.revalidate();
+		statusPill.repaint();
 	}
 
 	private void installActions(final ControllerAgentGui owner)
@@ -407,9 +420,11 @@ final class DynamicQueueLabPanel extends JPanel
 								applySnapshot(result.getFinalSnapshot());
 								historyModel.add(result.getFinalSnapshot());
 								setRunning(false);
-								statusPill.setText(
+								setStatusTone(
 										result.getFinalSnapshot().isCancelled()
-												? "CANCELLED" : "COMPLETE");
+												? "CANCELLED" : "COMPLETE",
+										result.getFinalSnapshot().isCancelled()
+												? AMBER : GREEN);
 								statusLabel.setText(
 										result.getFinalSnapshot().isCancelled()
 												? "Dynamic queue run was cancelled."
@@ -431,9 +446,7 @@ final class DynamicQueueLabPanel extends JPanel
 									return;
 								}
 								setRunning(false);
-								statusPill.setText("FAILED");
-								statusPill.setForeground(RED.darker());
-								statusPill.setBackground(new Color(253, 232, 231));
+								setStatusTone("FAILED", RED);
 								statusLabel.setText(message == null
 										? "Dynamic queue run failed."
 										: message);
@@ -456,11 +469,7 @@ final class DynamicQueueLabPanel extends JPanel
 	{
 		runButton.setEnabled(!running);
 		cancelButton.setEnabled(running);
-		statusPill.setText(running ? "RUNNING" : "READY");
-		statusPill.setForeground(running ? BLUE.darker() : GREEN.darker());
-		statusPill.setBackground(running
-				? new Color(232, 239, 255)
-				: new Color(228, 245, 236));
+		setStatusTone(running ? "RUNNING" : "READY", running ? BLUE : GREEN);
 		statusLabel.setText(running
 				? "Nodes are pulling independent work from the dynamic scheduler queue."
 				: "Configure a queue run, then press Run dynamic queue.");
@@ -502,12 +511,40 @@ final class DynamicQueueLabPanel extends JPanel
 	{
 		JPanel panel = new JPanel(new BorderLayout(0, 4));
 		panel.setOpaque(false);
-		JLabel text = new JLabel(label);
-		text.setFont(font(Font.BOLD, 10));
-		text.setForeground(MUTED);
-		panel.add(text, BorderLayout.NORTH);
+		panel.add(themedLabel(label, MUTED, NebulaDesign.fontMedium(11f)),
+				BorderLayout.NORTH);
+		styleControl(component);
 		panel.add(component, BorderLayout.CENTER);
 		return panel;
+	}
+
+	private static void styleControl(JComponent component)
+	{
+		component.setFont(NebulaDesign.fontBody(12.5f));
+		if (component instanceof JComboBox)
+		{
+			JComboBox<?> combo = (JComboBox<?>)component;
+			combo.setUI(new FlatComboUI());
+			combo.setBackground(SURFACE_ALT);
+			combo.setForeground(TEXT);
+			combo.setBorder(BorderFactory.createLineBorder(BORDER));
+			combo.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		}
+		if (component instanceof JSpinner)
+		{
+			JSpinner spinner = (JSpinner)component;
+			spinner.setBorder(BorderFactory.createLineBorder(BORDER));
+			Component editor = spinner.getEditor();
+			if (editor instanceof JSpinner.DefaultEditor)
+			{
+				javax.swing.JTextField field =
+						((JSpinner.DefaultEditor)editor).getTextField();
+				field.setFont(NebulaDesign.fontMono(12f));
+				field.setBackground(SURFACE_ALT);
+				field.setForeground(TEXT);
+				field.setBorder(new EmptyBorder(4, 8, 4, 8));
+			}
+		}
 	}
 
 	private JPanel section(
@@ -516,20 +553,15 @@ final class DynamicQueueLabPanel extends JPanel
 			JComponent child,
 			Dimension preferred)
 	{
-		JPanel panel = surface(new BorderLayout(0, 10));
-		panel.setBorder(new EmptyBorder(12, 12, 12, 12));
-		JLabel titleLabel = new JLabel(title);
-		titleLabel.setFont(font(Font.BOLD, 16));
-		titleLabel.setForeground(TEXT);
-		JLabel subtitleLabel = new JLabel(subtitle);
-		subtitleLabel.setFont(font(Font.PLAIN, 11));
-		subtitleLabel.setForeground(MUTED);
-		JPanel titleStack = new JPanel();
-		titleStack.setOpaque(false);
-		titleStack.setLayout(new BoxLayout(titleStack, BoxLayout.Y_AXIS));
-		titleStack.add(titleLabel);
-		titleStack.add(subtitleLabel);
-		panel.add(titleStack, BorderLayout.NORTH);
+		JPanel panel = surface(new BorderLayout(0, 9));
+		panel.setBorder(new EmptyBorder(14, 16, 15, 16));
+		JPanel heading = new JPanel(new BorderLayout(0, 2));
+		heading.setOpaque(false);
+		heading.add(themedLabel(title, TEXT, NebulaDesign.fontTitle()),
+				BorderLayout.WEST);
+		heading.add(themedLabel(subtitle, NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontBody(11.5f)), BorderLayout.SOUTH);
+		panel.add(heading, BorderLayout.NORTH);
 		if (child != null)
 		{
 			if (preferred != null)
@@ -541,91 +573,229 @@ final class DynamicQueueLabPanel extends JPanel
 		return panel;
 	}
 
-	private JPanel metricCard(String label, JLabel value, Color accent)
+	private JPanel metricCard(String label, JLabel value, final Color accent)
 	{
-		JPanel card = new JPanel(new BorderLayout(0, 2));
-		card.setOpaque(true);
-		card.setBackground(SURFACE_ALT);
-		card.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createMatteBorder(0, 4, 0, 0, accent),
-				new EmptyBorder(10, 12, 10, 10)));
-		JLabel labelText = new JLabel(label.toUpperCase());
-		labelText.setFont(font(Font.BOLD, 10));
-		labelText.setForeground(MUTED);
-		card.add(labelText, BorderLayout.NORTH);
+		JPanel card = new RoundedPanel(new BorderLayout(0, 3));
+		card.setBorder(new EmptyBorder(9, 13, 9, 12));
+		JPanel headingRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		headingRow.setOpaque(false);
+		headingRow.add(hueDot(accent));
+		headingRow.add(themedLabel(
+				label.toUpperCase(Locale.US),
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontSection()));
+		card.add(headingRow, BorderLayout.NORTH);
 		card.add(value, BorderLayout.CENTER);
 		return card;
 	}
 
-	private JLabel metricValue(String text)
+	private static JComponent hueDot(final Color accent)
 	{
-		JLabel value = new JLabel(text);
-		value.setFont(font(Font.BOLD, 20));
-		value.setForeground(TEXT);
+		JComponent dot = new JComponent()
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = prepare(graphics);
+				g2.setColor(accent);
+				g2.fillOval(0, Math.max(0, (getHeight() - 8) / 2), 8, 8);
+				g2.dispose();
+			}
+		};
+		dot.setPreferredSize(new Dimension(8, 13));
+		return dot;
+	}
+
+	private static JLabel metricValue(String text)
+	{
+		JLabel value = themedLabel(text, TEXT, NebulaDesign.fontSemiBold(19f));
+		value.setBorder(new EmptyBorder(0, 1, 0, 0));
 		return value;
 	}
 
-	private JPanel surface(BorderLayout layout)
+	private static JPanel surface(BorderLayout layout)
 	{
-		JPanel panel = new JPanel(layout);
-		panel.setOpaque(true);
-		panel.setBackground(SURFACE);
-		panel.setBorder(BorderFactory.createLineBorder(BORDER));
-		return panel;
+		return new RoundedPanel(layout);
 	}
 
+	/**
+	 * Nebula typography bridge: BOLD requests become Medium (small sizes) or
+	 * SemiBold, PLAIN requests become Inter Regular.
+	 */
 	private static Font font(int style, int size)
 	{
-		return new Font(Font.SANS_SERIF, style, size);
+		if (style == Font.BOLD)
+		{
+			return size <= 10
+					? NebulaDesign.fontMedium(size)
+					: NebulaDesign.fontSemiBold(size);
+		}
+		return NebulaDesign.fontBody(size);
 	}
 
-	private static Color themed(Color day, Color night)
+	private static JLabel themedLabel(String text, final Color color, Font font)
 	{
-		return StudioNightTheme.isNightMode() ? night : day;
+		JLabel label = new JLabel(text)
+		{
+			public Color getForeground()
+			{
+				return color;
+			}
+		};
+		label.setFont(font);
+		return label;
 	}
 
-	private static JButton button(String text, Color background, Color foreground)
+	private static JButton button(String text, final int kind)
 	{
-		JButton button = new JButton(text);
-		button.setUI(new BasicButtonUI());
-		button.setOpaque(true);
-		button.setContentAreaFilled(true);
-		button.setBorderPainted(true);
-		button.setFocusPainted(false);
-		button.setBackground(background);
-		button.setForeground(foreground);
-		button.setFont(font(Font.BOLD, 12));
-		button.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(darker(background)),
-				new EmptyBorder(9, 14, 9, 14)));
+		JButton button = new JButton(text)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g = prepare(graphics);
+				int w = getWidth();
+				int h = getHeight();
+				boolean hover = getModel().isRollover() && isEnabled();
+				boolean pressed = getModel().isPressed() && isEnabled();
+				int radius = NebulaDesign.RADIUS_CONTROL;
+				if (!isEnabled())
+				{
+					g.setColor(SURFACE_ALT);
+					g.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+					g.setColor(BORDER);
+					g.drawRoundRect(1, 1, w - 3, h - 3, radius, radius);
+					g.setColor(NebulaDesign.TEXT_TERTIARY);
+				}
+				else if (kind == BTN_PRIMARY)
+				{
+					Color fill = pressed
+							? NebulaDesign.ACCENT_PRESS
+							: hover ? NebulaDesign.ACCENT_HOVER
+									: NebulaDesign.ACCENT;
+					if (hover)
+					{
+						g.setColor(alpha(BLUE, 55));
+						g.fillRoundRect(0, 0, w, h, radius + 3, radius + 3);
+					}
+					g.setColor(fill);
+					g.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+					g.setColor(NebulaDesign.TEXT_ON_ACCENT);
+				}
+				else
+				{
+					g.setColor(hover ? NebulaDesign.SURFACE_RAISED : SURFACE);
+					g.fillRoundRect(1, 1, w - 2, h - 2, radius, radius);
+					g.setColor(hover
+							? alpha(BLUE, 120)
+							: NebulaDesign.BORDER_STRONG);
+					g.drawRoundRect(1, 1, w - 3, h - 3, radius, radius);
+					g.setColor(TEXT);
+				}
+				g.setFont(getFont());
+				java.awt.FontMetrics metrics = g.getFontMetrics();
+				String value = getText();
+				g.drawString(value,
+						(w - metrics.stringWidth(value)) / 2,
+						(h - metrics.getHeight()) / 2 + metrics.getAscent());
+				g.dispose();
+			}
+		};
+		button.setFont(NebulaDesign.fontMedium(12.5f));
+		button.setContentAreaFilled(false);
+		button.setOpaque(false);
+		button.setRolloverEnabled(true);
+		button.setBorder(new EmptyBorder(9, 14, 9, 14));
+		NebulaWidgets.polishButton(button);
 		return button;
 	}
 
-	private static Color darker(Color color)
+	/**
+	 * Self-painting status pill: soft tint capsule + strong hue label. The
+	 * tone lives in the "nebula.tone" client property so it survives theme
+	 * walks and run status changes.
+	 */
+	private static JLabel pill(String text, Color tone)
 	{
-		return new Color(
-				Math.max(0, color.getRed() - 35),
-				Math.max(0, color.getGreen() - 35),
-				Math.max(0, color.getBlue() - 35));
-	}
-
-	private static JPanel createAttributionBlock()
-	{
-		JPanel block = new JPanel();
-		block.setOpaque(false);
-		block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
-		block.setBorder(new EmptyBorder(8, 0, 0, 0));
-		block.add(attribution("FACULTY ADVISOR", "Dr. Abdolreza Abhari"));
-		block.add(attribution("DEVELOPER", "Mohsen Alavi"));
-		return block;
-	}
-
-	private static JLabel attribution(String role, String name)
-	{
-		JLabel label = new JLabel(role + "  " + name);
-		label.setFont(font(Font.BOLD, 10));
-		label.setForeground(new Color(61, 70, 84));
+		JLabel label = new JLabel(text, SwingConstants.CENTER)
+		{
+			protected void paintComponent(Graphics graphics)
+			{
+				Graphics2D g2 = prepare(graphics);
+				Object tone = getClientProperty("nebula.tone");
+				Color hue = tone instanceof Color ? (Color)tone : BLUE;
+				int w = getWidth();
+				int h = getHeight();
+				g2.setColor(tint(hue, 0.84f));
+				g2.fillRoundRect(0, 0, w, h, h, h);
+				g2.setColor(alpha(hue, 84));
+				g2.drawRoundRect(0, 0, w - 1, h - 1, h - 1, h - 1);
+				g2.setColor(deep(hue));
+				g2.setFont(getFont());
+				java.awt.FontMetrics metrics = g2.getFontMetrics();
+				String value = getText();
+				g2.drawString(value,
+						(w - metrics.stringWidth(value)) / 2,
+						(h - metrics.getHeight()) / 2 + metrics.getAscent());
+				g2.dispose();
+			}
+		};
+		label.setFont(NebulaDesign.fontMedium(11f));
+		label.setOpaque(false);
+		label.setBorder(new EmptyBorder(5, 13, 5, 13));
+		label.putClientProperty("nebula.tone", tone);
 		return label;
+	}
+
+	private static Graphics2D prepare(Graphics graphics)
+	{
+		Graphics2D g2 = (Graphics2D)graphics.create();
+		NebulaDesign.prepare(g2);
+		return g2;
+	}
+
+	private static Color alpha(Color color, int amount)
+	{
+		return new Color(color.getRed(), color.getGreen(), color.getBlue(),
+				Math.max(0, Math.min(255, amount)));
+	}
+
+	/**
+	 * Emphasis tone for small labels: deepened in day mode for contrast on
+	 * soft tints, kept bright in night mode where darkening would vanish.
+	 */
+	private static Color deep(Color color)
+	{
+		if (StudioNightTheme.isNightMode())
+		{
+			return new Color(color.getRed(), color.getGreen(), color.getBlue());
+		}
+		return color.darker();
+	}
+
+	/** Soft chip tint: day = toward white, night = toward the dark surface. */
+	private static Color tint(Color color, float amount)
+	{
+		if (StudioNightTheme.isNightMode())
+		{
+			float accentAmount = Math.max(0.10f, Math.min(0.42f, 1.0f - amount));
+			Color base = amount > 0.70f
+					? NebulaDesign.NIGHT_SURFACE
+					: StudioNightTheme.NIGHT_PANEL_INK;
+			return StudioNightTheme.blend(base, color, accentAmount);
+		}
+		int r = (int)(color.getRed() + (255 - color.getRed()) * amount);
+		int g = (int)(color.getGreen() + (255 - color.getGreen()) * amount);
+		int b = (int)(color.getBlue() + (255 - color.getBlue()) * amount);
+		return new Color(Math.min(255, r), Math.min(255, g), Math.min(255, b));
+	}
+
+	private static JComponent createAttributionBlock()
+	{
+		JLabel credits = themedLabel(
+				"Faculty advisor Dr. Abdolreza Abhari   ·   Developer Mohsen Alavi",
+				NebulaDesign.TEXT_TERTIARY,
+				NebulaDesign.fontMedium(11f));
+		credits.setAlignmentX(Component.LEFT_ALIGNMENT);
+		return credits;
 	}
 
 	private static String formatDuration(long millis)
@@ -652,13 +822,159 @@ final class DynamicQueueLabPanel extends JPanel
 		}
 		if (type == SchedulerLabEngine.WorkloadUnitType.GRAPH_REPORTING_JOB)
 		{
-			return new Color(93, 134, 174);
+			return TEAL;
 		}
 		if (type == SchedulerLabEngine.WorkloadUnitType.PREPROCESSING_BATCH)
 		{
 			return BLUE;
 		}
 		return GREEN;
+	}
+
+	private static String typeLabel(SchedulerLabEngine.WorkloadUnitType type)
+	{
+		if (type == SchedulerLabEngine.WorkloadUnitType.MODEL_TRAINING_JOB)
+		{
+			return "Training";
+		}
+		if (type == SchedulerLabEngine.WorkloadUnitType.CANDIDATE_SHARD)
+		{
+			return "Shard";
+		}
+		if (type == SchedulerLabEngine.WorkloadUnitType.GRAPH_REPORTING_JOB)
+		{
+			return "Graph/report";
+		}
+		if (type == SchedulerLabEngine.WorkloadUnitType.PREPROCESSING_BATCH)
+		{
+			return "Preprocess";
+		}
+		return "Target/scoring";
+	}
+
+	/** Rounded Nebula card panel: soft shadow in day, lifted surface at night. */
+	private static class RoundedPanel extends JPanel
+	{
+		RoundedPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			NebulaWidgets.paintCard(g2, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Hero card: Nebula card plus a very subtle two-tone aurora wash. */
+	private static final class HeroCardPanel extends JPanel
+	{
+		HeroCardPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g2 = (Graphics2D)graphics.create();
+			int w = getWidth();
+			int h = getHeight();
+			NebulaWidgets.paintCard(g2, 0, 0, w, h, NebulaDesign.RADIUS_CARD);
+			boolean night = StudioNightTheme.isNightMode();
+			java.awt.Shape oldClip = g2.getClip();
+			g2.clip(new java.awt.geom.RoundRectangle2D.Float(
+					0, 0, w - 1, h - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+			g2.setPaint(new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(w * 0.24f, 0f),
+					Math.max(1f, w * 0.42f),
+					new float[] {0f, 1f},
+					new Color[] {
+							alpha(BLUE, night ? 26 : 15),
+							alpha(BLUE, 0)
+					}));
+			g2.fillRect(0, 0, w, h);
+			g2.setPaint(new java.awt.RadialGradientPaint(
+					new java.awt.geom.Point2D.Float(w * 0.86f, h),
+					Math.max(1f, w * 0.38f),
+					new float[] {0f, 1f},
+					new Color[] {
+							alpha(PURPLE, night ? 22 : 13),
+							alpha(PURPLE, 0)
+					}));
+			g2.fillRect(0, 0, w, h);
+			g2.setClip(oldClip);
+			g2.dispose();
+			super.paintComponent(graphics);
+		}
+	}
+
+	/** Flat Nebula combo box delegate: quiet field + hand-drawn chevron. */
+	private static final class FlatComboUI
+			extends javax.swing.plaf.basic.BasicComboBoxUI
+	{
+		protected JButton createArrowButton()
+		{
+			JButton arrow = new JButton()
+			{
+				protected void paintComponent(Graphics graphics)
+				{
+					Graphics2D g2 = (Graphics2D)graphics.create();
+					NebulaWidgets.paintChevron(
+							g2,
+							getWidth() / 2,
+							getHeight() / 2,
+							7,
+							MUTED);
+					g2.dispose();
+				}
+			};
+			arrow.setBorder(BorderFactory.createEmptyBorder());
+			arrow.setContentAreaFilled(false);
+			arrow.setFocusable(false);
+			arrow.setOpaque(false);
+			return arrow;
+		}
+
+		public void paintCurrentValueBackground(
+				Graphics graphics,
+				java.awt.Rectangle bounds,
+				boolean hasFocus)
+		{
+			graphics.setColor(SURFACE_ALT);
+			graphics.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+		}
+	}
+
+	/** Flat table header: raised surface, caps label, strong bottom rule. */
+	private static final class HeaderRenderer extends DefaultTableCellRenderer
+	{
+		public Component getTableCellRendererComponent(
+				JTable table,
+				Object value,
+				boolean isSelected,
+				boolean hasFocus,
+				int row,
+				int column)
+		{
+			super.getTableCellRendererComponent(
+					table, value, false, false, row, column);
+			setFont(NebulaDesign.fontMedium(11f));
+			setForeground(MUTED);
+			setBackground(NebulaDesign.SURFACE_RAISED);
+			setOpaque(true);
+			setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createMatteBorder(
+							0, 0, 1, 0, NebulaDesign.BORDER_STRONG),
+					new EmptyBorder(6, 8, 6, 8)));
+			return this;
+		}
 	}
 
 	private static final class HeaderSignalPanel extends JPanel
@@ -672,29 +988,29 @@ final class DynamicQueueLabPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D)graphics.create();
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
+			Graphics2D g = prepare(graphics);
 			int width = getWidth();
 			int height = getHeight();
 			int[] xs = new int[] {30, width / 4, width / 2, width * 3 / 4, width - 28};
 			int[] ys = new int[] {height / 2, height / 2 - 12, height / 2 + 6,
 					height / 2 - 8, height / 2 + 8};
-			g.setStroke(new BasicStroke(2f));
-			g.setColor(new Color(207, 221, 245));
+			g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND,
+					BasicStroke.JOIN_ROUND));
+			g.setColor(alpha(NebulaDesign.currentBorderStrong(), 170));
 			for (int index = 0; index < xs.length - 1; index++)
 			{
 				g.drawLine(xs[index], ys[index], xs[index + 1], ys[index + 1]);
 			}
 			for (int index = 0; index < xs.length; index++)
 			{
-				g.setColor(index % 2 == 0
-						? new Color(232, 239, 255)
-						: new Color(229, 246, 236));
+				Color hue = index % 2 == 0 ? BLUE : GREEN;
+				g.setColor(tint(hue, 0.82f));
 				g.fillOval(xs[index] - 7, ys[index] - 7, 14, 14);
-				g.setColor(index % 2 == 0 ? BLUE : GREEN);
+				g.setColor(alpha(hue, 190));
 				g.setStroke(new BasicStroke(2f));
 				g.drawOval(xs[index] - 7, ys[index] - 7, 14, 14);
+				g.setColor(alpha(hue, 235));
+				g.fillOval(xs[index] - 2, ys[index] - 2, 4, 4);
 			}
 			g.dispose();
 		}
@@ -718,7 +1034,7 @@ final class DynamicQueueLabPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			super.paintComponent(graphics);
-			Graphics2D g = graphics2(graphics);
+			Graphics2D g = prepare(graphics);
 			int width = getWidth();
 			int y = 20;
 			drawSummaryBar(g, 18, y, width - 36,
@@ -737,10 +1053,16 @@ final class DynamicQueueLabPanel extends JPanel
 					"Nodes pull until empty",
 					"Retry complete failed jobs" };
 			Color[] colors = new Color[] {BLUE, PURPLE, GREEN, AMBER};
-			int cardWidth = (width - 72) / labels.length;
+			int cardWidth = (width - 46) / 2;
 			for (int index = 0; index < labels.length; index++)
 			{
-				drawMiniCard(g, 18 + index * cardWidth, y, cardWidth - 10, 86,
+				int col = index % 2;
+				int row = index / 2;
+				drawMiniCard(g,
+						18 + col * (cardWidth + 10),
+						y + row * 68,
+						cardWidth,
+						60,
 						labels[index],
 						index == 0 && template != null
 								? template.getDescription()
@@ -769,7 +1091,7 @@ final class DynamicQueueLabPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			super.paintComponent(graphics);
-			Graphics2D g = graphics2(graphics);
+			Graphics2D g = prepare(graphics);
 			List<NodeCapacityProfile> profiles =
 					NodeCapacityRegistry.snapshot();
 			int width = getWidth();
@@ -816,7 +1138,7 @@ final class DynamicQueueLabPanel extends JPanel
 		TimelineCanvas()
 		{
 			setOpaque(true);
-			setBackground(SURFACE_ALT);
+			setBackground(SURFACE);
 			setPreferredSize(new Dimension(1180, 320));
 		}
 
@@ -836,17 +1158,18 @@ final class DynamicQueueLabPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			super.paintComponent(graphics);
-			Graphics2D g = graphics2(graphics);
+			Graphics2D g = prepare(graphics);
 			int width = getWidth();
 			int left = 86;
 			int right = width - 34;
 			int top = 42;
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(TEXT);
-			g.drawString("node pull timeline", 18, 22);
+			g.setFont(NebulaDesign.fontSection());
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			g.drawString("NODE PULL TIMELINE", 18, 22);
+			paintLegend(g, width);
 			if (snapshot == null || snapshot.getSegments().isEmpty())
 			{
-				g.setFont(font(Font.BOLD, 15));
+				g.setFont(NebulaDesign.fontMedium(13f));
 				g.setColor(MUTED);
 				g.drawString("Run the dynamic queue to see real worker lanes.", 24, 96);
 				g.dispose();
@@ -858,12 +1181,12 @@ final class DynamicQueueLabPanel extends JPanel
 				DynamicQueueSchedulerEngine.NodeSnapshot node =
 						snapshot.getNodes().get(index);
 				int laneY = top + index * 54;
-				g.setColor(new Color(224, 232, 243));
+				g.setColor(BORDER);
 				g.drawLine(left, laneY + 18, right, laneY + 18);
 				g.setColor(TEXT);
-				g.setFont(font(Font.BOLD, 12));
+				g.setFont(NebulaDesign.fontMedium(12f));
 				g.drawString("Node " + node.getProfile().getNodeIndex(), 18, laneY + 16);
-				g.setFont(font(Font.PLAIN, 10));
+				g.setFont(NebulaDesign.fontBody(10f));
 				g.setColor(MUTED);
 				g.drawString(node.getProfile().shortLabel(), 18, laneY + 32);
 			}
@@ -882,11 +1205,44 @@ final class DynamicQueueLabPanel extends JPanel
 				g.setColor(segment.isFailed() ? RED : typeColor(segment.getType()));
 				g.fillRoundRect(x1, y, x2 - x1, 10, 7, 7);
 			}
-			g.setColor(MUTED);
-			g.setFont(font(Font.BOLD, 10));
+			g.setColor(NebulaDesign.TEXT_TERTIARY);
+			g.setFont(NebulaDesign.fontMono(10f));
 			g.drawString("0 ms", left, getHeight() - 22);
 			g.drawString(formatDuration(max), right - 64, getHeight() - 22);
 			g.dispose();
+		}
+
+		private void paintLegend(Graphics2D g, int width)
+		{
+			SchedulerLabEngine.WorkloadUnitType[] types =
+					SchedulerLabEngine.WorkloadUnitType.values();
+			g.setFont(NebulaDesign.fontMedium(10f));
+			java.awt.FontMetrics metrics = g.getFontMetrics();
+			java.util.Set<Integer> seen = new java.util.HashSet<Integer>();
+			int x = width - 34;
+			for (int index = types.length - 1; index >= 0; index--)
+			{
+				Color hue = typeColor(types[index]);
+				if (!seen.add(Integer.valueOf(hue.getRGB())))
+				{
+					continue;
+				}
+				String label = typeLabel(types[index]);
+				x -= metrics.stringWidth(label);
+				g.setColor(MUTED);
+				g.drawString(label, x, 22);
+				x -= 12;
+				g.setColor(hue);
+				g.fillRoundRect(x, 14, 8, 8, 4, 4);
+				x -= 14;
+			}
+			String failed = "Failed";
+			x -= metrics.stringWidth(failed);
+			g.setColor(MUTED);
+			g.drawString(failed, x, 22);
+			x -= 12;
+			g.setColor(RED);
+			g.fillRoundRect(x, 14, 8, 8, 4, 4);
 		}
 	}
 
@@ -953,16 +1309,6 @@ final class DynamicQueueLabPanel extends JPanel
 		}
 	}
 
-	private static Graphics2D graphics2(Graphics graphics)
-	{
-		Graphics2D g = (Graphics2D)graphics.create();
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-				RenderingHints.VALUE_ANTIALIAS_ON);
-		g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
-				RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-		return g;
-	}
-
 	private static void drawSummaryBar(
 			Graphics2D g,
 			int x,
@@ -979,10 +1325,10 @@ final class DynamicQueueLabPanel extends JPanel
 		g.setColor(accent);
 		g.fillRoundRect(x + 10, y + 14, 10, 10, 10, 10);
 		g.setColor(TEXT);
-		g.setFont(font(Font.BOLD, 13));
+		g.setFont(NebulaDesign.fontSemiBold(13f));
 		g.drawString(title, x + 30, y + 21);
 		g.setColor(MUTED);
-		g.setFont(font(Font.PLAIN, 11));
+		g.setFont(NebulaDesign.fontBody(11f));
 		g.drawString(body, x + 30, y + 38);
 	}
 
@@ -996,25 +1342,39 @@ final class DynamicQueueLabPanel extends JPanel
 			String subtitle,
 			Color accent)
 	{
-		g.setColor(SURFACE);
+		g.setColor(SURFACE_ALT);
 		g.fillRoundRect(x, y, width, height, 10, 10);
 		g.setColor(BORDER);
 		g.drawRoundRect(x, y, width, height, 10, 10);
-		g.setColor(new Color(accent.getRed(), accent.getGreen(), accent.getBlue(), 46));
+		g.setColor(alpha(accent, 46));
 		g.fillRoundRect(x, y, 8, height, 8, 8);
 		g.setColor(accent);
-		g.fillOval(x + 16, y + 18, 10, 10);
+		g.fillOval(x + 16, y + 16, 10, 10);
+		int textWidth = Math.max(30, width - 34 - 12);
 		g.setColor(TEXT);
-		g.setFont(font(Font.BOLD, 13));
-		g.drawString(title, x + 34, y + 28);
+		g.setFont(NebulaDesign.fontSemiBold(12.5f));
+		g.drawString(fitText(g, title, textWidth), x + 34, y + 25);
 		g.setColor(MUTED);
-		g.setFont(font(Font.PLAIN, 10));
-		String clipped = subtitle == null ? "" : subtitle;
-		if (clipped.length() > 42)
+		g.setFont(NebulaDesign.fontBody(10.5f));
+		g.drawString(fitText(g, subtitle == null ? "" : subtitle, textWidth),
+				x + 34, y + 43);
+	}
+
+	/** Measured ellipsis so painted labels never spill past their card. */
+	private static String fitText(Graphics2D g, String text, int maxWidth)
+	{
+		java.awt.FontMetrics metrics = g.getFontMetrics();
+		if (metrics.stringWidth(text) <= maxWidth)
 		{
-			clipped = clipped.substring(0, 39) + "...";
+			return text;
 		}
-		g.drawString(clipped, x + 34, y + 48);
+		String value = text;
+		while (value.length() > 1
+				&& metrics.stringWidth(value + "…") > maxWidth)
+		{
+			value = value.substring(0, value.length() - 1);
+		}
+		return value + "…";
 	}
 
 	private static void drawNodeCard(
@@ -1032,26 +1392,26 @@ final class DynamicQueueLabPanel extends JPanel
 						? AMBER
 						: (profile.getRole() == NodeCapacityProfile.Role.UNRELIABLE
 								? RED : BLUE));
-		g.setColor(SURFACE);
+		g.setColor(SURFACE_ALT);
 		g.fillRoundRect(x, y, width, height, 10, 10);
 		g.setColor(BORDER);
 		g.drawRoundRect(x, y, width, height, 10, 10);
 		g.setColor(accent);
 		g.fillRoundRect(x, y, 6, height, 8, 8);
 		g.setColor(TEXT);
-		g.setFont(font(Font.BOLD, 13));
+		g.setFont(NebulaDesign.fontSemiBold(13f));
 		g.drawString("Node " + profile.getNodeIndex(), x + 16, y + 22);
-		g.setFont(font(Font.BOLD, 11));
-		g.setColor(accent.darker());
+		g.setFont(NebulaDesign.fontMedium(11f));
+		g.setColor(deep(accent));
 		g.drawString(profile.shortLabel(), x + 16, y + 38);
 		int done = node == null ? 0 : node.getCompletedJobs();
 		int failed = node == null ? 0 : node.getFailedJobs();
 		int running = node == null ? 0 : node.getRunningJobs();
-		g.setFont(font(Font.PLAIN, 10));
+		g.setFont(NebulaDesign.fontBody(10f));
 		g.setColor(MUTED);
 		g.drawString(done + " done | " + running
 				+ " running | " + failed + " failed", x + 16, y + 55);
-		g.setColor(new Color(228, 235, 244));
+		g.setColor(NebulaDesign.INSET);
 		g.fillRoundRect(x + 16, y + height - 16, width - 32, 5, 5, 5);
 		g.setColor(accent);
 		int total = node == null ? Math.max(1, done) : Math.max(

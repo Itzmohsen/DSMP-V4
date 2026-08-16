@@ -1,21 +1,18 @@
 package TwitterGatherDataFollowers.userRyersonU;
 
-import java.awt.AlphaComposite;
-import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
-import java.awt.Dimension;
 import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.Rectangle;
-import java.awt.RenderingHints;
-import java.awt.geom.Path2D;
+import java.awt.MultipleGradientPaint;
+import java.awt.RadialGradientPaint;
+import java.awt.geom.Point2D;
+import java.awt.image.BufferedImage;
 import javax.swing.AbstractButton;
 import javax.swing.BorderFactory;
-import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -31,32 +28,37 @@ import javax.swing.JViewport;
 import javax.swing.border.Border;
 import javax.swing.border.TitledBorder;
 import javax.swing.plaf.ScrollBarUI;
-import javax.swing.plaf.basic.BasicScrollBarUI;
 
+/**
+ * Compatibility facade for the Nebula design system. The public surface that
+ * the rest of the application depends on (mode flag, adaptive colors, theme
+ * tree application, tab wrapping, palette constants) is unchanged, but every
+ * value and painter now resolves to NebulaDesign tokens so both day and night
+ * mode share one coherent visual language.
+ */
 final class StudioNightTheme
 {
-	static final Color NIGHT_BACKGROUND = new Color(13, 18, 26);
-	static final Color NIGHT_BACKGROUND_BOTTOM = new Color(9, 13, 20);
-	static final Color NIGHT_SURFACE = new Color(22, 31, 43);
-	static final Color NIGHT_SURFACE_ALT = new Color(27, 38, 53);
-	static final Color NIGHT_PANEL_INK = new Color(31, 44, 61);
-	static final Color NIGHT_BORDER = new Color(63, 84, 106);
-	static final Color NIGHT_TEXT = new Color(234, 242, 252);
-	static final Color NIGHT_MUTED = new Color(157, 172, 190);
-	static final Color NIGHT_BLUE = new Color(94, 166, 255);
-	static final Color NIGHT_GREEN = new Color(64, 211, 146);
-	static final Color NIGHT_AMBER = new Color(244, 176, 70);
-	static final Color NIGHT_RED = new Color(245, 108, 102);
-	static final Color NIGHT_PURPLE = new Color(169, 135, 255);
-	static final Color NIGHT_TEAL = new Color(64, 213, 217);
-	static final Color NIGHT_PINK = new Color(242, 113, 184);
+	static final Color NIGHT_BACKGROUND = NebulaDesign.NIGHT_CANVAS_TOP;
+	static final Color NIGHT_BACKGROUND_BOTTOM = NebulaDesign.NIGHT_CANVAS_BOTTOM;
+	static final Color NIGHT_SURFACE = NebulaDesign.NIGHT_SURFACE;
+	static final Color NIGHT_SURFACE_ALT = NebulaDesign.NIGHT_SURFACE_ALT;
+	static final Color NIGHT_PANEL_INK = NebulaDesign.NIGHT_SURFACE_RAISED;
+	static final Color NIGHT_BORDER = NebulaDesign.NIGHT_BORDER_STRONG;
+	static final Color NIGHT_TEXT = NebulaDesign.NIGHT_TEXT_PRIMARY;
+	static final Color NIGHT_MUTED = NebulaDesign.NIGHT_TEXT_SECONDARY;
+	static final Color NIGHT_BLUE = NebulaDesign.NIGHT_ACCENT;
+	static final Color NIGHT_GREEN = NebulaDesign.NIGHT_SUCCESS;
+	static final Color NIGHT_AMBER = NebulaDesign.NIGHT_WARNING;
+	static final Color NIGHT_RED = NebulaDesign.NIGHT_DANGER;
+	static final Color NIGHT_PURPLE = NebulaDesign.NIGHT_PURPLE;
+	static final Color NIGHT_TEAL = NebulaDesign.NIGHT_INFO;
+	static final Color NIGHT_PINK = NebulaDesign.NIGHT_PINK;
 	private static final String ORIGINAL_MARKER = "studioNightTheme.original";
 	private static final String ORIGINAL_BACKGROUND = "studioNightTheme.background";
 	private static final String ORIGINAL_FOREGROUND = "studioNightTheme.foreground";
 	private static final String ORIGINAL_BORDER = "studioNightTheme.border";
 	private static final String ORIGINAL_OPAQUE = "studioNightTheme.opaque";
 	private static final String ORIGINAL_TITLE_COLOR = "studioNightTheme.titleColor";
-	private static final String ORIGINAL_SCROLLBAR_UI = "studioNightTheme.scrollbarUi";
 	private static final Object NULL_VALUE = new Object();
 	private static volatile boolean nightMode;
 
@@ -123,6 +125,12 @@ final class StudioNightTheme
 		}
 	}
 
+	/**
+	 * Mode-independent chrome pass: installs the Nebula tab UIs and pill
+	 * scrollbars across the tree. The delegates resolve colors at paint
+	 * time, so this only needs to run when new components appear or the
+	 * theme toggles.
+	 */
 	static void applyTabbedPaneTheme(Component root)
 	{
 		if (root == null)
@@ -132,19 +140,41 @@ final class StudioNightTheme
 		if (root instanceof JTabbedPane)
 		{
 			JTabbedPane tabs = (JTabbedPane) root;
-			if (nightMode)
+			Object style = tabs.getClientProperty(NebulaWidgets.TAB_STYLE_PROPERTY);
+			if (!NebulaWidgets.TAB_STYLE_NONE.equals(style)
+					&& !NebulaWidgets.TAB_STYLE_RAIL.equals(style)
+					&& !(tabs.getUI() instanceof NebulaWidgets.UnderlineTabbedPaneUI))
 			{
-				if (!(tabs.getUI() instanceof StudioNightTabbedPaneUI))
-				{
-					tabs.setUI(new StudioNightTabbedPaneUI());
-				}
-				tabs.setForeground(NIGHT_TEXT);
-				tabs.setBackground(NIGHT_BACKGROUND);
+				tabs.setUI(new NebulaWidgets.UnderlineTabbedPaneUI());
 			}
-			else if (tabs.getUI() instanceof StudioNightTabbedPaneUI)
+		}
+		if (root instanceof JScrollBar)
+		{
+			installPillScrollBar((JScrollBar) root);
+		}
+		if (root instanceof javax.swing.JSpinner)
+		{
+			javax.swing.JSpinner spinner = (javax.swing.JSpinner) root;
+			if (!(spinner.getUI() instanceof NebulaWidgets.ChevronSpinnerUI))
 			{
-				tabs.updateUI();
+				spinner.setUI(new NebulaWidgets.ChevronSpinnerUI());
 			}
+		}
+		if (root instanceof JTable)
+		{
+			JTable table = (JTable) root;
+			if (!(table.getTableHeader() != null
+					&& table.getTableHeader().getDefaultRenderer()
+							instanceof NebulaWidgets.HeaderRenderer))
+			{
+				NebulaWidgets.styleTable(table);
+			}
+		}
+		if (root instanceof JScrollPane)
+		{
+			JScrollPane scrollPane = (JScrollPane) root;
+			installPillScrollBar(scrollPane.getVerticalScrollBar());
+			installPillScrollBar(scrollPane.getHorizontalScrollBar());
 		}
 		if (root instanceof Container)
 		{
@@ -185,54 +215,57 @@ final class StudioNightTheme
 		{
 			JTextArea area = (JTextArea) component;
 			area.setOpaque(true);
-			area.setBackground(new Color(10, 15, 23));
-			area.setForeground(NIGHT_TEXT);
-			area.setCaretColor(NIGHT_TEXT);
-			area.setSelectionColor(new Color(44, 94, 145));
+			area.setBackground(NebulaDesign.NIGHT_CONSOLE);
+			area.setForeground(NebulaDesign.NIGHT_CONSOLE_TEXT);
+			area.setCaretColor(NebulaDesign.NIGHT_TEXT_PRIMARY);
+			area.setSelectionColor(NebulaDesign.NIGHT_SELECTION);
 			area.setSelectedTextColor(Color.WHITE);
 		}
 		else if (component instanceof JTextField)
 		{
 			JTextField field = (JTextField) component;
 			field.setOpaque(true);
-			field.setBackground(NIGHT_SURFACE_ALT);
-			field.setForeground(NIGHT_TEXT);
-			field.setCaretColor(NIGHT_BLUE);
+			field.setBackground(NebulaDesign.NIGHT_SURFACE_ALT);
+			field.setForeground(NebulaDesign.NIGHT_TEXT_PRIMARY);
+			field.setCaretColor(NebulaDesign.NIGHT_ACCENT);
 			field.setBorder(BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(NIGHT_BORDER),
+					BorderFactory.createLineBorder(NebulaDesign.NIGHT_BORDER_SUBTLE),
 					BorderFactory.createEmptyBorder(7, 9, 7, 9)));
 		}
 		else if (component instanceof JTable)
 		{
 			JTable table = (JTable) component;
-			table.setBackground(NIGHT_SURFACE);
-			table.setForeground(NIGHT_TEXT);
-			table.setGridColor(NIGHT_BORDER);
-			table.setSelectionBackground(new Color(30, 82, 126));
+			table.setBackground(NebulaDesign.NIGHT_SURFACE);
+			table.setForeground(NebulaDesign.NIGHT_TEXT_PRIMARY);
+			table.setGridColor(NebulaDesign.NIGHT_BORDER_SUBTLE);
+			table.setSelectionBackground(NebulaDesign.NIGHT_SELECTION);
 			table.setSelectionForeground(Color.WHITE);
-			table.getTableHeader().setBackground(NIGHT_PANEL_INK);
-			table.getTableHeader().setForeground(NIGHT_MUTED);
+			if (table.getTableHeader() != null)
+			{
+				table.getTableHeader().setBackground(NebulaDesign.NIGHT_SURFACE_RAISED);
+				table.getTableHeader().setForeground(NebulaDesign.NIGHT_TEXT_SECONDARY);
+			}
 		}
 		else if (component instanceof JList)
 		{
 			JList<?> list = (JList<?>) component;
-			list.setBackground(NIGHT_SURFACE);
-			list.setForeground(NIGHT_TEXT);
-			list.setSelectionBackground(new Color(32, 92, 134));
+			list.setBackground(NebulaDesign.NIGHT_SURFACE);
+			list.setForeground(NebulaDesign.NIGHT_TEXT_PRIMARY);
+			list.setSelectionBackground(NebulaDesign.NIGHT_SELECTION);
 			list.setSelectionForeground(Color.WHITE);
 		}
 		else if (component instanceof JComboBox)
 		{
 			JComboBox<?> comboBox = (JComboBox<?>) component;
-			comboBox.setBackground(NIGHT_SURFACE_ALT);
-			comboBox.setForeground(NIGHT_TEXT);
-			comboBox.setBorder(BorderFactory.createLineBorder(NIGHT_BORDER));
+			comboBox.setBackground(NebulaDesign.NIGHT_SURFACE_ALT);
+			comboBox.setForeground(NebulaDesign.NIGHT_TEXT_PRIMARY);
+			comboBox.setBorder(BorderFactory.createLineBorder(NebulaDesign.NIGHT_BORDER_SUBTLE));
 		}
 		else if (component instanceof AbstractButton)
 		{
 			AbstractButton button = (AbstractButton) component;
 			button.setForeground(nightForeground(button.getForeground()));
-			button.setBackground(NIGHT_PANEL_INK);
+			button.setBackground(NebulaDesign.NIGHT_SURFACE_RAISED);
 		}
 		else if (component instanceof JLabel)
 		{
@@ -240,34 +273,34 @@ final class StudioNightTheme
 			label.setForeground(nightForeground(label.getForeground()));
 			if (label.isOpaque())
 			{
-				label.setBackground(NIGHT_PANEL_INK);
+				label.setBackground(NebulaDesign.NIGHT_SURFACE_RAISED);
 			}
 		}
 		else if (component instanceof JScrollBar)
 		{
-			styleScrollBar((JScrollBar) component);
+			installPillScrollBar((JScrollBar) component);
 		}
 		else if (component instanceof JViewport)
 		{
-			((JViewport) component).setBackground(NIGHT_BACKGROUND);
+			((JViewport) component).setBackground(NebulaDesign.NIGHT_CANVAS_TOP);
 		}
 		else if (component instanceof JScrollPane)
 		{
 			JScrollPane scrollPane = (JScrollPane) component;
-			scrollPane.setBackground(NIGHT_BACKGROUND);
+			scrollPane.setBackground(NebulaDesign.NIGHT_CANVAS_TOP);
 			if (scrollPane.getViewport() != null)
 			{
-				scrollPane.getViewport().setBackground(NIGHT_BACKGROUND);
+				scrollPane.getViewport().setBackground(NebulaDesign.NIGHT_CANVAS_TOP);
 			}
-			styleScrollBar(scrollPane.getVerticalScrollBar());
-			styleScrollBar(scrollPane.getHorizontalScrollBar());
+			installPillScrollBar(scrollPane.getVerticalScrollBar());
+			installPillScrollBar(scrollPane.getHorizontalScrollBar());
 		}
 		else if (component instanceof JPanel)
 		{
 			JPanel panel = (JPanel) component;
 			if (panel.isOpaque())
 			{
-				panel.setBackground(NIGHT_BACKGROUND);
+				panel.setBackground(NebulaDesign.NIGHT_CANVAS_TOP);
 			}
 		}
 		retintBorder(component, true);
@@ -294,21 +327,11 @@ final class StudioNightTheme
 			{
 				jComponent.setOpaque(((Boolean) opaque).booleanValue());
 			}
-			if (component instanceof JScrollBar)
-			{
-				Object ui = restoreValue(
-						jComponent.getClientProperty(ORIGINAL_SCROLLBAR_UI));
-				if (ui instanceof ScrollBarUI)
-				{
-					((JScrollBar) component).setUI((ScrollBarUI) ui);
-				}
-			}
 			jComponent.putClientProperty(ORIGINAL_MARKER, null);
 			jComponent.putClientProperty(ORIGINAL_BACKGROUND, null);
 			jComponent.putClientProperty(ORIGINAL_FOREGROUND, null);
 			jComponent.putClientProperty(ORIGINAL_BORDER, null);
 			jComponent.putClientProperty(ORIGINAL_OPAQUE, null);
-			jComponent.putClientProperty(ORIGINAL_SCROLLBAR_UI, null);
 		}
 		retintBorder(component, false);
 	}
@@ -331,29 +354,20 @@ final class StudioNightTheme
 					ORIGINAL_TITLE_COLOR,
 					storeValue(((TitledBorder) border).getTitleColor()));
 		}
-		if (component instanceof JScrollBar)
-		{
-			component.putClientProperty(
-					ORIGINAL_SCROLLBAR_UI,
-					storeValue(((JScrollBar) component).getUI()));
-		}
 	}
 
-	private static void styleScrollBar(JScrollBar scrollBar)
+	private static void installPillScrollBar(JScrollBar scrollBar)
 	{
 		if (scrollBar == null)
 		{
 			return;
 		}
-		remember(scrollBar);
-		scrollBar.setOpaque(true);
-		scrollBar.setBackground(NIGHT_BACKGROUND);
-		scrollBar.setForeground(NIGHT_BORDER);
-		scrollBar.setBorder(BorderFactory.createEmptyBorder());
-		if (!(scrollBar.getUI() instanceof NightScrollBarUI))
+		if (!(scrollBar.getUI() instanceof NebulaWidgets.PillScrollBarUI))
 		{
-			scrollBar.setUI(new NightScrollBarUI());
+			scrollBar.setUI(new NebulaWidgets.PillScrollBarUI());
 		}
+		scrollBar.setOpaque(false);
+		scrollBar.setBorder(BorderFactory.createEmptyBorder());
 	}
 
 	private static Object storeValue(Object value)
@@ -381,7 +395,7 @@ final class StudioNightTheme
 		TitledBorder titled = (TitledBorder) border;
 		if (night)
 		{
-			titled.setTitleColor(NIGHT_MUTED);
+			titled.setTitleColor(NebulaDesign.NIGHT_TEXT_SECONDARY);
 		}
 		else
 		{
@@ -398,7 +412,7 @@ final class StudioNightTheme
 	{
 		if (color == null)
 		{
-			return NIGHT_TEXT;
+			return NebulaDesign.NIGHT_TEXT_PRIMARY;
 		}
 		int red = color.getRed();
 		int green = color.getGreen();
@@ -409,7 +423,9 @@ final class StudioNightTheme
 		float luminance = (0.2126f * red + 0.7152f * green + 0.0722f * blue) / 255.0f;
 		if (saturation < 0.16f)
 		{
-			return luminance > 0.55f ? NIGHT_MUTED : NIGHT_TEXT;
+			return luminance > 0.55f
+					? NebulaDesign.NIGHT_TEXT_SECONDARY
+					: NebulaDesign.NIGHT_TEXT_PRIMARY;
 		}
 		float[] hsb = Color.RGBtoHSB(red, green, blue, null);
 		return accentForHue(hsb[0]);
@@ -419,29 +435,29 @@ final class StudioNightTheme
 	{
 		if (hue < 0.035f || hue >= 0.94f)
 		{
-			return NIGHT_RED;
+			return NebulaDesign.NIGHT_DANGER;
 		}
 		if (hue < 0.13f)
 		{
-			return NIGHT_AMBER;
+			return NebulaDesign.NIGHT_WARNING;
 		}
 		if (hue < 0.40f)
 		{
-			return NIGHT_GREEN;
+			return NebulaDesign.NIGHT_SUCCESS;
 		}
 		if (hue < 0.54f)
 		{
-			return NIGHT_TEAL;
+			return NebulaDesign.NIGHT_INFO;
 		}
 		if (hue < 0.70f)
 		{
-			return NIGHT_BLUE;
+			return NebulaDesign.NIGHT_ACCENT;
 		}
 		if (hue < 0.84f)
 		{
-			return NIGHT_PURPLE;
+			return NebulaDesign.NIGHT_PURPLE;
 		}
-		return NIGHT_PINK;
+		return NebulaDesign.NIGHT_PINK;
 	}
 
 	private static final class AdaptiveColor extends Color
@@ -497,94 +513,75 @@ final class StudioNightTheme
 		}
 	}
 
-	private static final class NightScrollBarUI extends BasicScrollBarUI
+	/**
+	 * Paints the shared Nebula canvas: a vertical gradient with two large,
+	 * very soft aurora glows and a faint dot grid. Used by tab content
+	 * wrappers and the application shell so every screen sits on the same
+	 * calm background in both modes.
+	 */
+	static BufferedImage renderCanvas(int width, int height, boolean night)
 	{
-		protected void configureScrollBarColors()
-		{
-			thumbColor = withAlpha(NIGHT_BORDER, 218);
-			thumbDarkShadowColor = withAlpha(NIGHT_BACKGROUND_BOTTOM, 0);
-			thumbHighlightColor = withAlpha(NIGHT_BLUE, 90);
-			thumbLightShadowColor = withAlpha(NIGHT_GREEN, 50);
-			trackColor = NIGHT_BACKGROUND;
-			trackHighlightColor = NIGHT_BACKGROUND_BOTTOM;
-		}
+		BufferedImage image = new BufferedImage(
+				Math.max(1, width), Math.max(1, height), BufferedImage.TYPE_INT_RGB);
+		Graphics2D g2 = image.createGraphics();
+		NebulaDesign.prepare(g2);
+		Color top = night ? NebulaDesign.NIGHT_CANVAS_TOP : NebulaDesign.DAY_CANVAS_TOP;
+		Color bottom = night ? NebulaDesign.NIGHT_CANVAS_BOTTOM : NebulaDesign.DAY_CANVAS_BOTTOM;
+		g2.setPaint(new GradientPaint(0, 0, top, 0, Math.max(1, height), bottom));
+		g2.fillRect(0, 0, width, height);
 
-		protected JButton createDecreaseButton(int orientation)
-		{
-			return invisibleButton();
-		}
+		Color accent = night ? NebulaDesign.NIGHT_ACCENT : NebulaDesign.DAY_ACCENT;
+		Color purple = night ? NebulaDesign.NIGHT_PURPLE : NebulaDesign.DAY_PURPLE;
+		Color teal = night ? NebulaDesign.NIGHT_INFO : NebulaDesign.DAY_INFO;
+		int glowAlpha = night ? 26 : 14;
+		paintGlow(g2, width * 0.12f, -height * 0.15f, Math.max(width, height) * 0.55f,
+				withAlpha(accent, glowAlpha));
+		paintGlow(g2, width * 0.92f, height * 0.30f, Math.max(width, height) * 0.50f,
+				withAlpha(purple, Math.max(8, glowAlpha - 6)));
+		paintGlow(g2, width * 0.45f, height * 1.10f, Math.max(width, height) * 0.60f,
+				withAlpha(teal, Math.max(8, glowAlpha - 8)));
 
-		protected JButton createIncreaseButton(int orientation)
+		Color dot = night
+				? withAlpha(NebulaDesign.NIGHT_BORDER_SUBTLE, 64)
+				: withAlpha(NebulaDesign.DAY_BORDER_STRONG, 56);
+		g2.setColor(dot);
+		for (int y = 12; y < height; y += 24)
 		{
-			return invisibleButton();
-		}
-
-		protected void paintTrack(
-				Graphics graphics,
-				JComponent component,
-				Rectangle trackBounds)
-		{
-			Graphics2D g2 = (Graphics2D) graphics.create();
-			g2.setColor(NIGHT_BACKGROUND_BOTTOM);
-			g2.fillRect(
-					trackBounds.x,
-					trackBounds.y,
-					trackBounds.width,
-					trackBounds.height);
-			g2.dispose();
-		}
-
-		protected void paintThumb(
-				Graphics graphics,
-				JComponent component,
-				Rectangle thumbBounds)
-		{
-			if (thumbBounds.isEmpty() || !component.isEnabled())
+			for (int x = 12; x < width; x += 24)
 			{
-				return;
+				g2.fillRect(x, y, 1, 1);
 			}
-			Graphics2D g2 = (Graphics2D) graphics.create();
-			g2.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-			g2.setColor(withAlpha(NIGHT_BORDER, isDragging ? 245 : 196));
-			g2.fillRoundRect(
-					thumbBounds.x + 2,
-					thumbBounds.y + 2,
-					Math.max(3, thumbBounds.width - 4),
-					Math.max(3, thumbBounds.height - 4),
-					8,
-					8);
-			g2.setColor(withAlpha(NIGHT_BLUE, 70));
-			g2.drawRoundRect(
-					thumbBounds.x + 2,
-					thumbBounds.y + 2,
-					Math.max(3, thumbBounds.width - 4),
-					Math.max(3, thumbBounds.height - 4),
-					8,
-					8);
-			g2.dispose();
 		}
+		g2.dispose();
+		return image;
+	}
 
-		private static JButton invisibleButton()
+	private static void paintGlow(Graphics2D g2, float centerX, float centerY, float radius, Color color)
+	{
+		if (radius <= 0)
 		{
-			JButton button = new JButton();
-			Dimension zero = new Dimension(0, 0);
-			button.setPreferredSize(zero);
-			button.setMinimumSize(zero);
-			button.setMaximumSize(zero);
-			button.setBorder(BorderFactory.createEmptyBorder());
-			button.setOpaque(false);
-			button.setContentAreaFilled(false);
-			button.setFocusable(false);
-			return button;
+			return;
 		}
+		RadialGradientPaint paint = new RadialGradientPaint(
+				new Point2D.Float(centerX, centerY),
+				radius,
+				new float[] { 0.0f, 1.0f },
+				new Color[] { color, withAlpha(color, 0) },
+				MultipleGradientPaint.CycleMethod.NO_CYCLE);
+		g2.setPaint(paint);
+		g2.fillRect(
+				Math.round(centerX - radius),
+				Math.round(centerY - radius),
+				Math.round(radius * 2),
+				Math.round(radius * 2));
 	}
 
 	static final class ThemedTabPanel extends JPanel
 	{
 		private final Component view;
 		private final boolean transformInNightMode;
+		private BufferedImage canvasCache;
+		private boolean cachedNight;
 
 		ThemedTabPanel(Component view, boolean transformInNightMode)
 		{
@@ -607,98 +604,25 @@ final class StudioNightTheme
 
 		protected void paintComponent(Graphics graphics)
 		{
-			if (!nightMode)
-			{
-				super.paintComponent(graphics);
-				return;
-			}
-			Graphics2D g2 = (Graphics2D) graphics.create();
-			g2.setRenderingHint(
-					RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
 			int width = getWidth();
 			int height = getHeight();
-			g2.setPaint(new GradientPaint(
-					0,
-					0,
-					NIGHT_BACKGROUND,
-					0,
-					Math.max(1, height),
-					NIGHT_BACKGROUND_BOTTOM));
-			g2.fillRect(0, 0, width, height);
-			g2.setComposite(AlphaComposite.SrcOver.derive(0.38f));
-			g2.setColor(withAlpha(NIGHT_BORDER, 70));
-			for (int x = 0; x < width; x += 34)
+			if (width <= 0 || height <= 0)
 			{
-				g2.drawLine(x, 0, x, height);
+				return;
 			}
-			for (int y = 0; y < height; y += 34)
+			if (canvasCache == null
+					|| canvasCache.getWidth() != width
+					|| canvasCache.getHeight() != height
+					|| cachedNight != nightMode)
 			{
-				g2.drawLine(0, y, width, y);
+				if (canvasCache != null)
+				{
+					canvasCache.flush();
+				}
+				cachedNight = nightMode;
+				canvasCache = renderCanvas(width, height, nightMode);
 			}
-			paintRibbon(g2, width, height, 0.22f, NIGHT_BLUE, 21.0f);
-			paintRibbon(g2, width, height, 0.62f, NIGHT_GREEN, 18.0f);
-			paintRibbon(g2, width, height, 0.86f, NIGHT_PURPLE, 16.0f);
-			g2.dispose();
-		}
-
-		protected void paintChildren(Graphics graphics)
-		{
-			super.paintChildren(graphics);
-			if (nightMode && transformInNightMode)
-			{
-				paintPolish(graphics);
-			}
-		}
-
-		private void paintRibbon(
-				Graphics2D g2,
-				int width,
-				int height,
-				float anchor,
-				Color color,
-				float stroke)
-		{
-			Path2D.Float path = new Path2D.Float();
-			float baseY = height * anchor;
-			path.moveTo(-50, baseY);
-			path.curveTo(
-					width * 0.26f,
-					baseY - 58,
-					width * 0.48f,
-					baseY + 42,
-					width * 0.72f,
-					baseY - 4);
-			path.curveTo(
-					width * 0.88f,
-					baseY - 38,
-					width + 20,
-					baseY + 28,
-					width + 70,
-					baseY - 14);
-			g2.setStroke(new BasicStroke(
-					stroke,
-					BasicStroke.CAP_ROUND,
-					BasicStroke.JOIN_ROUND));
-			g2.setColor(withAlpha(color, 38));
-			g2.draw(path);
-			g2.setStroke(new BasicStroke(
-					1.2f,
-					BasicStroke.CAP_ROUND,
-					BasicStroke.JOIN_ROUND));
-			g2.setColor(withAlpha(color, 86));
-			g2.draw(path);
-		}
-
-		private void paintPolish(Graphics graphics)
-		{
-			Graphics2D g2 = (Graphics2D) graphics.create();
-			g2.setComposite(AlphaComposite.SrcOver.derive(0.45f));
-			g2.setColor(withAlpha(NIGHT_BLUE, 44));
-			g2.drawLine(0, 0, getWidth(), 0);
-			g2.setColor(withAlpha(NIGHT_GREEN, 28));
-			g2.drawLine(0, getHeight() - 1, getWidth(), getHeight() - 1);
-			g2.dispose();
+			graphics.drawImage(canvasCache, 0, 0, null);
 		}
 	}
 }

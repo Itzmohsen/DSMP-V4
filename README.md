@@ -68,6 +68,29 @@ python build.py clean
 - `info` prints detected paths and versions.
 - `clean` removes generated Java classes, the Python virtual environment, and runtime caches.
 
+## Interface And Theming
+
+The GUI uses the Nebula design system, a single set of tokens shared by every
+screen in both day and night mode. Three files own the whole visual language:
+
+- `TwitterGatherDataFollowers/userRyersonU/NebulaDesign.java` — colors, typography,
+  radii, spacing, chart palette, and the Swing defaults installed at startup.
+- `TwitterGatherDataFollowers/userRyersonU/NebulaWidgets.java` — the navigation
+  rail, inner tab strips, scrollbars, and shared card/chip painters.
+- `TwitterGatherDataFollowers/userRyersonU/NebulaDialogs.java` — the branded
+  message, confirm, and long-text dialogs.
+
+`StudioNightTheme` remains the entry point for switching modes. Panels should ask
+`NebulaDesign` for a token rather than constructing a raw `Color`, so a screen
+looks correct in both modes without extra code.
+
+Typography ships with the repository in `fonts/` (Inter for the interface,
+JetBrains Mono for consoles and numerals). The fonts are registered at startup
+and fall back to the platform sans-serif and monospace families when the folder
+is unavailable, so the application still runs from a partial clone.
+
+The day/night switch is the pill control in the top-right corner of the window.
+
 ## Runtime Files
 
 The launcher creates local generated folders:

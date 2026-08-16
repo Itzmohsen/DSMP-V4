@@ -4,20 +4,21 @@ import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
-import java.awt.Font;
+import java.awt.FlowLayout;
 import java.awt.FontMetrics;
 import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.GridLayout;
-import java.awt.RenderingHints;
+import java.awt.RadialGradientPaint;
+import java.awt.Shape;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.geom.Arc2D;
 import java.awt.geom.Ellipse2D;
-import java.awt.geom.Line2D;
+import java.awt.geom.Point2D;
+import java.awt.geom.RoundRectangle2D;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -30,7 +31,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JLabel;
@@ -42,61 +42,37 @@ import javax.swing.border.EmptyBorder;
 
 final class SimulatorHelpPanel extends JPanel
 {
-	private static final Color BACKGROUND = StudioNightTheme.adaptiveColor(
-			new Color(244, 247, 252), StudioNightTheme.NIGHT_BACKGROUND);
-	private static final Color SURFACE = StudioNightTheme.adaptiveColor(
-			new Color(255, 255, 255), StudioNightTheme.NIGHT_SURFACE);
-	private static final Color SURFACE_ALT = StudioNightTheme.adaptiveColor(
-			new Color(248, 251, 255), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color BORDER = StudioNightTheme.adaptiveColor(
-			new Color(205, 216, 231), StudioNightTheme.NIGHT_BORDER);
-	private static final Color TEXT = StudioNightTheme.adaptiveColor(
-			new Color(25, 31, 40), StudioNightTheme.NIGHT_TEXT);
-	private static final Color MUTED = StudioNightTheme.adaptiveColor(
-			new Color(91, 104, 122), StudioNightTheme.NIGHT_MUTED);
-	private static final Color BLUE = StudioNightTheme.adaptiveColor(
-			new Color(75, 96, 160), StudioNightTheme.NIGHT_BLUE);
-	private static final Color BLUE_SOFT = StudioNightTheme.adaptiveColor(
-			new Color(244, 247, 253), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color GREEN = StudioNightTheme.adaptiveColor(
-			new Color(73, 121, 93), StudioNightTheme.NIGHT_GREEN);
-	private static final Color GREEN_SOFT = StudioNightTheme.adaptiveColor(
-			new Color(245, 250, 247), StudioNightTheme.NIGHT_PANEL_INK);
-	private static final Color PURPLE = StudioNightTheme.adaptiveColor(
-			new Color(105, 91, 155), StudioNightTheme.NIGHT_PURPLE);
-	private static final Color PURPLE_SOFT = StudioNightTheme.adaptiveColor(
-			new Color(247, 245, 252), StudioNightTheme.NIGHT_SURFACE_ALT);
-	private static final Color AMBER = StudioNightTheme.adaptiveColor(
-			new Color(150, 111, 50), StudioNightTheme.NIGHT_AMBER);
-	private static final Color AMBER_SOFT = StudioNightTheme.adaptiveColor(
-			new Color(252, 248, 240), StudioNightTheme.NIGHT_PANEL_INK);
-	private static final Color RED = StudioNightTheme.adaptiveColor(
-			new Color(172, 66, 66), StudioNightTheme.NIGHT_RED);
-	private static final Color QUIET_BORDER = StudioNightTheme.adaptiveColor(
-			new Color(222, 231, 243), StudioNightTheme.NIGHT_BORDER);
-	private static final Color QUIET_LINE = StudioNightTheme.adaptiveColor(
-			new Color(214, 224, 239), StudioNightTheme.NIGHT_BORDER);
-	private static final Color QUIET_FILL = StudioNightTheme.adaptiveColor(
-			new Color(251, 253, 255), StudioNightTheme.NIGHT_SURFACE);
-	private static final Color TRACK = StudioNightTheme.adaptiveColor(
-			new Color(230, 236, 246), StudioNightTheme.NIGHT_PANEL_INK);
-	private static final int RADIUS = 8;
+	// Nebula token aliases. Hue names are kept because they encode meaning
+	// throughout this guide: BLUE = context/data, PURPLE = model input,
+	// AMBER = model stage, GREEN = ranked output / healthy, RED = blocked.
+	private static final Color SURFACE = NebulaDesign.SURFACE;
+	private static final Color SURFACE_ALT = NebulaDesign.SURFACE_ALT;
+	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
+	private static final Color LINE_STRONG = NebulaDesign.BORDER_STRONG;
+	private static final Color TEXT = NebulaDesign.TEXT_PRIMARY;
+	private static final Color MUTED = NebulaDesign.TEXT_SECONDARY;
+	private static final Color FAINT = NebulaDesign.TEXT_TERTIARY;
+	private static final Color BLUE = NebulaDesign.ACCENT;
+	private static final Color GREEN = NebulaDesign.SUCCESS;
+	private static final Color PURPLE = NebulaDesign.PURPLE;
+	private static final Color AMBER = NebulaDesign.WARNING;
+	private static final Color RED = NebulaDesign.DANGER;
+	private static final Color TRACK = NebulaDesign.INSET;
+	private static final int RADIUS = NebulaDesign.RADIUS_CONTROL;
 	private static final int PREVIEW_ROW_LIMIT = 5;
 	private static final int SAMPLE_LIMIT = 5000;
 
 	private final ControllerAgentGui owner;
+	private final JLabel eyebrowLabel;
 	private final JLabel titleLabel;
 	private final JLabel subtitleLabel;
 	private final JLabel datasetPill;
 	private final JLabel algorithmPill;
 	private final JLabel targetPill;
 	private final JLabel nodePill;
-	private final DatasetSnapshotPanel datasetPanel;
-	private final ColumnLegendPanel columnPanel;
 	private final RunReadinessPanel readinessPanel;
 	private final DataShapePanel dataShapePanel;
 	private final ExecutionShapePanel executionShapePanel;
-	private final FlowStoryboardPanel flowPanel;
 	private final NodeMergePanel nodeMergePanel;
 	private final PredictionDemoPanel predictionPanel;
 	private final SettingsStripPanel settingsPanel;
@@ -113,25 +89,27 @@ final class SimulatorHelpPanel extends JPanel
 		this.preview = DatasetPreview.empty("Choose a text dataset to see live rows.");
 		setLayout(new BorderLayout(12, 12));
 		setBorder(new EmptyBorder(14, 16, 14, 16));
-		setBackground(BACKGROUND);
+		setOpaque(true);
+		setBackground(NebulaDesign.CANVAS_TOP);
 
+		eyebrowLabel = new JLabel("SIMULATOR RUN GUIDE");
+		eyebrowLabel.setFont(NebulaDesign.fontSection());
+		eyebrowLabel.setForeground(BLUE);
 		titleLabel = new JLabel("Simulator Help");
-		titleLabel.setFont(font(Font.BOLD, 26));
+		titleLabel.setFont(NebulaDesign.fontSemiBold(23f));
 		titleLabel.setForeground(TEXT);
-		subtitleLabel = new JLabel("");
-		subtitleLabel.setFont(font(Font.PLAIN, 12));
+		subtitleLabel = new JLabel(
+				"Live visual guide to the current setup. Nothing runs from this tab.");
+		subtitleLabel.setFont(NebulaDesign.fontBody(12f));
 		subtitleLabel.setForeground(MUTED);
 		datasetPill = pill("Dataset", BLUE);
 		algorithmPill = pill("Algorithm", PURPLE);
 		targetPill = pill("Output", GREEN);
 		nodePill = pill("Nodes", AMBER);
 		signalHeaderPanel = new SignalHeaderPanel();
-		datasetPanel = new DatasetSnapshotPanel();
-		columnPanel = new ColumnLegendPanel();
 		readinessPanel = new RunReadinessPanel();
 		dataShapePanel = new DataShapePanel();
 		executionShapePanel = new ExecutionShapePanel();
-		flowPanel = new FlowStoryboardPanel();
 		nodeMergePanel = new NodeMergePanel();
 		predictionPanel = new PredictionDemoPanel();
 		settingsPanel = new SettingsStripPanel();
@@ -143,14 +121,28 @@ final class SimulatorHelpPanel extends JPanel
 		{
 			public void actionPerformed(ActionEvent event)
 			{
+				if (!isShowing())
+				{
+					return;
+				}
 				signalHeaderPanel.advance();
-				flowPanel.advance();
 				nodeMergePanel.advance();
 				predictionPanel.advance();
 			}
 		});
 		timer.start();
 		refreshFromSimulator();
+	}
+
+	protected void paintComponent(Graphics graphics)
+	{
+		Graphics2D g = (Graphics2D) graphics.create();
+		NebulaDesign.prepare(g);
+		g.setPaint(new GradientPaint(
+				0, 0, NebulaDesign.CANVAS_TOP,
+				0, Math.max(1, getHeight()), NebulaDesign.CANVAS_BOTTOM));
+		g.fillRect(0, 0, getWidth(), getHeight());
+		g.dispose();
 	}
 
 	void refreshFromSimulator()
@@ -166,30 +158,35 @@ final class SimulatorHelpPanel extends JPanel
 
 	private JPanel createHeader()
 	{
-		JPanel header = new RoundedPanel(new BorderLayout(18, 0));
-		header.setPreferredSize(new Dimension(900, 118));
-		header.setBorder(new EmptyBorder(16, 18, 16, 18));
+		JPanel header = new HeroPanel(new BorderLayout(18, 0));
+		header.setPreferredSize(new Dimension(900, 124));
+		header.setBorder(new EmptyBorder(14, 18, 12, 18));
 
 		JPanel copy = new JPanel();
 		copy.setOpaque(false);
 		copy.setLayout(new BoxLayout(copy, BoxLayout.Y_AXIS));
-		copy.setPreferredSize(new Dimension(360, 86));
+		copy.setPreferredSize(new Dimension(460, 96));
+		eyebrowLabel.setAlignmentX(LEFT_ALIGNMENT);
+		titleLabel.setAlignmentX(LEFT_ALIGNMENT);
+		subtitleLabel.setAlignmentX(LEFT_ALIGNMENT);
+		copy.add(eyebrowLabel);
+		copy.add(Box.createVerticalStrut(3));
 		copy.add(titleLabel);
-		copy.add(Box.createVerticalStrut(4));
+		copy.add(Box.createVerticalStrut(3));
 		copy.add(subtitleLabel);
 
-		JPanel pills = new JPanel(new GridLayout(1, 4, 8, 0));
+		JPanel pills = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
 		pills.setOpaque(false);
-		pills.setPreferredSize(new Dimension(360, 28));
-		pills.setMaximumSize(new Dimension(360, 28));
+		pills.setAlignmentX(LEFT_ALIGNMENT);
+		pills.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 		pills.add(datasetPill);
 		pills.add(algorithmPill);
 		pills.add(targetPill);
 		pills.add(nodePill);
-		copy.add(Box.createVerticalStrut(10));
+		copy.add(Box.createVerticalStrut(8));
 		copy.add(pills);
 
-		signalHeaderPanel.setPreferredSize(new Dimension(780, 84));
+		signalHeaderPanel.setPreferredSize(new Dimension(760, 92));
 		header.add(copy, BorderLayout.WEST);
 		header.add(signalHeaderPanel, BorderLayout.CENTER);
 		return header;
@@ -202,7 +199,7 @@ final class SimulatorHelpPanel extends JPanel
 
 		GridBagConstraints c = new GridBagConstraints();
 		c.fill = GridBagConstraints.BOTH;
-		c.insets = new java.awt.Insets(0, 0, 12, 12);
+		c.insets = new java.awt.Insets(0, 0, 14, 14);
 		c.weighty = 0.46;
 
 		c.gridx = 0;
@@ -216,11 +213,11 @@ final class SimulatorHelpPanel extends JPanel
 
 		c.gridx = 2;
 		c.weightx = 0.32;
-		c.insets = new java.awt.Insets(0, 0, 12, 0);
+		c.insets = new java.awt.Insets(0, 0, 14, 0);
 		dashboard.add(card("Prediction Meaning", predictionPanel), c);
 
 		c.gridy = 1;
-		c.insets = new java.awt.Insets(0, 0, 0, 12);
+		c.insets = new java.awt.Insets(0, 0, 0, 14);
 		c.weighty = 0.54;
 		c.gridx = 0;
 		c.weightx = 0.40;
@@ -240,9 +237,9 @@ final class SimulatorHelpPanel extends JPanel
 	private JPanel card(String title, JPanel body)
 	{
 		JPanel panel = new RoundedPanel(new BorderLayout(0, 8));
-		panel.setBorder(new EmptyBorder(12, 12, 12, 12));
+		panel.setBorder(new EmptyBorder(14, 16, 16, 16));
 		JLabel label = new JLabel(title);
-		label.setFont(font(Font.BOLD, 14));
+		label.setFont(NebulaDesign.fontSemiBold(15f));
 		label.setForeground(TEXT);
 		panel.add(label, BorderLayout.NORTH);
 		panel.add(body, BorderLayout.CENTER);
@@ -251,13 +248,10 @@ final class SimulatorHelpPanel extends JPanel
 
 	private void updateLabels()
 	{
-		titleLabel.setText(snapshot.algorithmName + " run guide");
-		subtitleLabel.setText("Live visual preview for "
-				+ snapshot.datasetName
-				+ ". This tab explains the current setup without running the model.");
-		datasetPill.setText(compact(datasetFamily(snapshot), 16));
+		titleLabel.setText(snapshot.algorithmName);
+		datasetPill.setText(compact(datasetFamily(snapshot), 20));
 		datasetPill.setToolTipText(snapshot.datasetSource + ": " + snapshot.datasetName);
-		algorithmPill.setText(compact(snapshot.algorithmName, 16));
+		algorithmPill.setText(compact(snapshot.algorithmName, 20));
 		algorithmPill.setToolTipText(snapshot.algorithmName + " | "
 				+ snapshot.parameterProfile);
 		targetPill.setText(snapshot.candidateTypeLabel());
@@ -272,12 +266,9 @@ final class SimulatorHelpPanel extends JPanel
 
 	private void updateVisualPanels()
 	{
-		datasetPanel.setState(snapshot, preview);
-		columnPanel.setState(snapshot, preview);
 		readinessPanel.setState(snapshot, preview);
 		dataShapePanel.setState(snapshot, preview);
 		executionShapePanel.setState(snapshot, preview);
-		flowPanel.setState(snapshot, preview);
 		nodeMergePanel.setState(snapshot, preview);
 		predictionPanel.setState(snapshot, preview);
 		settingsPanel.setState(snapshot, preview);
@@ -508,20 +499,36 @@ final class SimulatorHelpPanel extends JPanel
 
 	private static JLabel pill(String text, Color color)
 	{
-		JLabel label = new JLabel(text, SwingConstants.CENTER);
-		label.setFont(font(Font.BOLD, 10));
-		label.setForeground(color.darker());
-		label.setOpaque(true);
-		label.setBackground(tint(color, 0.12f));
-		label.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(tint(color, 0.42f)),
-				new EmptyBorder(6, 8, 6, 8)));
+		PillLabel label = new PillLabel(text, color);
 		return label;
 	}
 
-	private static Font font(int style, int size)
+	private static final class PillLabel extends JLabel
 	{
-		return new Font("SansSerif", style, size);
+		private final Color hue;
+
+		PillLabel(String text, Color hue)
+		{
+			super(text, SwingConstants.CENTER);
+			this.hue = hue;
+			setOpaque(false);
+			setFont(NebulaDesign.fontMedium(11f));
+			setForeground(hue);
+			setBorder(new EmptyBorder(4, 11, 4, 11));
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g);
+			int h = getHeight();
+			g.setColor(softFill(hue));
+			g.fillRoundRect(0, 0, getWidth() - 1, h - 1, h, h);
+			g.setColor(softStroke(hue));
+			g.drawRoundRect(0, 0, getWidth() - 1, h - 1, h, h);
+			g.dispose();
+			super.paintComponent(graphics);
+		}
 	}
 
 	private static Color tint(Color color, float amount)
@@ -530,8 +537,8 @@ final class SimulatorHelpPanel extends JPanel
 		{
 			float accentAmount = Math.max(0.10f, Math.min(0.42f, 1.0f - amount));
 			Color base = amount > 0.70f
-					? StudioNightTheme.NIGHT_SURFACE
-					: StudioNightTheme.NIGHT_PANEL_INK;
+					? NebulaDesign.NIGHT_SURFACE
+					: NebulaDesign.NIGHT_SURFACE_RAISED;
 			return StudioNightTheme.blend(base, color, accentAmount);
 		}
 		int r = (int) (color.getRed() + (255 - color.getRed()) * amount);
@@ -540,34 +547,30 @@ final class SimulatorHelpPanel extends JPanel
 		return new Color(Math.min(255, r), Math.min(255, g), Math.min(255, b));
 	}
 
-	private static Color themed(Color day, Color night)
+	/** Soft chip/badge background for a semantic hue (recipe: soft tint + strong hue text). */
+	private static Color softFill(Color hue)
 	{
-		return StudioNightTheme.isNightMode() ? night : day;
+		if (StudioNightTheme.isNightMode())
+		{
+			return alpha(hue, 34);
+		}
+		return tint(hue, 0.88f);
 	}
 
-	private static Color glass(int alpha)
+	/** Border tone paired with softFill. */
+	private static Color softStroke(Color hue)
 	{
-		return themed(
-				new Color(255, 255, 255, alpha),
-				StudioNightTheme.withAlpha(
-						StudioNightTheme.NIGHT_SURFACE_ALT,
-						Math.min(255, alpha + 16)));
+		if (StudioNightTheme.isNightMode())
+		{
+			return alpha(hue, 92);
+		}
+		return tint(hue, 0.62f);
 	}
 
 	private static Color alpha(Color color, int opacity)
 	{
 		return new Color(color.getRed(), color.getGreen(), color.getBlue(),
 				Math.max(0, Math.min(255, opacity)));
-	}
-
-	private static Color quietTint(Color color)
-	{
-		return tint(color, 0.92f);
-	}
-
-	private static Color quietStroke(Color color)
-	{
-		return tint(color, 0.64f);
 	}
 
 	private static String compact(String value, int max)
@@ -583,25 +586,6 @@ final class SimulatorHelpPanel extends JPanel
 	private static String formatCount(int value)
 	{
 		return String.format(Locale.US, "%,d", value);
-	}
-
-	private static String formatBytes(long bytes)
-	{
-		if (bytes < 1024L)
-		{
-			return bytes + " B";
-		}
-		double kb = bytes / 1024.0;
-		if (kb < 1024.0)
-		{
-			return String.format(Locale.US, "%.1f KB", kb);
-		}
-		double mb = kb / 1024.0;
-		if (mb < 1024.0)
-		{
-			return String.format(Locale.US, "%.1f MB", mb);
-		}
-		return String.format(Locale.US, "%.2f GB", mb / 1024.0);
 	}
 
 	private static void drawClippedString(
@@ -679,6 +663,52 @@ final class SimulatorHelpPanel extends JPanel
 		}
 	}
 
+	/** Uppercase micro-eyebrow with a gentle letterspacing feel. */
+	private static void drawEyebrow(
+			Graphics2D g,
+			String text,
+			int x,
+			int baseline,
+			Color color,
+			int maxWidth)
+	{
+		if (text == null || text.length() == 0)
+		{
+			return;
+		}
+		g.setFont(NebulaDesign.fontSemiBold(9.5f));
+		g.setColor(color);
+		String upper = text.toUpperCase(Locale.US);
+		FontMetrics metrics = g.getFontMetrics();
+		int cursor = x;
+		for (int i = 0; i < upper.length(); i++)
+		{
+			String letter = String.valueOf(upper.charAt(i));
+			int letterWidth = metrics.stringWidth(letter);
+			if (cursor + letterWidth > x + maxWidth)
+			{
+				break;
+			}
+			g.drawString(letter, cursor, baseline);
+			cursor += letterWidth + 1;
+		}
+	}
+
+	/** Joins step phrases with a middle dot for one-line pipeline rows. */
+	private static String joinSteps(String[] steps)
+	{
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < steps.length; i++)
+		{
+			if (i > 0)
+			{
+				out.append("  ·  ");
+			}
+			out.append(steps[i]);
+		}
+		return out.toString();
+	}
+
 	private static abstract class VisualPanel extends JPanel
 	{
 		Snapshot snapshot = Snapshot.empty();
@@ -705,9 +735,8 @@ final class SimulatorHelpPanel extends JPanel
 
 		void prepare(Graphics2D g)
 		{
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-			g.setFont(font(Font.PLAIN, 11));
+			NebulaDesign.prepare(g);
+			g.setFont(NebulaDesign.fontBody(11f));
 		}
 	}
 
@@ -722,16 +751,48 @@ final class SimulatorHelpPanel extends JPanel
 		protected void paintComponent(Graphics graphics)
 		{
 			Graphics2D g = (Graphics2D) graphics.create();
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-					RenderingHints.VALUE_ANTIALIAS_ON);
-			g.setColor(SURFACE);
-			g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
-					RADIUS, RADIUS);
-			g.setColor(BORDER);
-			g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1,
-					RADIUS, RADIUS);
+			NebulaWidgets.paintCard(g, 0, 0, getWidth(), getHeight(),
+					NebulaDesign.RADIUS_CARD);
 			g.dispose();
-			super.paintComponent(graphics);
+		}
+	}
+
+	/** Hero card with the shared Nebula aurora wash. */
+	private static final class HeroPanel extends JPanel
+	{
+		HeroPanel(BorderLayout layout)
+		{
+			super(layout);
+			setOpaque(false);
+		}
+
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D g = (Graphics2D) graphics.create();
+			NebulaDesign.prepare(g);
+			int w = getWidth();
+			int h = getHeight();
+			NebulaWidgets.paintCard(g, 0, 0, w, h, NebulaDesign.RADIUS_CARD);
+			Shape oldClip = g.getClip();
+			g.clip(new RoundRectangle2D.Double(0, 0, w - 1, h - 3,
+					NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD));
+			boolean nightMode = StudioNightTheme.isNightMode();
+			int glowA = nightMode ? 26 : 15;
+			int glowB = nightMode ? 22 : 12;
+			g.setPaint(new RadialGradientPaint(
+					new Point2D.Float(w * 0.18f, 0f),
+					Math.max(1f, w * 0.45f),
+					new float[] {0f, 1f},
+					new Color[] {alpha(BLUE, glowA), alpha(BLUE, 0)}));
+			g.fillRect(0, 0, w, h);
+			g.setPaint(new RadialGradientPaint(
+					new Point2D.Float(w * 0.74f, h),
+					Math.max(1f, w * 0.5f),
+					new float[] {0f, 1f},
+					new Color[] {alpha(PURPLE, glowB), alpha(PURPLE, 0)}));
+			g.fillRect(0, 0, w, h);
+			g.setClip(oldClip);
+			g.dispose();
 		}
 	}
 
@@ -744,8 +805,10 @@ final class SimulatorHelpPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
-			int pad = 12;
-			int laneY = h / 2 + 10;
+			int pad = 10;
+			int boxH = Math.min(60, Math.max(48, h - 32));
+			int boxY = 6;
+			int laneY = boxY + boxH / 2;
 			String target = preview.targetName.length() > 0
 					? preview.targetName
 					: snapshot.primaryTargetName().length() > 0
@@ -763,24 +826,24 @@ final class SimulatorHelpPanel extends JPanel
 			};
 			String[] values = {
 					compact(snapshot.datasetName, 24) + " / " + rows,
-					compact(target, 22),
-					compact(inputMeaning(snapshot), 24),
+					compact(target, 26),
+					compact(inputMeaning(snapshot), 34),
 					snapshot.algorithmName,
 					outputColumnName(snapshot)
 			};
 			Color[] colors = {BLUE, BLUE, PURPLE, AMBER, GREEN};
-			int boxW = Math.max(106, (w - pad * 2 - 52) / 5);
-			int gap = Math.max(7, (w - pad * 2 - boxW * 5) / 4);
+			int boxW = Math.max(112, (w - pad * 2 - 60) / 5);
+			int gap = Math.max(8, (w - pad * 2 - boxW * 5) / 4);
 			int x = pad;
 			for (int i = 0; i < 5; i++)
 			{
-				drawIntentBox(g, x, 12, boxW, 58, titles[i], values[i], colors[i]);
+				drawIntentBox(g, x, boxY, boxW, boxH, titles[i], values[i], colors[i]);
 				if (i < 4)
 				{
-					int x1 = x + boxW + 4;
-					int x2 = x + boxW + gap - 4;
-					g.setStroke(new BasicStroke(2f));
-					g.setColor(new Color(203, 213, 230));
+					int x1 = x + boxW + 3;
+					int x2 = x + boxW + gap - 3;
+					g.setStroke(new BasicStroke(1.6f));
+					g.setColor(LINE_STRONG);
 					g.drawLine(x1, laneY, x2, laneY);
 					double t = (phase + i * 0.18) % 1.0;
 					int px = (int) (x1 + (x2 - x1) * t);
@@ -789,12 +852,12 @@ final class SimulatorHelpPanel extends JPanel
 				}
 				x += boxW + gap;
 			}
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
+			g.setFont(NebulaDesign.fontBody(10.5f));
+			g.setColor(FAINT);
 			drawClippedString(g,
 					"This is a preview of meaning and flow, not a model run.",
 					pad,
-					h - 7,
+					h - 6,
 					w - pad * 2);
 			g.dispose();
 		}
@@ -802,184 +865,16 @@ final class SimulatorHelpPanel extends JPanel
 		private void drawIntentBox(Graphics2D g, int x, int y, int w, int h,
 				String title, String value, Color color)
 		{
-			g.setColor(tint(color, 0.12f));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.36f));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, title.toUpperCase(Locale.US), x + 9, y + 16, w - 18);
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(TEXT);
-			drawClippedString(g, value, x + 9, y + 38, w - 18);
-		}
-	}
-
-	private static final class DatasetSnapshotPanel extends VisualPanel
-	{
-		protected void paintComponent(Graphics graphics)
-		{
-			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D) graphics.create();
-			prepare(g);
-			int w = getWidth();
-			int h = getHeight();
-
-			drawMetric(g, 10, 8, "ROWS", preview.loading ? "..." : formatCount(preview.validRows), BLUE);
-			drawMetric(g, w / 3 + 4, 8, "USERS", preview.loading ? "..." : formatCount(preview.users.size()), PURPLE);
-			drawMetric(g, (w * 2) / 3 - 4, 8, "LABELS", preview.loading ? "..." : formatCount(preview.followees.size()), GREEN);
-
-			int tableY = 58;
-			int rowH = Math.max(34, (h - tableY - 10) / Math.max(1, PREVIEW_ROW_LIMIT + 1));
-			drawTableHeader(g, 10, tableY, w - 20, rowH);
-			if (preview.loading || preview.rows.isEmpty())
-			{
-				g.setColor(MUTED);
-				g.setFont(font(Font.BOLD, 12));
-				drawClippedString(g, preview.message, 18, tableY + rowH + 26, w - 36);
-				g.dispose();
-				return;
-			}
-			int y = tableY + rowH;
-			for (int i = 0; i < Math.min(PREVIEW_ROW_LIMIT, preview.rows.size()); i++)
-			{
-				DsmpRow row = preview.rows.get(i);
-				g.setColor(i % 2 == 0 ? SURFACE_ALT : SURFACE);
-				g.fillRoundRect(10, y + 2, w - 20, rowH - 4, 6, 6);
-				g.setColor(new Color(225, 232, 242));
-				g.drawRoundRect(10, y + 2, w - 20, rowH - 4, 6, 6);
-				int c1 = 18;
-				int c2 = 18 + (w - 36) / 4;
-				int c3 = 18 + (w - 36) / 2;
-				int c4 = 18 + ((w - 36) * 3) / 4;
-				g.setFont(font(Font.BOLD, 11));
-				g.setColor(GREEN.darker());
-				drawClippedString(g, row.followee, c1, y + 21, c2 - c1 - 10);
-				g.setColor(BLUE.darker());
-				drawClippedString(g, row.userName, c2, y + 21, c3 - c2 - 10);
-				g.setColor(PURPLE.darker());
-				drawClippedString(g, compact(row.text, 46), c3, y + 21, c4 - c3 + 80);
-				g.setColor(MUTED);
-				drawClippedString(g, row.date, c4 + 90, y + 21, w - c4 - 108);
-				y += rowH;
-			}
-			g.dispose();
-		}
-
-		private void drawMetric(Graphics2D g, int x, int y, String label, String value, Color color)
-		{
-			int w = Math.max(92, getWidth() / 3 - 18);
-			g.setColor(tint(color, 0.13f));
-			g.fillRoundRect(x, y, w, 40, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.38f));
-			g.drawRoundRect(x, y, w, 40, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			g.drawString(label, x + 10, y + 15);
-			g.setFont(font(Font.BOLD, 15));
-			g.setColor(TEXT);
-			drawClippedString(g, value, x + 10, y + 32, w - 20);
-		}
-
-		private void drawTableHeader(Graphics2D g, int x, int y, int w, int h)
-		{
-			g.setColor(SURFACE_ALT);
-			g.fillRoundRect(x, y, w, h - 4, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
-			int c1 = x + 8;
-			int c2 = x + 8 + (w - 16) / 4;
-			int c3 = x + 8 + (w - 16) / 2;
-			int c4 = x + 8 + ((w - 16) * 3) / 4 + 90;
-			g.drawString("COL 1 LABEL", c1, y + 20);
-			g.drawString("COL 5 USER", c2, y + 20);
-			g.drawString("COL 6 TEXT", c3, y + 20);
-			g.drawString("DATE", c4, y + 20);
-		}
-	}
-
-	private static final class ColumnLegendPanel extends VisualPanel
-	{
-		protected void paintComponent(Graphics graphics)
-		{
-			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D) graphics.create();
-			prepare(g);
-			int w = getWidth();
-			int h = getHeight();
-			int topH = Math.min(76, Math.max(56, h / 3));
-			drawColumnTakeaway(g, 6, 6, w - 12, topH);
-			String[] labels = {
-					"1 Followee",
-					"2 Post id",
-					"3 Date",
-					"4 User id",
-					"5 User",
-					"6 Text"
-			};
-			String[] values = preview.sampleColumnValues();
-			int gap = 6;
-			int startY = topH + 14;
-			int boxW = Math.max(64, (w - 10 - gap * 5) / 6);
-			int boxH = Math.max(56, h - startY - 8);
-			for (int i = 0; i < 6; i++)
-			{
-				boolean input = i == 5;
-				boolean output = (i == 0 && snapshot.outputType == RecommendationCandidateType.FOLLOWEE)
-						|| (i == 4 && snapshot.outputType == RecommendationCandidateType.USER);
-				Color color = input ? PURPLE : output ? GREEN : BLUE;
-				int x = 5 + i * (boxW + gap);
-				g.setColor(input || output ? tint(color, 0.12f) : SURFACE_ALT);
-				g.fillRoundRect(x, startY, boxW, boxH, RADIUS, RADIUS);
-				g.setColor(input || output ? color : BORDER);
-				g.drawRoundRect(x, startY, boxW, boxH, RADIUS, RADIUS);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(input || output ? color.darker() : TEXT);
-				drawClippedString(g, labels[i], x + 8, startY + 19, boxW - 16);
-				g.setFont(font(Font.PLAIN, 10));
-				g.setColor(MUTED);
-				drawClippedString(g, input ? "INPUT" : output ? "OUTPUT" : "context",
-						x + 8, startY + 36, boxW - 16);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(TEXT);
-				drawClippedString(g, values[i], x + 8, startY + 54, boxW - 16);
-			}
-			g.dispose();
-		}
-
-		private void drawColumnTakeaway(Graphics2D g, int x, int y, int w, int h)
-		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(218, 228, 244));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			int split = w / 2;
-			drawRoleChip(g, x + 10, y + 10, split - 16, h - 20,
-					"MODEL INPUT",
-					"column 6 text",
-					PURPLE);
-			drawRoleChip(g, x + split + 6, y + 10, split - 16, h - 20,
-					"RANKED OUTPUT",
-					outputColumnName(snapshot),
-					GREEN);
-			g.setStroke(new BasicStroke(2f));
-			g.setColor(new Color(185, 197, 218));
-			g.drawLine(x + split - 4, y + h / 2, x + split + 4, y + h / 2);
-		}
-
-		private void drawRoleChip(Graphics2D g, int x, int y, int w, int h,
-				String label, String value, Color color)
-		{
-			g.setColor(tint(color, 0.13f));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.38f));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, label, x + 10, y + 16, w - 20);
-			g.setFont(font(Font.BOLD, 12));
+			g.setColor(color);
+			g.fillOval(x + 10, y + 10, 7, 7);
+			drawEyebrow(g, title, x + 23, y + 17, color, w - 32);
+			g.setFont(NebulaDesign.fontMedium(11f));
 			g.setColor(TEXT);
-			drawClippedString(g, value, x + 10, y + 36, w - 20);
+			drawWrapped(g, value, x + 10, y + 33, w - 20, 2, 13);
 		}
 	}
 
@@ -992,8 +887,7 @@ final class SimulatorHelpPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
-			int pad = 14;
-			if (w < 240 || h < 190)
+			if (w < 120 || h < 60)
 			{
 				g.dispose();
 				return;
@@ -1001,34 +895,40 @@ final class SimulatorHelpPanel extends JPanel
 
 			int score = readinessScore();
 			Color color = readinessColor(score);
-			int heroH = Math.min(122, Math.max(98, h / 3));
-			drawReadinessHero(g, pad, 8, w - pad * 2, heroH, score, color);
+			int heroH = Math.min(108, Math.max(76, (int) (h * 0.30f)));
+			heroH = Math.min(heroH, h);
+			drawReadinessHero(g, 0, 0, w, heroH, score, color);
 
-			int metricY = 8 + heroH + 10;
-			int metricH = 44;
-			int gap = 8;
-			int metricW = Math.max(1, (w - pad * 2 - gap) / 2);
-			drawReadinessMetric(g, pad, metricY, metricW, metricH,
-					"rows", preview.loading ? "..." : formatCount(preview.validRows),
-					"usable DSMP rows", BLUE);
-			drawReadinessMetric(g, pad + metricW + gap, metricY, metricW, metricH,
-					"targets", snapshot.batchEnabled
-							? formatCount(snapshot.batchUsers)
-							: targetCountLabel(),
-					snapshot.batchEnabled ? "batch users" : "selected user", PURPLE);
-			drawReadinessMetric(g, pad, metricY + metricH + gap, metricW, metricH,
-					"outputs", outputShortLabel(snapshot),
-					outputColumnName(snapshot), GREEN);
-			drawReadinessMetric(g, pad + metricW + gap, metricY + metricH + gap,
-					metricW, metricH,
-					"workers", formatCount(snapshot.nodes),
-					"parallel node lanes", AMBER);
-
-			int checksY = metricY + metricH * 2 + gap + 12;
-			int checksH = h - checksY - 8;
-			if (checksH >= 72)
+			int y = heroH + 10;
+			int metricH = 40;
+			int gap = 6;
+			int metricW = Math.max(1, (w - gap) / 2);
+			if (h - y >= metricH)
 			{
-				drawChecklist(g, pad, checksY, w - pad * 2, checksH);
+				drawReadinessMetric(g, 0, y, metricW, metricH,
+						"rows", preview.loading ? "..." : formatCount(preview.validRows),
+						"usable DSMP rows", BLUE);
+				drawReadinessMetric(g, metricW + gap, y, metricW, metricH,
+						"targets", snapshot.batchEnabled
+								? formatCount(snapshot.batchUsers)
+								: targetCountLabel(),
+						snapshot.batchEnabled ? "batch users" : "selected user", PURPLE);
+				y += metricH + gap;
+			}
+			if (h - y >= metricH)
+			{
+				drawReadinessMetric(g, 0, y, metricW, metricH,
+						"outputs", outputShortLabel(snapshot),
+						outputColumnName(snapshot), GREEN);
+				drawReadinessMetric(g, metricW + gap, y, metricW, metricH,
+						"workers", formatCount(snapshot.nodes),
+						"parallel node lanes", AMBER);
+				y += metricH + gap;
+			}
+			int checksH = Math.min(104, h - y - 4);
+			if (checksH >= 66)
+			{
+				drawChecklist(g, 0, y + 4, w, checksH);
 			}
 			g.dispose();
 		}
@@ -1048,39 +948,37 @@ final class SimulatorHelpPanel extends JPanel
 					SURFACE_ALT,
 					x + w,
 					y + h,
-					tint(color, 0.80f)));
+					softFill(color)));
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(220, 230, 243));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 
-			int ring = Math.max(68, Math.min(92, h - 24));
-			int ringX = x + 18;
+			int ring = Math.max(58, Math.min(84, h - 26));
+			int ringX = x + 16;
 			int ringY = y + (h - ring) / 2;
-			g.setStroke(new BasicStroke(9f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-			g.setColor(new Color(226, 234, 246));
+			g.setStroke(new BasicStroke(8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g.setColor(alpha(color, StudioNightTheme.isNightMode() ? 46 : 34));
 			g.draw(new Arc2D.Double(ringX, ringY, ring, ring, 90, -360, Arc2D.OPEN));
 			g.setColor(color);
 			g.draw(new Arc2D.Double(ringX, ringY, ring, ring, 90,
 					-360.0 * (score / 100.0), Arc2D.OPEN));
-			g.setFont(font(Font.BOLD, 27));
+			g.setFont(NebulaDesign.fontSemiBold(23f));
 			g.setColor(TEXT);
 			String scoreText = Integer.toString(score);
 			FontMetrics metrics = g.getFontMetrics();
 			g.drawString(scoreText,
 					ringX + ring / 2 - metrics.stringWidth(scoreText) / 2,
-					ringY + ring / 2 + 10);
+					ringY + ring / 2 + 8);
 
-			int copyX = ringX + ring + 20;
-			int copyW = w - (copyX - x) - 16;
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			drawClippedString(g, "RUN READINESS", copyX, y + 27, copyW);
-			g.setFont(font(Font.BOLD, 18));
+			int copyX = ringX + ring + 18;
+			int copyW = w - (copyX - x) - 14;
+			drawEyebrow(g, "Run readiness", copyX, y + 21, color, copyW);
+			g.setFont(NebulaDesign.fontSemiBold(15f));
 			g.setColor(TEXT);
-			drawClippedString(g, readinessHeadline(score), copyX, y + 54, copyW);
-			g.setFont(font(Font.PLAIN, 11));
+			drawClippedString(g, readinessHeadline(score), copyX, y + 41, copyW);
+			g.setFont(NebulaDesign.fontBody(11f));
 			g.setColor(MUTED);
-			drawWrapped(g, readinessSentence(), copyX, y + 75, copyW, 2, 14);
+			drawWrapped(g, readinessSentence(), copyX, y + 58, copyW, 2, 14);
 		}
 
 		private void drawReadinessMetric(
@@ -1096,41 +994,37 @@ final class SimulatorHelpPanel extends JPanel
 		{
 			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 56));
-			g.fillRoundRect(x, y, 5, h, RADIUS, RADIUS);
-			g.setColor(new Color(216, 226, 241));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 11, y + 14, w - 20);
-			g.setFont(font(Font.BOLD, 16));
+			g.setColor(color);
+			g.fillOval(x + 10, y + 8, 7, 7);
+			drawEyebrow(g, label, x + 22, y + 15, color, w - 32);
+			g.setFont(NebulaDesign.fontSemiBold(13f));
 			g.setColor(TEXT);
-			drawClippedString(g, value, x + 11, y + 31, w - 20);
-			g.setFont(font(Font.PLAIN, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, detail, x + 11, y + h - 5, w - 20);
+			drawClippedString(g, value, x + 10, y + 27, w - 20);
+			g.setFont(NebulaDesign.fontBody(9f));
+			g.setColor(FAINT);
+			drawClippedString(g, detail, x + 10, y + h - 3, w - 20);
 		}
 
 		private void drawChecklist(Graphics2D g, int x, int y, int w, int h)
 		{
-			g.setColor(glass(218));
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(218, 228, 242));
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, "WHAT IS SAFE TO EXPECT", x + 12, y + 17, w - 24);
-			int rowY = y + 30;
-			int rowH = Math.max(16, Math.min(22, (h - 38) / 3));
+			drawEyebrow(g, "What is safe to expect", x + 12, y + 16, FAINT, w - 24);
+			int rowY = y + 23;
+			int rowH = Math.max(12, Math.min(24, (h - 30) / 3));
 			drawCheckRow(g, x + 12, rowY, w - 24, rowH,
 					"dataset",
 					preview.validRows > 0 ? "loaded" : "waiting",
 					preview.validRows > 0 ? GREEN : AMBER);
-			drawCheckRow(g, x + 12, rowY + rowH + 6, w - 24, rowH,
+			drawCheckRow(g, x + 12, rowY + rowH + 3, w - 24, rowH,
 					"algorithm",
 					snapshot.workingAlgorithm ? "supported" : "not active",
 					snapshot.workingAlgorithm ? GREEN : RED);
-			drawCheckRow(g, x + 12, rowY + (rowH + 6) * 2, w - 24, rowH,
+			drawCheckRow(g, x + 12, rowY + (rowH + 3) * 2, w - 24, rowH,
 					"side effects",
 					snapshot.graphEnabled ? "graph display on" : "edges retained",
 					snapshot.graphEnabled ? GREEN : AMBER);
@@ -1146,18 +1040,13 @@ final class SimulatorHelpPanel extends JPanel
 				String value,
 				Color color)
 		{
-			g.setColor(tint(color, 0.16f));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 70));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(color);
-			g.fillOval(x + 8, y + h / 2 - 4, 8, 8);
-			g.setFont(font(Font.BOLD, 10));
+			g.fillOval(x + 1, y + h / 2 - 3, 7, 7);
+			g.setFont(NebulaDesign.fontMedium(11f));
 			g.setColor(TEXT);
-			drawClippedString(g, label, x + 24, y + h / 2 + 4, w / 2);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			drawClippedString(g, value, x + w / 2 + 18, y + h / 2 + 4, w / 2 - 24);
+			drawClippedString(g, label, x + 15, y + h / 2 + 4, w / 2 - 20);
+			g.setColor(color);
+			drawClippedString(g, value, x + w / 2 + 4, y + h / 2 + 4, w / 2 - 8);
 		}
 
 		private int readinessScore()
@@ -1245,35 +1134,40 @@ final class SimulatorHelpPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
-			int pad = 14;
-			if (w < 300 || h < 220)
+			if (w < 160 || h < 60)
 			{
 				g.dispose();
 				return;
 			}
 
-			int metricH = 44;
+			int metricH = 42;
 			int metricGap = 8;
-			int metricW = Math.max(1, (w - pad * 2 - metricGap * 3) / 4);
-			drawSmallMetric(g, pad, 8, metricW, metricH,
+			int metricW = Math.max(1, (w - metricGap * 3) / 4);
+			drawSmallMetric(g, 0, 0, metricW, metricH,
 					"rows", preview.loading ? "..." : formatCount(preview.validRows),
 					BLUE);
-			drawSmallMetric(g, pad + (metricW + metricGap), 8, metricW, metricH,
+			drawSmallMetric(g, metricW + metricGap, 0, metricW, metricH,
 					"users", preview.loading ? "..." : formatCount(preview.users.size()),
 					PURPLE);
-			drawSmallMetric(g, pad + (metricW + metricGap) * 2, 8, metricW, metricH,
+			drawSmallMetric(g, (metricW + metricGap) * 2, 0, metricW, metricH,
 					"labels", preview.loading ? "..." : formatCount(preview.followees.size()),
 					GREEN);
-			drawSmallMetric(g, pad + (metricW + metricGap) * 3, 8, metricW, metricH,
+			drawSmallMetric(g, (metricW + metricGap) * 3, 0, metricW, metricH,
 					"text terms", preview.loading ? "..." : formatCount(preview.terms.size()),
 					AMBER);
 
-			int mapY = 8 + metricH + 12;
-			int mapH = Math.min(320, Math.max(210, h - mapY - 104));
-			drawDataMap(g, pad, mapY, w - pad * 2, mapH);
-
-			int sampleY = mapY + mapH + 10;
-			drawSampleStrip(g, pad, sampleY, w - pad * 2, h - sampleY - 6);
+			int mapY = metricH + 10;
+			boolean sample = h - mapY >= 200;
+			int sampleH = sample ? 52 : 0;
+			int mapH = h - mapY - (sample ? sampleH + 10 : 0);
+			if (mapH >= 70)
+			{
+				drawDataMap(g, 0, mapY, w, mapH);
+			}
+			if (sample)
+			{
+				drawSampleStrip(g, 0, mapY + mapH + 10, w, sampleH);
+			}
 			g.dispose();
 		}
 
@@ -1287,83 +1181,86 @@ final class SimulatorHelpPanel extends JPanel
 				String value,
 				Color color)
 		{
-			g.setColor(SURFACE);
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 42));
-			g.fillRoundRect(x + 8, y + 8, 4, h - 16, 4, 4);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 18, y + 15, w - 28);
-			g.setFont(font(Font.BOLD, 17));
+			g.setColor(color);
+			g.fillOval(x + 10, y + 9, 7, 7);
+			drawEyebrow(g, label, x + 22, y + 16, color, w - 32);
+			g.setFont(NebulaDesign.fontSemiBold(15f));
 			g.setColor(TEXT);
-			drawClippedString(g, value, x + 18, y + h - 11, w - 28);
+			drawClippedString(g, value, x + 10, y + h - 10, w - 20);
 		}
 
 		private void drawDataMap(Graphics2D g, int x, int y, int w, int h)
 		{
-			g.setPaint(new GradientPaint(
-					x,
-					y,
-					QUIET_FILL,
-					x + w,
-					y + h,
-					SURFACE_ALT));
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, "DSMP SIX-COLUMN MEANING", x + 16, y + 22, w - 32);
-			g.setFont(font(Font.PLAIN, 10));
+			drawEyebrow(g, "DSMP six-column meaning", x + 14, y + 19, FAINT, w - 28);
+			g.setFont(NebulaDesign.fontBody(10.5f));
 			g.setColor(MUTED);
 			drawClippedString(g,
-					"Current settings decide which DSMP column is model input and which side is ranked.",
-					x + 16,
-					y + 40,
-					w - 32);
+					"Current settings decide the model input column and the ranked side.",
+					x + 14,
+					y + 36,
+					w - 28);
 
-			int nodeTop = y + 58;
-			int nodeH = Math.min(92, Math.max(72, (h - 130) / 2));
-			int gap = 18;
-			int nodeW = Math.max(112, (w - 48 - gap * 2) / 3);
-			int leftX = x + 18;
+			int contentTop = y + 46;
+			int contentBottom = y + h - 10;
+			int nodeH = Math.min(88, Math.max(60, (h - 116) / 2));
+			nodeH = Math.min(nodeH, Math.max(1, contentBottom - contentTop));
+			boolean chipsFit = contentTop + nodeH + 12 + 40 <= y + h - 6;
+			int nodeTop = chipsFit
+					? contentTop
+					: contentTop + Math.max(0, (contentBottom - contentTop - nodeH) / 2);
+			if (nodeTop + nodeH > y + h - 6 || nodeH < 44)
+			{
+				return;
+			}
+			int gap = 14;
+			int nodeW = Math.max(84, (w - 32 - gap * 2) / 3);
+			int leftX = x + 14;
 			int centerX = leftX + nodeW + gap;
 			int rightX = centerX + nodeW + gap;
 			int cy = nodeTop + nodeH / 2;
 			drawNode(g, leftX, nodeTop, nodeW, nodeH,
-					"MODEL INPUT",
+					"Input",
 					"column 6",
-					compact(inputMeaning(snapshot), 28),
+					inputMeaningShort(snapshot),
 					PURPLE);
 			drawNode(g, centerX, nodeTop, nodeW, nodeH,
-					"ALGORITHM",
+					"Algorithm",
 					snapshot.algorithmName,
-					internalAlgorithmMeaning(snapshot),
+					featureSummary(snapshot),
 					AMBER);
 			drawNode(g, rightX, nodeTop, nodeW, nodeH,
-					"RANKED OUTPUT",
+					"Output",
 					outputShortLabel(snapshot),
-					compact(outputMeaning(snapshot), 30),
+					outputColumnShort(snapshot),
 					GREEN);
 			drawFlow(g, leftX + nodeW, cy, centerX, cy, BLUE, 0.00f);
 			drawFlow(g, centerX + nodeW, cy, rightX, cy, GREEN, 0.31f);
 
-			int contextY = nodeTop + nodeH + 14;
-			int contextW = Math.max(1, (w - 60) / 3);
-			drawContextChip(g, x + 18, contextY, contextW,
-					"Column 1", columnOneRole(snapshot), GREEN);
-			drawContextChip(g, x + 30 + contextW, contextY, contextW,
-					"Column 5", columnFiveRole(snapshot), BLUE);
-			drawContextChip(g, x + 42 + contextW * 2, contextY, contextW,
-					"Date", "filter window context", AMBER);
-
-			int meaningY = contextY + 54;
-			if (meaningY + 42 <= y + h - 8)
+			int contextY = nodeTop + nodeH + 12;
+			if (chipsFit)
 			{
-				drawMeaningBand(g, x + 18, meaningY, w - 36, y + h - meaningY - 8);
+				int contextW = Math.max(1, (w - 52) / 3);
+				drawContextChip(g, x + 14, contextY, contextW,
+						"Column 1", columnOneRole(snapshot), GREEN);
+				drawContextChip(g, x + 26 + contextW, contextY, contextW,
+						"Column 5", columnFiveRole(snapshot), BLUE);
+				drawContextChip(g, x + 38 + contextW * 2, contextY, contextW,
+						"Date", "filter window context", AMBER);
+				int meaningY = contextY + 50;
+				if (meaningY + 34 <= y + h - 8)
+				{
+					drawMeaningBand(g, x + 14, meaningY, w - 28,
+							Math.min(40, y + h - meaningY - 8));
+				}
 			}
 		}
 
@@ -1380,22 +1277,20 @@ final class SimulatorHelpPanel extends JPanel
 		{
 			g.setColor(SURFACE);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietStroke(color));
+			g.setColor(softStroke(color));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 80));
-			g.fillRoundRect(x, y, 8, h, RADIUS, RADIUS);
-			g.fillRect(x + 4, y, 6, h);
-			g.setColor(alpha(color, 150));
-			g.fill(new Ellipse2D.Double(x + 17, y + 18, 10, 10));
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, label, x + 36, y + 18, w - 46);
-			g.setFont(font(Font.BOLD, 14));
+			g.setColor(color);
+			g.fillOval(x + 10, y + 11, 7, 7);
+			drawEyebrow(g, label, x + 22, y + 18, color, w - 30);
+			g.setFont(NebulaDesign.fontSemiBold(13f));
 			g.setColor(TEXT);
-			drawClippedString(g, main, x + 16, y + 45, w - 28);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, detail, x + 16, y + 65, w - 28);
+			drawClippedString(g, main, x + 10, y + 40, w - 20);
+			if (h >= 62)
+			{
+				g.setFont(NebulaDesign.fontBody(10f));
+				g.setColor(MUTED);
+				drawClippedString(g, detail, x + 10, y + 57, w - 20);
+			}
 		}
 
 		private void drawFlow(
@@ -1407,13 +1302,13 @@ final class SimulatorHelpPanel extends JPanel
 				Color color,
 				float offset)
 		{
-			g.setStroke(new BasicStroke(2f));
-			g.setColor(new Color(202, 214, 232));
-			g.drawLine(x1 + 8, y1, x2 - 8, y2);
+			g.setStroke(new BasicStroke(1.6f));
+			g.setColor(LINE_STRONG);
+			g.drawLine(x1 + 6, y1, x2 - 6, y2);
 			double t = (phase + offset) % 1.0;
-			int px = (int) (x1 + 8 + (x2 - x1 - 16) * t);
-			g.setColor(alpha(color, 145));
-			g.fill(new Ellipse2D.Double(px - 4, y1 - 4, 8, 8));
+			int px = (int) (x1 + 6 + (x2 - x1 - 12) * t);
+			g.setColor(alpha(color, 165));
+			g.fill(new Ellipse2D.Double(px - 3.5, y1 - 3.5, 7, 7));
 		}
 
 		private void drawContextChip(
@@ -1426,17 +1321,15 @@ final class SimulatorHelpPanel extends JPanel
 				Color color)
 		{
 			g.setColor(SURFACE);
-			g.fillRoundRect(x, y, w, 42, RADIUS, RADIUS);
-			g.setColor(alpha(color, 52));
-			g.fillRoundRect(x + 7, y + 8, 4, 26, 4, 4);
-			g.setColor(QUIET_BORDER);
-			g.drawRoundRect(x, y, w, 42, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 18, y + 15, w - 26);
-			g.setFont(font(Font.BOLD, 11));
+			g.fillRoundRect(x, y, w, 40, RADIUS, RADIUS);
+			g.setColor(BORDER);
+			g.drawRoundRect(x, y, w, 40, RADIUS, RADIUS);
+			g.setColor(color);
+			g.fillOval(x + 10, y + 9, 6, 6);
+			drawEyebrow(g, label, x + 21, y + 15, color, w - 30);
+			g.setFont(NebulaDesign.fontMedium(10.5f));
 			g.setColor(TEXT);
-			drawClippedString(g, value, x + 18, y + 31, w - 26);
+			drawClippedString(g, value, x + 10, y + 31, w - 20);
 		}
 
 		private void drawMeaningBand(Graphics2D g, int x, int y, int w, int h)
@@ -1445,21 +1338,19 @@ final class SimulatorHelpPanel extends JPanel
 					? BLUE : GREEN;
 			g.setColor(SURFACE);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 58));
-			g.fillRoundRect(x + 10, y + 10, 76, h - 20, 12, 12);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(color.darker());
-			drawClippedString(g, "MEANING", x + 22, y + h / 2 + 4, 58);
-			g.setFont(font(Font.BOLD, 12));
+			g.setColor(softFill(color));
+			g.fillRoundRect(x + 8, y + 7, 72, h - 14, 999, 999);
+			drawEyebrow(g, "Meaning", x + 20, y + h / 2 + 3, color, 56);
+			g.setFont(NebulaDesign.fontMedium(11f));
 			g.setColor(TEXT);
 			drawClippedString(g,
 					"Read " + inputMeaning(snapshot) + " -> rank "
 							+ outputMeaning(snapshot),
-					x + 100,
+					x + 92,
 					y + h / 2 + 4,
-					w - 114);
+					w - 104);
 		}
 
 		private void drawSampleStrip(Graphics2D g, int x, int y, int w, int h)
@@ -1470,23 +1361,21 @@ final class SimulatorHelpPanel extends JPanel
 			}
 			g.setColor(SURFACE);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
 			DsmpRow row = !preview.targetRows.isEmpty()
 					? preview.targetRows.get(0)
 					: preview.rows.isEmpty() ? null : preview.rows.get(0);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
-			drawClippedString(g, "LIVE EXAMPLE ROW", x + 12, y + 17, w - 24);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
+			drawEyebrow(g, "Live example row", x + 12, y + 16, BLUE, w - 24);
 			if (row == null)
 			{
-				drawClippedString(g, preview.message, x + 12, y + 36, w - 24);
+				g.setFont(NebulaDesign.fontBody(10.5f));
+				g.setColor(MUTED);
+				drawClippedString(g, preview.message, x + 12, y + 34, w - 24);
 				return;
 			}
-			int chipY = y + 26;
-			int chipH = Math.max(30, Math.min(42, h - 34));
+			int chipY = y + 22;
+			int chipH = Math.max(24, h - 30);
 			int gap = 8;
 			int chipW = Math.max(1, (w - 24 - gap * 2) / 3);
 			drawSampleCell(g, x + 12, chipY, chipW, chipH,
@@ -1495,33 +1384,19 @@ final class SimulatorHelpPanel extends JPanel
 					"column 5", row.userName, BLUE);
 			drawSampleCell(g, x + 12 + (chipW + gap) * 2, chipY, chipW, chipH,
 					"column 6", row.text, PURPLE);
-			if (h > 86)
-			{
-				g.setFont(font(Font.PLAIN, 10));
-				g.setColor(MUTED);
-				drawClippedString(g,
-						"This exact row shape is what the simulator sends into the selected algorithm.",
-						x + 12,
-						y + h - 11,
-						w - 24);
-			}
 		}
 
 		private void drawSampleCell(Graphics2D g, int x, int y, int w, int h,
 				String label, String value, Color color)
 		{
-			g.setColor(QUIET_FILL);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 48));
-			g.fillRoundRect(x + 7, y + 7, 4, h - 14, 4, 4);
-			g.setColor(QUIET_BORDER);
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 18, y + 14, w - 26);
-			g.setFont(font(Font.BOLD, 10));
+			g.setColor(SURFACE_ALT);
+			g.fillRoundRect(x, y, w, h, NebulaDesign.RADIUS_SMALL, NebulaDesign.RADIUS_SMALL);
+			g.setColor(BORDER);
+			g.drawRoundRect(x, y, w, h, NebulaDesign.RADIUS_SMALL, NebulaDesign.RADIUS_SMALL);
+			drawEyebrow(g, label, x + 9, y + 13, color, w - 18);
+			g.setFont(NebulaDesign.fontMono(10.5f));
 			g.setColor(TEXT);
-			drawClippedString(g, value, x + 18, y + h - 10, w - 26);
+			drawClippedString(g, value, x + 9, y + h - 8, w - 18);
 		}
 	}
 
@@ -1534,117 +1409,107 @@ final class SimulatorHelpPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
-			int pad = 14;
-			if (w < 320 || h < 230)
+			if (w < 160 || h < 60)
 			{
 				g.dispose();
 				return;
 			}
 
-			int questionH = 58;
-			drawQuestion(g, pad, 8, w - pad * 2, questionH);
+			int questionH = 44;
+			drawQuestion(g, 0, 0, w, questionH);
 
-			int workY = 8 + questionH + 10;
-			int workH = 88;
-			drawWorkbench(g, pad, workY, w - pad * 2, workH);
-
-			int laneY = workY + workH + 12;
-			int laneH = h - laneY - 8;
-			drawExecutionLane(g, pad, laneY, w - pad * 2, laneH);
+			int y = questionH + 10;
+			boolean workbench = h - y >= 170;
+			if (workbench)
+			{
+				int workH = 78;
+				drawWorkbench(g, 0, y, w, workH);
+				y += workH + 10;
+			}
+			int laneH = h - y;
+			if (laneH >= 70)
+			{
+				drawExecutionLane(g, 0, y, w, laneH);
+			}
 			g.dispose();
 		}
 
 		private void drawQuestion(Graphics2D g, int x, int y, int w, int h)
 		{
-			g.setColor(SURFACE);
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			int labelW = Math.min(106, Math.max(88, w / 5));
-			g.setColor(quietTint(GREEN));
-			g.fillRoundRect(x + 12, y + 10, labelW, h - 20, 14, 14);
-			g.setColor(quietStroke(GREEN));
-			g.drawRoundRect(x + 12, y + 10, labelW, h - 20, 14, 14);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(GREEN.darker());
-			drawClippedString(g, "QUESTION", x + 28, y + 30, labelW - 28);
-			g.setFont(font(Font.BOLD, 13));
+			int labelW = 84;
+			g.setColor(softFill(GREEN));
+			g.fillRoundRect(x + 10, y + 9, labelW, h - 18, 999, 999);
+			drawEyebrow(g, "Question", x + 24, y + h / 2 + 3, GREEN, labelW - 20);
+			g.setFont(NebulaDesign.fontMedium(12f));
 			g.setColor(TEXT);
 			drawClippedString(g, beginnerQuestion(snapshot),
-					x + labelW + 24,
-					y + 30,
-					w - labelW - 36);
+					x + labelW + 22,
+					y + h / 2 + 4,
+					w - labelW - 34);
 		}
 
 		private void drawWorkbench(Graphics2D g, int x, int y, int w, int h)
 		{
-			g.setPaint(new GradientPaint(
-					x,
-					y,
-					QUIET_FILL,
-					x + w,
-					y + h,
-					SURFACE));
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(PURPLE.darker());
-			drawClippedString(g, "ALGORITHM WORKBENCH", x + 14, y + 19, w - 28);
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(TEXT);
+			drawEyebrow(g, "Algorithm workbench", x + 12, y + 17, PURPLE, w - 24);
+			g.setFont(NebulaDesign.fontBody(11f));
+			g.setColor(MUTED);
 			drawClippedString(g, snapshot.algorithmName + " builds "
 					+ featureSummary(snapshot) + " from cleaned column-6 text.",
-					x + 14,
-					y + 40,
-					w - 28);
+					x + 12,
+					y + 34,
+					w - 24);
 
 			String[] steps = algorithmWorkbenchSteps(snapshot);
-			int moduleW = Math.max(82, (w - 58) / 3);
-			int moduleY = y + h - 36;
+			int moduleW = Math.max(82, (w - 54) / 3);
+			int moduleY = y + h - 32;
 			for (int i = 0; i < 3; i++)
 			{
-				int moduleX = x + 14 + i * (moduleW + 15);
+				int moduleX = x + 12 + i * (moduleW + 15);
 				Color color = i == 0 ? BLUE : i == 1 ? PURPLE : GREEN;
 				g.setColor(SURFACE);
-				g.fillRoundRect(moduleX, moduleY, moduleW, 26, 12, 12);
-				g.setColor(quietStroke(color));
-				g.drawRoundRect(moduleX, moduleY, moduleW, 26, 12, 12);
-				g.setColor(alpha(color, 42));
-				g.fillRoundRect(moduleX + 6, moduleY + 7, 4, 12, 4, 4);
-				g.setFont(font(Font.BOLD, 10));
+				g.fillRoundRect(moduleX, moduleY, moduleW, 24, 999, 999);
+				g.setColor(softStroke(color));
+				g.drawRoundRect(moduleX, moduleY, moduleW, 24, 999, 999);
+				g.setColor(color);
+				g.fillOval(moduleX + 10, moduleY + 9, 6, 6);
+				g.setFont(NebulaDesign.fontMedium(10.5f));
 				g.setColor(TEXT);
-				drawClippedString(g, steps[i], moduleX + 16, moduleY + 17, moduleW - 24);
+				drawClippedString(g, steps[i], moduleX + 21, moduleY + 16, moduleW - 30);
 				if (i < 2)
 				{
 					int ax = moduleX + moduleW + 3;
-					int ay = moduleY + 13;
-					g.setColor(new Color(183, 195, 214));
-					g.setStroke(new BasicStroke(2f));
-					g.drawLine(ax, ay, ax + 10, ay);
-					g.drawLine(ax + 6, ay - 4, ax + 10, ay);
-					g.drawLine(ax + 6, ay + 4, ax + 10, ay);
+					int ay = moduleY + 12;
+					g.setColor(LINE_STRONG);
+					g.setStroke(new BasicStroke(1.6f));
+					g.drawLine(ax, ay, ax + 9, ay);
+					g.drawLine(ax + 5, ay - 4, ax + 9, ay);
+					g.drawLine(ax + 5, ay + 4, ax + 9, ay);
 				}
 			}
 		}
 
 		private void drawExecutionLane(Graphics2D g, int x, int y, int w, int h)
 		{
-			g.setColor(SURFACE);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
-			drawClippedString(g, "EXECUTION LANE", x + 14, y + 21, w - 28);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
+			drawEyebrow(g, "Execution lane", x + 2, y + 12, BLUE, 110);
+			g.setFont(NebulaDesign.fontBody(10.5f));
+			g.setColor(FAINT);
 			drawClippedString(g,
-					"Same order the simulator follows after Initialize and Run Simulation.",
-					x + 112,
-					y + 21,
-					w - 126);
+					"Runs in this order after Initialize and Run Simulation.",
+					x + 116,
+					y + 12,
+					w - 120);
 
+			int filters = (snapshot.removeHashTags ? 1 : 0)
+					+ (snapshot.removeRetweets ? 1 : 0)
+					+ (snapshot.removeStopWords ? 1 : 0);
 			String[] title = {
 					"Read",
 					"Clean",
@@ -1656,335 +1521,58 @@ final class SimulatorHelpPanel extends JPanel
 					preview.validRows > 0
 							? formatCount(preview.validRows) + " rows"
 							: snapshot.datasetSource,
-					cleaningSummary(snapshot),
+					filters + " of 3 filters on",
 					featureSummary(snapshot),
 					snapshot.nodes + " node" + (snapshot.nodes == 1 ? "" : "s"),
 					"top " + snapshot.topRecommendations
 			};
 			Color[] colors = {BLUE, BLUE, PURPLE, AMBER, GREEN};
-			int gap = 8;
-			int cardW = Math.max(86, (w - 28 - gap * 4) / 5);
-			int cardH = Math.max(92, h - 52);
-			int cardY = y + 36;
+			int listY = y + 20;
+			int rowH = Math.max(17, Math.min(38, (h - 20) / 5));
+			boolean twoLine = rowH >= 27;
 			for (int i = 0; i < 5; i++)
 			{
-				int cardX = x + 14 + i * (cardW + gap);
+				int rowY = listY + i * rowH;
+				if (rowY + rowH > y + h + 4)
+				{
+					break;
+				}
 				if (i > 0)
 				{
-					int lineX1 = cardX - gap + 2;
-					int lineX2 = cardX - 4;
-					int lineY = cardY + 26;
-					g.setStroke(new BasicStroke(2f));
-					g.setColor(new Color(203, 213, 230));
-					g.drawLine(lineX1, lineY, lineX2, lineY);
-					double t = (phase + i * 0.16) % 1.0;
-					int px = (int) (lineX1 + (lineX2 - lineX1) * t);
-					g.setColor(alpha(colors[i], 150));
-					g.fill(new Ellipse2D.Double(px - 3, lineY - 3, 6, 6));
+					g.setColor(BORDER);
+					g.fillRect(x + 2, rowY, w - 4, 1);
 				}
-				drawStageCard(g, cardX, cardY, cardW, cardH,
-						title[i],
-						detail[i],
-						stageSteps(i, snapshot),
-						colors[i]);
-			}
-		}
-
-		private void drawStageCard(
-				Graphics2D g,
-				int x,
-				int y,
-				int w,
-				int h,
-				String title,
-				String detail,
-				String[] steps,
-				Color color)
-		{
-			g.setColor(SURFACE);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietStroke(color));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 72));
-			g.fillRoundRect(x, y, 7, h, RADIUS, RADIUS);
-			g.fillRect(x + 4, y, 5, h);
-			g.setColor(alpha(color, 150));
-			g.fill(new Ellipse2D.Double(x + 14, y + 14, 10, 10));
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(TEXT);
-			drawClippedString(g, title, x + 31, y + 24, w - 40);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, detail, x + 12, y + 45, w - 24);
-			int chipY = y + 58;
-			int maxSteps = h >= 132 ? 3 : 2;
-			for (int i = 0; i < Math.min(maxSteps, steps.length); i++)
-			{
-				g.setColor(QUIET_FILL);
-				g.fillRoundRect(x + 12, chipY, w - 24, 20, 8, 8);
-				g.setColor(QUIET_BORDER);
-				g.drawRoundRect(x + 12, chipY, w - 24, 20, 8, 8);
-				g.setFont(font(Font.PLAIN, 9));
+				int badge = rowH >= 24 ? 18 : 14;
+				int badgeY = rowY + rowH / 2 - badge / 2;
+				g.setColor(softFill(colors[i]));
+				g.fillRoundRect(x + 2, badgeY, badge, badge, 999, 999);
+				g.setColor(softStroke(colors[i]));
+				g.drawRoundRect(x + 2, badgeY, badge, badge, 999, 999);
+				g.setFont(NebulaDesign.fontSemiBold(10f));
+				g.setColor(colors[i]);
+				String number = Integer.toString(i + 1);
+				FontMetrics metrics = g.getFontMetrics();
+				g.drawString(number,
+						x + 2 + badge / 2 - metrics.stringWidth(number) / 2,
+						badgeY + badge / 2 + 4);
+				int textX = x + 2 + badge + 10;
+				int titleBaseline = twoLine ? rowY + rowH / 2 - 2 : rowY + rowH / 2 + 4;
+				g.setFont(NebulaDesign.fontMono(10f));
+				int detailW = g.getFontMetrics().stringWidth(detail[i]);
+				g.setColor(MUTED);
+				g.drawString(detail[i], x + w - 4 - detailW, titleBaseline);
+				g.setFont(NebulaDesign.fontMedium(11.5f));
 				g.setColor(TEXT);
-				drawClippedString(g, steps[i], x + 20, chipY + 14, w - 40);
-				chipY += 24;
-			}
-			g.setColor(TRACK);
-			g.fillRoundRect(x + 12, y + h - 14, w - 24, 5, 5, 5);
-			g.setColor(alpha(color, 185));
-			g.fillRoundRect(x + 12, y + h - 14,
-					Math.max(12, (int) ((w - 24) * 0.68)), 5, 5, 5);
-		}
-	}
-
-	private static final class FlowStoryboardPanel extends VisualPanel
-	{
-		protected void paintComponent(Graphics graphics)
-		{
-			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D) graphics.create();
-			prepare(g);
-			int w = getWidth();
-			int h = getHeight();
-			int pad = 12;
-			int bandH = Math.min(94, Math.max(78, h / 5));
-			drawPlainLanguageBand(g, pad, 8, w - pad * 2, bandH);
-			int midY = bandH + 18;
-			int midH = Math.min(96, Math.max(78, h / 5));
-			int questionW = Math.max(250, (w - pad * 2 - 10) * 40 / 100);
-			drawQuestionStrip(g, pad, midY, questionW, midH);
-			drawAlgorithmWorkbench(g,
-					pad + questionW + 10,
-					midY,
-					w - pad * 2 - questionW - 10,
-					midH,
-					snapshot);
-			int laneY = midY + midH + 14;
-			int laneH = Math.max(130, h - laneY - 12);
-			String[] title = {
-					"Read rows",
-					"Clean text",
-					algorithmStage(snapshot),
-					"Node score maps",
-					"Merge top " + snapshot.topRecommendations
-			};
-			String[] detail = {
-					preview.validRows > 0 ? formatCount(preview.validRows) + " DSMP rows" : snapshot.datasetSource,
-					cleaningSummary(snapshot),
-					featureSummary(snapshot),
-					snapshot.nodes + " worker lane" + (snapshot.nodes == 1 ? "" : "s"),
-					snapshot.candidateTypeLabel()
-			};
-			drawLaneFrame(g, pad, laneY, w - pad * 2, laneH);
-			int cardTop = laneY + 34;
-			int cardH = laneH - 48;
-			int boxW = Math.max(108, (w - pad * 2 - 48) / 5);
-			int gap = Math.max(8, (w - pad * 2 - boxW * 5) / 4);
-			int x = pad;
-			for (int i = 0; i < 5; i++)
-			{
-				if (i > 0)
+				drawClippedString(g, title[i], textX, titleBaseline,
+						w - (textX - x) - detailW - 16);
+				if (twoLine)
 				{
-					int x1 = x - gap + 8;
-					int x2 = x - 10;
-					g.setColor(new Color(205, 216, 235));
-					g.setStroke(new BasicStroke(2f));
-					g.drawLine(x1, cardTop + 22, x2, cardTop + 22);
-					double t = (phase + i * 0.16) % 1.0;
-					int px = (int) (x1 + (x2 - x1) * t);
-					g.setColor(i % 2 == 0 ? GREEN : BLUE);
-					g.fill(new Ellipse2D.Double(px - 3, cardTop + 19, 6, 6));
-				}
-				Color color = i == 2 ? PURPLE : i == 4 ? GREEN : BLUE;
-				drawStage(g, x, cardTop, boxW, cardH, title[i], detail[i],
-						stageSteps(i, snapshot), color);
-				x += boxW + gap;
-			}
-			g.dispose();
-		}
-
-		private void drawPlainLanguageBand(Graphics2D g, int x, int y, int w, int h)
-		{
-			g.setPaint(new GradientPaint(
-					x,
-					y,
-					SURFACE_ALT,
-					x + w,
-					y + h,
-					StudioNightTheme.isNightMode()
-							? StudioNightTheme.NIGHT_PANEL_INK
-							: new Color(241, 246, 255)));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(218, 228, 244));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
-			g.drawString(datasetFamily(snapshot).toUpperCase(Locale.US)
-					+ " - WHAT THE SIMULATOR WILL DO", x + 14, y + 20);
-
-			String left = "Read " + inputMeaning(snapshot);
-			String middle = algorithmPlainLanguage(snapshot);
-			String right = "Return " + outputMeaning(snapshot);
-			int cardW = (w - 52) / 3;
-			drawMiniConcept(g, x + 14, y + 34, cardW, h - 46, left, PURPLE);
-			drawMiniConcept(g, x + 26 + cardW, y + 34, cardW, h - 46, middle, AMBER);
-			drawMiniConcept(g, x + 38 + cardW * 2, y + 34, cardW, h - 46, right, GREEN);
-
-			int arrowY = y + h / 2 + 12;
-			g.setStroke(new BasicStroke(2f));
-			g.setColor(new Color(183, 195, 214));
-			g.drawLine(x + 19 + cardW, arrowY, x + 21 + cardW, arrowY);
-			g.drawLine(x + 31 + cardW * 2, arrowY, x + 33 + cardW * 2, arrowY);
-		}
-
-		private void drawLaneFrame(Graphics2D g, int x, int y, int w, int h)
-		{
-			g.setColor(SURFACE_ALT);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(219, 228, 244));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
-			g.drawString("EXECUTION LANE", x + 14, y + 21);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g,
-					"Follow these cards left to right: data is cleaned, modeled, scored by nodes, then merged.",
-					x + 112,
-					y + 21,
-					w - 126);
-		}
-
-		private void drawQuestionStrip(Graphics2D g, int x, int y, int w, int h)
-		{
-			g.setColor(glass(235));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(219, 228, 244));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(GREEN);
-			g.fillRoundRect(x + 12, y + 10, 88, h - 20, 14, 14);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(SURFACE);
-			drawClippedString(g, "QUESTION", x + 27, y + 27, 62);
-			g.setFont(font(Font.BOLD, 13));
-			g.setColor(TEXT);
-			drawClippedString(g, beginnerQuestion(snapshot), x + 114, y + 28, w - 128);
-		}
-
-		private void drawAlgorithmWorkbench(Graphics2D g, int x, int y, int w, int h,
-				Snapshot s)
-		{
-			g.setColor(glass(232));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(219, 228, 244));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(PURPLE.darker());
-			g.drawString("ALGORITHM WORKBENCH", x + 14, y + 18);
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(TEXT);
-			drawClippedString(g, s.algorithmName + " turns cleaned text into "
-					+ featureSummary(s) + ".", x + 14, y + 38, w - 28);
-
-			String[] steps = algorithmWorkbenchSteps(s);
-			int moduleW = Math.max(92, (w - 62) / 3);
-			int moduleY = y + Math.max(44, h - 42);
-			for (int i = 0; i < 3; i++)
-			{
-				int moduleX = x + 14 + i * (moduleW + 17);
-				Color color = i == 0 ? BLUE : i == 1 ? PURPLE : GREEN;
-				g.setColor(tint(color, 0.12f));
-				g.fillRoundRect(moduleX, moduleY, moduleW, 30, 14, 14);
-				g.setColor(tint(color, 0.38f));
-				g.drawRoundRect(moduleX, moduleY, moduleW, 30, 14, 14);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(color.darker());
-				drawClippedString(g, steps[i], moduleX + 10, moduleY + 19, moduleW - 20);
-				if (i < 2)
-				{
-					int x1 = moduleX + moduleW + 3;
-					int x2 = moduleX + moduleW + 14;
-					int cy = moduleY + 15;
-					g.setColor(new Color(183, 195, 214));
-					g.setStroke(new BasicStroke(2f));
-					g.drawLine(x1, cy, x2, cy);
-					g.drawLine(x2 - 4, cy - 4, x2, cy);
-					g.drawLine(x2 - 4, cy + 4, x2, cy);
+					g.setFont(NebulaDesign.fontBody(9.5f));
+					g.setColor(FAINT);
+					drawClippedString(g, joinSteps(stageSteps(i, snapshot)),
+							textX, rowY + rowH / 2 + 12, w - (textX - x) - 6);
 				}
 			}
-		}
-
-		private void drawMiniConcept(Graphics2D g, int x, int y, int w, int h,
-				String text, Color color)
-		{
-			g.setColor(tint(color, 0.82f));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.38f));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(color);
-			g.fill(new Ellipse2D.Double(x + 10, y + 12, 10, 10));
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(TEXT);
-			drawWrapped(g, text, x + 28, y + 18, w - 38, 3, 15);
-		}
-
-		private static void drawStage(Graphics2D g, int x, int y, int w, int h,
-				String title, String detail, String[] steps, Color color)
-		{
-			g.setColor(SURFACE);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.45f));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(tint(color, 0.15f));
-			g.fillRoundRect(x, y, 7, h, RADIUS, RADIUS);
-			g.fillRect(x + 4, y, 5, h);
-			g.setColor(color);
-			g.fill(new Ellipse2D.Double(x + 12, y + 14, 10, 10));
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(TEXT);
-			drawClippedString(g, title, x + 30, y + 24, w - 38);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, detail, x + 12, y + 48, w - 24);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(color.darker());
-			g.drawString("INSIDE THIS STEP", x + 12, y + 68);
-			int chipY = y + 78;
-			int maxSteps = h >= 156 ? 3 : h >= 126 ? 2 : 1;
-			for (int i = 0; i < Math.min(maxSteps, steps.length); i++)
-			{
-				g.setColor(tint(color, 0.88f));
-				g.fillRoundRect(x + 12, chipY, w - 24, 22, 9, 9);
-				g.setColor(tint(color, 0.58f));
-				g.drawRoundRect(x + 12, chipY, w - 24, 22, 9, 9);
-				g.setFont(font(Font.PLAIN, 9));
-				g.setColor(TEXT);
-				drawClippedString(g, steps[i], x + 20, chipY + 15, w - 40);
-				chipY += 27;
-			}
-			if (h >= 118)
-			{
-				g.setColor(tint(color, 0.88f));
-				g.fillRoundRect(x + 12, y + h - 18, w - 24, 5, 5, 5);
-				g.setColor(color);
-				g.fillRoundRect(x + 12, y + h - 18,
-						Math.max(18, (int) ((w - 24) * 0.68)), 5, 5, 5);
-			}
-		}
-
-		private static void drawAlgorithmGlyph(Graphics2D g, int x, int y, int w, int h, Snapshot s)
-		{
-			g.setColor(glass(230));
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(new Color(220, 228, 242));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 11));
-			g.setColor(PURPLE.darker());
-			drawClippedString(g, s.algorithmName, x + 12, y + 20, w - 24);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, internalAlgorithmMeaning(s),
-					x + 12, y + 38, w - 24);
 		}
 	}
 
@@ -1997,47 +1585,66 @@ final class SimulatorHelpPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
+			if (w < 160 || h < 60)
+			{
+				g.dispose();
+				return;
+			}
 			int count = Math.min(snapshot.nodes, 10);
 			if (count == 0)
 			{
 				count = 1;
 			}
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
-			g.drawString("PARALLEL NODE LANES", 12, 18);
-			g.setFont(font(Font.PLAIN, 10));
+			drawEyebrow(g, "Parallel node lanes", 0, 12, BLUE, w);
+			g.setFont(NebulaDesign.fontBody(10.5f));
 			g.setColor(MUTED);
 			drawClippedString(g,
 					"Nodes work in parallel, then the organizer combines their candidate-score maps.",
-						12,
-						34,
-						w - 120);
-			drawMergeRecipe(g, 12, 45, w - 24, 58);
-			int diagramY = 118;
-			int diagramH = Math.max(128, h - diagramY - 30);
-			drawWorkerFrame(g, 12, diagramY, w - 24, diagramH);
-			int hubX = w - 92;
-			int hubY = diagramY + diagramH / 2 + 10;
-			int nodeAreaX = 30;
-			int nodeAreaY = diagramY + 44;
-			int nodeAreaW = Math.max(120, hubX - nodeAreaX - 72);
-			int nodeAreaH = Math.max(70, diagramH - 62);
+					0,
+					28,
+					w);
+			int recipeY = 38;
+			int recipeH = 54;
+			drawMergeRecipe(g, 0, recipeY, w, recipeH);
+			int diagramY = recipeY + recipeH + 10;
+			int diagramH = h - diagramY;
+			if (diagramH < 96)
+			{
+				if (diagramH >= 24)
+				{
+					g.setFont(NebulaDesign.fontBody(10.5f));
+					g.setColor(FAINT);
+					drawClippedString(g,
+							"merge keeps the highest ranked candidates for the target",
+							0, diagramY + 16, w);
+				}
+				g.dispose();
+				return;
+			}
+			drawWorkerFrame(g, 0, diagramY, w, diagramH);
+			int hubR = Math.min(44, Math.max(30, diagramH / 2 - 22));
+			int hubX = w - hubR - 22;
+			int hubY = diagramY + 40 + (diagramH - 46) / 2;
+			int nodeAreaX = 14;
+			int nodeAreaY = diagramY + 52;
+			int nodeAreaW = Math.max(110, hubX - hubR - nodeAreaX - 26);
+			int nodeAreaH = Math.max(60, diagramH - 64);
 			int rows = count == 1 ? 1 : count <= 4 ? 1 : count <= 8 ? 2 : 3;
 			int cols = (int) Math.ceil(count / (double) rows);
 			int gap = 10;
 			int cardW = count == 1
-					? Math.min(190, Math.max(132, nodeAreaW / 2))
-					: Math.max(72, Math.min(110,
+					? Math.min(180, Math.max(126, nodeAreaW / 2))
+					: Math.max(68, Math.min(106,
 							(nodeAreaW - gap * Math.max(0, cols - 1)) / Math.max(1, cols)));
 			int cardH = count == 1
-					? Math.min(98, Math.max(72, nodeAreaH - 12))
-					: Math.max(44, Math.min(62,
+					? Math.min(92, Math.max(64, nodeAreaH - 10))
+					: Math.max(42, Math.min(58,
 							(nodeAreaH - gap * Math.max(0, rows - 1)) / Math.max(1, rows)));
 			int gridW = count == 1
 					? cardW
 					: cols * cardW + gap * Math.max(0, cols - 1);
 			int gridH = rows * cardH + gap * Math.max(0, rows - 1);
-			int startX = count == 1 ? nodeAreaX + 18 : nodeAreaX + Math.max(0, (nodeAreaW - gridW) / 2);
+			int startX = count == 1 ? nodeAreaX + 12 : nodeAreaX + Math.max(0, (nodeAreaW - gridW) / 2);
 			int startY = nodeAreaY + Math.max(0, (nodeAreaH - gridH) / 2);
 			for (int i = 0; i < count; i++)
 			{
@@ -2046,65 +1653,66 @@ final class SimulatorHelpPanel extends JPanel
 				int x = startX + col * (cardW + gap);
 				int y = startY + row * (cardH + gap);
 				Color color = i % 2 == 0 ? BLUE : GREEN;
-				g.setColor(alpha(color, 42));
-				g.setStroke(new BasicStroke(1.5f));
-				g.drawLine(x + cardW, y + cardH / 2, hubX - 48, hubY);
+				g.setColor(alpha(color, 60));
+				g.setStroke(new BasicStroke(1.4f));
+				g.drawLine(x + cardW, y + cardH / 2, hubX - hubR - 2, hubY);
 				double t = (phase + i * 0.11) % 1.0;
-				int px = (int) (x + cardW + (hubX - 48 - x - cardW) * t);
+				int px = (int) (x + cardW + (hubX - hubR - 2 - x - cardW) * t);
 				int py = (int) (y + cardH / 2 + (hubY - y - cardH / 2) * t);
-					g.setColor(alpha(color, 145));
-					g.fill(new Ellipse2D.Double(px - 3, py - 3, 6, 6));
+				g.setColor(alpha(color, 165));
+				g.fill(new Ellipse2D.Double(px - 3, py - 3, 6, 6));
 				drawNodeCard(g, x, y, cardW, cardH, i, color, count == 1);
 			}
-			drawMergeHub(g, hubX, hubY);
-			drawMergeOutcome(g, 24, diagramY + diagramH - 34, hubX - 90, 24);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, snapshot.nodes > count
-					? "+" + (snapshot.nodes - count) + " more nodes represented"
-					: "merge keeps the highest ranked candidates for the target",
-					12, h - 12, w - 24);
+			drawMergeHub(g, hubX, hubY, hubR);
+			if (snapshot.nodes > count)
+			{
+				g.setFont(NebulaDesign.fontBody(10f));
+				g.setColor(FAINT);
+				drawClippedString(g,
+						"+" + (snapshot.nodes - count) + " more nodes represented",
+						12, diagramY + diagramH - 10, nodeAreaW);
+			}
 			g.dispose();
 		}
 
 		private void drawMergeRecipe(Graphics2D g, int x, int y, int w, int h)
 		{
 			String[] labels = {
-					"1 receive rows",
-					"2 score candidates",
-					"3 send score map",
+					"1 receive",
+					"2 score",
+					"3 send map",
 					"4 merge + sort"
 			};
 			String[] details = {
 					"node shard",
-					internalAlgorithmMeaning(snapshot),
+					featureSummary(snapshot),
 					"candidate -> score",
 					"top " + snapshot.topRecommendations
 			};
 			Color[] colors = {BLUE, PURPLE, AMBER, GREEN};
 			int gap = 8;
-			int boxW = Math.max(78, (w - gap * 3) / 4);
+			int boxW = Math.max(74, (w - gap * 3) / 4);
 			for (int i = 0; i < 4; i++)
 			{
 				int bx = x + i * (boxW + gap);
-				g.setColor(SURFACE);
+				g.setColor(SURFACE_ALT);
 				g.fillRoundRect(bx, y, boxW, h, RADIUS, RADIUS);
-				g.setColor(QUIET_BORDER);
+				g.setColor(BORDER);
 				g.drawRoundRect(bx, y, boxW, h, RADIUS, RADIUS);
-				g.setColor(alpha(colors[i], 62));
-				g.fillRoundRect(bx, y, 6, h, RADIUS, RADIUS);
-				g.fillRect(bx + 3, y, 5, h);
-				g.setFont(font(Font.BOLD, 10));
+				g.setColor(colors[i]);
+				g.fillOval(bx + 9, y + 11, 6, 6);
+				g.setFont(NebulaDesign.fontMedium(10.5f));
 				g.setColor(TEXT);
-				drawClippedString(g, labels[i], bx + 9, y + 19, boxW - 18);
-				g.setFont(font(Font.PLAIN, 9));
+				drawClippedString(g, labels[i], bx + 20, y + 19, boxW - 28);
+				g.setFont(NebulaDesign.fontBody(9.5f));
 				g.setColor(MUTED);
-				drawClippedString(g, details[i], bx + 9, y + 38, boxW - 18);
+				drawClippedString(g, details[i], bx + 9, y + 37, boxW - 18);
 				if (i < 3)
 				{
 					int ax = bx + boxW + 1;
 					int ay = y + h / 2;
-					g.setColor(new Color(183, 195, 214));
+					g.setColor(LINE_STRONG);
+					g.setStroke(new BasicStroke(1.4f));
 					g.drawLine(ax, ay, ax + gap - 2, ay);
 				}
 			}
@@ -2116,24 +1724,24 @@ final class SimulatorHelpPanel extends JPanel
 			{
 				return;
 			}
-			g.setColor(QUIET_FILL);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 9));
+			g.setColor(TRACK);
+			g.fillRoundRect(x, y, w, h, NebulaDesign.RADIUS_CONSOLE, NebulaDesign.RADIUS_CONSOLE);
+			g.setColor(BORDER);
+			g.drawRoundRect(x, y, w, h, NebulaDesign.RADIUS_CONSOLE, NebulaDesign.RADIUS_CONSOLE);
+			drawEyebrow(g, snapshot.nodes == 1
+					? "Single node score map"
+					: "Worker node outputs", x + 12, y + 17, FAINT, w - 24);
+			g.setFont(NebulaDesign.fontBody(10f));
 			g.setColor(MUTED);
-			g.drawString(snapshot.nodes == 1
-					? "SINGLE NODE SCORE MAP"
-					: "WORKER NODE OUTPUTS", x + 12, y + 18);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g,
+			drawWrapped(g,
 					snapshot.nodes == 1
 							? "One recommender builds one candidate-score map, then the organizer still applies the same top-result merge step."
 							: "Each recommender returns a candidate-score map; the organizer deduplicates and sorts them.",
 					x + 12,
-					y + 36,
-					w - 24);
+					y + 33,
+					w - 24,
+					2,
+					13);
 		}
 
 		private void drawNodeCard(
@@ -2147,81 +1755,59 @@ final class SimulatorHelpPanel extends JPanel
 				boolean single)
 		{
 			g.setColor(SURFACE);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietStroke(color));
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 64));
-			g.fillRoundRect(x, y, 7, h, RADIUS, RADIUS);
-			g.fillRect(x + 4, y, 5, h);
-			g.setFont(font(Font.BOLD, 10));
+			g.fillRoundRect(x, y, w, h, NebulaDesign.RADIUS_SMALL, NebulaDesign.RADIUS_SMALL);
+			g.setColor(softStroke(color));
+			g.drawRoundRect(x, y, w, h, NebulaDesign.RADIUS_SMALL, NebulaDesign.RADIUS_SMALL);
+			g.setColor(color);
+			g.fillOval(x + 8, y + 8, 6, 6);
+			g.setFont(NebulaDesign.fontMedium(10.5f));
 			g.setColor(TEXT);
-			drawClippedString(g, "Node " + (index + 1), x + 10, y + 17, w - 20);
-			g.setFont(font(Font.PLAIN, 9));
+			drawClippedString(g, "Node " + (index + 1), x + 19, y + 15, w - 28);
+			g.setFont(NebulaDesign.fontBody(9.5f));
 			g.setColor(MUTED);
 			drawClippedString(g, single
 					? "full target workload"
 					: index == 0 ? "target + shard" : "candidate shard",
-					x + 10,
-					y + 33,
-					w - 20);
-			if (h >= 60)
+					x + 8,
+					y + 29,
+					w - 16);
+			if (h >= 58)
 			{
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(MUTED);
+				g.setFont(NebulaDesign.fontBody(9f));
+				g.setColor(FAINT);
 				drawClippedString(g, internalAlgorithmMeaning(snapshot),
-						x + 10,
-						y + 49,
-						w - 20);
+						x + 8,
+						y + 42,
+						w - 16);
 			}
-			g.setColor(TRACK);
-			g.fillRoundRect(x + 10, y + h - 12, w - 20, 5, 5, 5);
-			g.setColor(alpha(color, 170));
-			int progress = Math.max(12, (int) ((w - 20) * (single ? 0.72 : 0.44 + (index % 4) * 0.12)));
-			g.fillRoundRect(x + 10, y + h - 12, progress, 5, 5, 5);
+			g.setColor(StudioNightTheme.isNightMode()
+					? NebulaDesign.NIGHT_INSET
+					: NebulaDesign.DAY_INSET);
+			g.fillRoundRect(x + 8, y + h - 10, w - 16, 4, 4, 4);
+			g.setColor(alpha(color, 180));
+			int progress = Math.max(10, (int) ((w - 16) * (single ? 0.72 : 0.44 + (index % 4) * 0.12)));
+			g.fillRoundRect(x + 8, y + h - 10, progress, 4, 4, 4);
 		}
 
-		private void drawMergeOutcome(Graphics2D g, int x, int y, int w, int h)
-		{
-			if (w <= 80 || h <= 16)
-			{
-				return;
-			}
-			g.setColor(SURFACE);
-			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
-			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(GREEN, 150));
-			g.fillOval(x + 10, y + h / 2 - 4, 8, 8);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(TEXT);
-			drawClippedString(g,
-					"Organizer keeps the strongest top "
-							+ snapshot.topRecommendations
-							+ " " + snapshot.candidateTypeLabel().toLowerCase(Locale.US)
-							+ " after duplicate candidates are combined.",
-					x + 26,
-					y + h / 2 + 4,
-					w - 36);
-		}
-
-		private void drawMergeHub(Graphics2D g, int hubX, int hubY)
+		private void drawMergeHub(Graphics2D g, int hubX, int hubY, int r)
 		{
 			g.setColor(SURFACE);
-			g.fill(new Ellipse2D.Double(hubX - 46, hubY - 46, 92, 92));
-			g.setColor(quietStroke(GREEN));
+			g.fill(new Ellipse2D.Double(hubX - r, hubY - r, r * 2, r * 2));
+			g.setColor(softStroke(GREEN));
 			g.setStroke(new BasicStroke(2f));
-			g.draw(new Ellipse2D.Double(hubX - 46, hubY - 46, 92, 92));
-			g.setColor(alpha(GREEN, 34));
-			g.fill(new Ellipse2D.Double(hubX - 37, hubY - 37, 74, 74));
-			g.setFont(font(Font.BOLD, 12));
+			g.draw(new Ellipse2D.Double(hubX - r, hubY - r, r * 2, r * 2));
+			g.setColor(alpha(GREEN, StudioNightTheme.isNightMode() ? 30 : 22));
+			g.fill(new Ellipse2D.Double(hubX - r + 7, hubY - r + 7, r * 2 - 14, r * 2 - 14));
+			g.setFont(NebulaDesign.fontSemiBold(11.5f));
 			g.setColor(TEXT);
-			drawClippedString(g, "MERGE", hubX - 24, hubY - 17, 52);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(GREEN.darker());
-			drawClippedString(g, "dedupe", hubX - 20, hubY + 2, 50);
-			drawClippedString(g, "sort", hubX - 13, hubY + 17, 42);
-			drawClippedString(g, "top " + snapshot.topRecommendations,
-					hubX - 21, hubY + 32, 56);
+			FontMetrics metrics = g.getFontMetrics();
+			g.drawString("Merge", hubX - metrics.stringWidth("Merge") / 2, hubY - 8);
+			g.setFont(NebulaDesign.fontMedium(9f));
+			g.setColor(GREEN);
+			String mid = "dedupe + sort";
+			g.drawString(mid, hubX - g.getFontMetrics().stringWidth(mid) / 2, hubY + 6);
+			String top = "top " + snapshot.topRecommendations;
+			g.drawString(top, hubX - g.getFontMetrics().stringWidth(top) / 2, hubY + 19);
 		}
 	}
 
@@ -2234,6 +1820,11 @@ final class SimulatorHelpPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
+			if (w < 140 || h < 50)
+			{
+				g.dispose();
+				return;
+			}
 			String target = preview.targetName.length() > 0
 					? preview.targetName
 					: snapshot.primaryTargetName();
@@ -2241,54 +1832,75 @@ final class SimulatorHelpPanel extends JPanel
 			{
 				target = "Selected target";
 			}
-			drawTarget(g, 12, 8, w - 24, 58, target);
-			drawInputTokens(g, 12, 76, w - 24, 90);
-			drawPredictionMeaning(g, 12, 176, w - 24, 50);
-			int y = 238;
-			List<String> candidates = preview.candidatesFor(snapshot.outputType, target);
-			if (candidates.isEmpty())
+			int y = 0;
+			int targetH = 52;
+			drawTarget(g, 0, y, w, targetH, target);
+			y += targetH + 8;
+			if (h - y >= 74)
 			{
-				drawEmptyPrediction(g, 12, y, w - 24, h - y - 12);
+				drawInputTokens(g, 0, y, w, 78);
+				y += 78 + 8;
 			}
-			else
+			if (h - y >= 60)
 			{
-				int rowH = Math.max(42, (h - y - 14) / Math.min(4, candidates.size()));
-				for (int i = 0; i < Math.min(4, candidates.size()); i++)
+				drawPredictionMeaning(g, 0, y, w, 40);
+				y += 40 + 8;
+			}
+			int footH = 14;
+			int listH = h - y - footH;
+			List<String> candidates = preview.candidatesFor(snapshot.outputType, target);
+			if (listH >= 40)
+			{
+				if (candidates.isEmpty())
 				{
-					drawCandidate(g, 12, y + i * rowH, w - 24, rowH - 8,
-							i + 1,
-							candidates.get(i),
-							0.88f - i * 0.14f);
+					drawEmptyPrediction(g, 0, y, w, listH);
+				}
+				else
+				{
+					int visible = Math.max(1, Math.min(4, listH / 44));
+					visible = Math.min(visible, candidates.size());
+					int rowH = listH / visible;
+					for (int i = 0; i < visible; i++)
+					{
+						drawCandidate(g, 0, y + i * rowH, w, rowH - 6,
+								i + 1,
+								candidates.get(i),
+								0.88f - i * 0.14f);
+					}
 				}
 			}
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(MUTED);
+			g.setFont(NebulaDesign.fontBody(9.5f));
+			g.setColor(FAINT);
 			drawClippedString(g,
-					"Preview candidates are sampled from the dataset. Real ranking and scores are produced only by Run Simulation.",
-					12,
-					h - 4,
-					w - 24);
+					"Candidates are sampled from the dataset; real scores come from Run Simulation.",
+					0,
+					h - 3,
+					w);
 			g.dispose();
 		}
 
 		private void drawTarget(Graphics2D g, int x, int y, int w, int h, String target)
 		{
-			g.setColor(SURFACE);
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(BLUE, 185));
-			g.fill(new Ellipse2D.Double(x + 14, y + 16, 42, 42));
-			g.setFont(font(Font.BOLD, 15));
-			g.setColor(SURFACE);
-			String initials = target.length() >= 2 ? target.substring(0, 2).toUpperCase(Locale.US) : "T";
-			g.drawString(initials, x + 25, y + 43);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
-			g.drawString("TARGET USER", x + 68, y + 24);
-			g.setFont(font(Font.BOLD, 15));
+			int avatar = h - 18;
+			g.setColor(BLUE);
+			g.fill(new Ellipse2D.Double(x + 11, y + 9, avatar, avatar));
+			g.setFont(NebulaDesign.fontSemiBold(13f));
+			g.setColor(NebulaDesign.TEXT_ON_ACCENT);
+			String initials = target.length() >= 2
+					? target.substring(0, 2).toUpperCase(Locale.US) : "T";
+			FontMetrics metrics = g.getFontMetrics();
+			g.drawString(initials,
+					x + 11 + avatar / 2 - metrics.stringWidth(initials) / 2,
+					y + 9 + avatar / 2 + 5);
+			int copyX = x + 11 + avatar + 12;
+			drawEyebrow(g, "Target user", copyX, y + 20, FAINT, w - (copyX - x) - 12);
+			g.setFont(NebulaDesign.fontSemiBold(14f));
 			g.setColor(TEXT);
-			drawClippedString(g, target, x + 68, y + 47, w - 82);
+			drawClippedString(g, target, copyX, y + 40, w - (copyX - x) - 12);
 		}
 
 		private void drawInputTokens(Graphics2D g, int x, int y, int w, int h)
@@ -2297,47 +1909,45 @@ final class SimulatorHelpPanel extends JPanel
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
 			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
-			g.drawString("WHAT THE MODEL READS: COLUMN 6 TEXT", x + 12, y + 18);
+			drawEyebrow(g, "What the model reads: column 6 text", x + 11, y + 16, PURPLE, w - 22);
 			String text = exampleText();
-			g.setFont(font(Font.BOLD, 11));
+			g.setFont(NebulaDesign.fontMono(10.5f));
 			g.setColor(TEXT);
 			drawClippedString(g, text.length() == 0
 							? "No selected-target row loaded yet."
-							: compact(text, 82),
-					x + 12,
-					y + 39,
-					w - 24);
+							: compact(text, 90),
+					x + 11,
+					y + 34,
+					w - 22);
 			List<String> terms = tokensFromText(text);
 			if (terms.isEmpty())
 			{
 				terms = preview.terms;
 			}
-			int chipX = x + 12;
-			int chipY = y + 54;
+			int chipX = x + 11;
+			int chipY = y + 46;
+			g.setFont(NebulaDesign.fontMono(10f));
 			for (int i = 0; i < Math.min(6, terms.size()); i++)
 			{
 				String term = terms.get(i);
-				int chipW = Math.min(96, Math.max(42, g.getFontMetrics().stringWidth(term) + 18));
-				if (chipX + chipW > x + w - 10)
+				int chipW = Math.min(104, Math.max(38, g.getFontMetrics().stringWidth(term) + 18));
+				if (chipX + chipW > x + w - 8)
 				{
 					break;
 				}
-				g.setColor(SURFACE);
-				g.fillRoundRect(chipX, chipY, chipW, 24, 14, 14);
-				g.setColor(QUIET_BORDER);
-				g.drawRoundRect(chipX, chipY, chipW, 24, 14, 14);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(PURPLE.darker());
-				drawClippedString(g, term, chipX + 9, chipY + 16, chipW - 18);
-				chipX += chipW + 7;
+				g.setColor(softFill(PURPLE));
+				g.fillRoundRect(chipX, chipY, chipW, 21, 999, 999);
+				g.setColor(softStroke(PURPLE));
+				g.drawRoundRect(chipX, chipY, chipW, 21, 999, 999);
+				g.setColor(PURPLE);
+				drawClippedString(g, term, chipX + 9, chipY + 15, chipW - 18);
+				chipX += chipW + 6;
 			}
 			if (terms.isEmpty())
 			{
 				g.setColor(MUTED);
-				g.setFont(font(Font.PLAIN, 11));
-				drawClippedString(g, "No text tokens loaded yet.", x + 12, y + 73, w - 24);
+				g.setFont(NebulaDesign.fontBody(10.5f));
+				drawClippedString(g, "No text tokens loaded yet.", x + 11, y + 62, w - 22);
 			}
 		}
 
@@ -2378,58 +1988,67 @@ final class SimulatorHelpPanel extends JPanel
 					? GREEN : BLUE;
 			g.setColor(SURFACE);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietStroke(color));
+			g.setColor(softStroke(color));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 56));
-			g.fillRoundRect(x + 9, y + 10, 4, h - 20, 4, 4);
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(MUTED);
-			g.drawString("WHAT WILL BE RANKED", x + 22, y + 17);
-			g.setFont(font(Font.BOLD, 12));
+			g.setColor(color);
+			g.fillOval(x + 11, y + 9, 6, 6);
+			drawEyebrow(g, "What will be ranked", x + 22, y + 15, color, w - 32);
+			g.setFont(NebulaDesign.fontMedium(11f));
 			g.setColor(TEXT);
-			drawClippedString(g, outputMeaning(snapshot), x + 22, y + 36, w - 32);
+			drawClippedString(g, outputMeaning(snapshot), x + 11, y + 32, w - 22);
 		}
 
 		private void drawCandidate(Graphics2D g, int x, int y, int w, int h,
 				int rank, String name, float strength)
 		{
 			Color color = rank == 1 ? GREEN : rank == 2 ? PURPLE : BLUE;
-			g.setColor(SURFACE);
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(QUIET_BORDER);
+			g.setColor(BORDER);
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(alpha(color, 170));
-			g.fillRoundRect(x + 10, y + 10, 28, h - 20, 6, 6);
-			g.setFont(font(Font.BOLD, 12));
-			g.setColor(SURFACE);
-			g.drawString(Integer.toString(rank), x + 20, y + h / 2 + 5);
-			g.setFont(font(Font.BOLD, 13));
+			int badge = Math.min(24, h - 14);
+			g.setColor(softFill(color));
+			g.fillRoundRect(x + 9, y + (h - badge) / 2, badge, badge, 8, 8);
+			g.setFont(NebulaDesign.fontSemiBold(11f));
+			g.setColor(color);
+			String rankText = Integer.toString(rank);
+			FontMetrics metrics = g.getFontMetrics();
+			g.drawString(rankText,
+					x + 9 + badge / 2 - metrics.stringWidth(rankText) / 2,
+					y + h / 2 + 4);
+			int copyX = x + 9 + badge + 10;
+			g.setFont(NebulaDesign.fontSemiBold(12f));
 			g.setColor(TEXT);
-			drawClippedString(g, name, x + 48, y + 22, w - 62);
-			g.setFont(font(Font.PLAIN, 10));
-			g.setColor(MUTED);
-			drawClippedString(g, snapshot.outputType == RecommendationCandidateType.FOLLOWEE
-					? "real label from column 1" : "real user from column 5",
-					x + 48, y + 38, w - 62);
-			int barW = Math.max(10, (int) ((w - 70) * strength));
+			drawClippedString(g, name, copyX, y + 18, w - (copyX - x) - 12);
+			if (h >= 38)
+			{
+				g.setFont(NebulaDesign.fontBody(9.5f));
+				g.setColor(FAINT);
+				drawClippedString(g, snapshot.outputType == RecommendationCandidateType.FOLLOWEE
+						? "real label from column 1" : "real user from column 5",
+						copyX, y + 31, w - (copyX - x) - 12);
+			}
+			int barW = Math.max(10, (int) ((w - (copyX - x) - 14) * strength));
 			g.setColor(TRACK);
-			g.fillRoundRect(x + 48, y + h - 12, w - 64, 4, 4, 4);
-			g.setColor(alpha(color, 170));
-			g.fillRoundRect(x + 48, y + h - 12, barW, 4, 4, 4);
+			g.fillRoundRect(copyX, y + h - 9, w - (copyX - x) - 12, 4, 4, 4);
+			g.setColor(alpha(color, 185));
+			g.fillRoundRect(copyX, y + h - 9, barW, 4, 4, 4);
 		}
 
 		private void drawEmptyPrediction(Graphics2D g, int x, int y, int w, int h)
 		{
-			g.setColor(SURFACE);
+			g.setColor(SURFACE_ALT);
 			g.fillRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setColor(quietStroke(AMBER));
+			g.setColor(softStroke(AMBER));
 			g.drawRoundRect(x, y, w, h, RADIUS, RADIUS);
-			g.setFont(font(Font.BOLD, 13));
-			g.setColor(AMBER.darker());
-			drawClippedString(g, "Prediction preview waiting for dataset rows", x + 14, y + 28, w - 28);
-			g.setFont(font(Font.PLAIN, 11));
+			g.setFont(NebulaDesign.fontSemiBold(12f));
+			g.setColor(AMBER);
+			drawClippedString(g, "Prediction preview waiting for dataset rows",
+					x + 13, y + 24, w - 26);
+			g.setFont(NebulaDesign.fontBody(10.5f));
 			g.setColor(MUTED);
-			drawClippedString(g, preview.message, x + 14, y + 49, w - 28);
+			drawWrapped(g, preview.message, x + 13, y + 43, w - 26,
+					Math.max(1, (h - 48) / 15), 15);
 		}
 	}
 
@@ -2442,16 +2061,18 @@ final class SimulatorHelpPanel extends JPanel
 			prepare(g);
 			int w = getWidth();
 			int h = getHeight();
-			g.setFont(font(Font.BOLD, 10));
-			g.setColor(BLUE.darker());
-			g.drawString("RUN CONTRACT", 8, 15);
-			g.setFont(font(Font.PLAIN, 10));
+			if (w < 120 || h < 50)
+			{
+				g.dispose();
+				return;
+			}
+			g.setFont(NebulaDesign.fontBody(10.5f));
 			g.setColor(MUTED);
 			drawClippedString(g,
-					"These are copied from the Simulator tab. Changing Simulator controls redraws this guide.",
-					8,
-					31,
-					w - 16);
+					"Copied live from the Simulator tab. Controls there redraw this guide.",
+					0,
+					11,
+					w);
 			String[] labels = {
 					snapshot.parameterProfile,
 					snapshot.batchEnabled ? "Batch " + snapshot.batchUsers : "Single target",
@@ -2459,66 +2080,87 @@ final class SimulatorHelpPanel extends JPanel
 					snapshot.heapMb + " MB heap"
 			};
 			Color[] colors = {PURPLE, BLUE, snapshot.graphEnabled ? GREEN : AMBER, GREEN};
-			int chipH = 34;
-			int y = 42;
+			int chipH = 32;
+			int gap = 8;
+			int y = 20;
 			for (int i = 0; i < labels.length; i++)
 			{
-				int x = i % 2 == 0 ? 8 : w / 2 + 4;
+				int x = i % 2 == 0 ? 0 : w / 2 + gap / 2;
 				if (i == 2)
 				{
-					y += chipH + 8;
+					y += chipH + gap;
 				}
-				int chipW = w / 2 - 14;
-					g.setColor(SURFACE);
-					g.fillRoundRect(x, y, chipW, chipH, RADIUS, RADIUS);
-					g.setColor(alpha(colors[i], 46));
-					g.fillRoundRect(x + 8, y + 8, 4, chipH - 16, 4, 4);
-					g.setColor(QUIET_BORDER);
-					g.drawRoundRect(x, y, chipW, chipH, RADIUS, RADIUS);
-					g.setFont(font(Font.BOLD, 11));
-					g.setColor(TEXT);
-					drawClippedString(g, labels[i], x + 18, y + 22, chipW - 26);
+				int chipW = w / 2 - gap / 2;
+				if (y + chipH > h)
+				{
+					break;
+				}
+				g.setColor(SURFACE_ALT);
+				g.fillRoundRect(x, y, chipW, chipH, RADIUS, RADIUS);
+				g.setColor(BORDER);
+				g.drawRoundRect(x, y, chipW, chipH, RADIUS, RADIUS);
+				g.setColor(colors[i]);
+				g.fillOval(x + 10, y + chipH / 2 - 3, 7, 7);
+				g.setFont(NebulaDesign.fontMedium(11f));
+				g.setColor(TEXT);
+				drawClippedString(g, labels[i], x + 23, y + chipH / 2 + 4, chipW - 32);
 			}
-			int noteY = y + chipH + 18;
-			drawContractLine(g, 10, noteY, w - 20, "Input", inputMeaning(snapshot), PURPLE);
-			drawContractLine(g, 10, noteY + 26, w - 20, "Output", outputMeaning(snapshot), GREEN);
-			drawContractLine(g, 10, noteY + 52, w - 20, "Processing", cleaningSummary(snapshot), BLUE);
-			drawContractLine(g, 10, noteY + 78, w - 20, "Graph",
-					snapshot.graphEnabled
+			y += chipH + 14;
+			int lineH = 24;
+			String[][] lines = {
+					{"Input", inputMeaning(snapshot)},
+					{"Output", outputMeaning(snapshot)},
+					{"Processing", cleaningSummary(snapshot)},
+					{"Graph", snapshot.graphEnabled
 							? "edge data plus graph display/export"
-							: "edge data retained, graph display skipped",
-					snapshot.graphEnabled ? GREEN : AMBER);
-			drawContractLine(g, 10, noteY + 104, w - 20, "Meaning",
-					beginnerQuestion(snapshot),
-					PURPLE);
-			drawContractLine(g, 10, noteY + 130, w - 20, "Capacity",
-					snapshot.capacitySummary,
-					AMBER);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, cleaningSummary(snapshot) + " | "
-					+ compact(snapshot.parameterSummary, 90),
-					10,
-					h - 12,
-					w - 20);
+							: "edge data retained, graph display skipped"},
+					{"Meaning", beginnerQuestion(snapshot)},
+					{"Capacity", snapshot.capacitySummary}
+			};
+			Color[] lineColors = {
+					PURPLE,
+					GREEN,
+					BLUE,
+					snapshot.graphEnabled ? GREEN : AMBER,
+					PURPLE,
+					AMBER
+			};
+			int footerReserve = 14;
+			for (int i = 0; i < lines.length; i++)
+			{
+				if (y + lineH > h - footerReserve)
+				{
+					break;
+				}
+				drawContractLine(g, 0, y, w, lines[i][0], lines[i][1], lineColors[i]);
+				if (i < lines.length - 1)
+				{
+					g.setColor(BORDER);
+					g.fillRect(0, y + lineH - 3, w, 1);
+				}
+				y += lineH;
+			}
+			if (h - y >= 10)
+			{
+				g.setFont(NebulaDesign.fontMono(9f));
+				g.setColor(FAINT);
+				drawClippedString(g, compact(snapshot.parameterSummary, 96),
+						0,
+						h - 3,
+						w);
+			}
 			g.dispose();
 		}
 
 		private void drawContractLine(Graphics2D g, int x, int y, int w,
 				String label, String value, Color color)
 		{
-			g.setColor(SURFACE);
-			g.fillRoundRect(x, y - 15, w, 22, 6, 6);
-			g.setColor(alpha(color, 38));
-			g.fillRoundRect(x + 6, y - 10, 3, 12, 3, 3);
-			g.setColor(QUIET_BORDER);
-			g.drawRoundRect(x, y - 15, w, 22, 6, 6);
-			g.setFont(font(Font.BOLD, 9));
-			g.setColor(MUTED);
-			drawClippedString(g, label.toUpperCase(Locale.US), x + 15, y, 62);
-			g.setFont(font(Font.PLAIN, 10));
+			g.setColor(color);
+			g.fillOval(x + 1, y + 6, 6, 6);
+			drawEyebrow(g, label, x + 13, y + 12, FAINT, 80);
+			g.setFont(NebulaDesign.fontBody(10.5f));
 			g.setColor(TEXT);
-			drawClippedString(g, value, x + 82, y, w - 90);
+			drawClippedString(g, value, x + 96, y + 13, w - 100);
 		}
 	}
 
@@ -2633,6 +2275,28 @@ final class SimulatorHelpPanel extends JPanel
 			return "tweet or post text in column 6";
 		}
 		return "document text in column 6";
+	}
+
+	/** Column-6 flavor without the trailing " in column 6" (tight spots). */
+	private static String inputMeaningShort(Snapshot s)
+	{
+		String value = inputMeaning(s);
+		int cut = value.indexOf(" in column 6");
+		return cut > 0 ? value.substring(0, cut) : value;
+	}
+
+	/** Which column the ranked side comes from, in a few words. */
+	private static String outputColumnShort(Snapshot s)
+	{
+		if (s.outputType == RecommendationCandidateType.FOLLOWEE)
+		{
+			return "ranked from column 1";
+		}
+		if (s.outputType == RecommendationCandidateType.USER)
+		{
+			return "ranked from column 5";
+		}
+		return "no supported output";
 	}
 
 	private static String outputColumnName(Snapshot s)
@@ -2807,33 +2471,6 @@ final class SimulatorHelpPanel extends JPanel
 			return "For the selected target, which other users look most similar?";
 		}
 		return "The selected mode does not expose a supported recommendation output.";
-	}
-
-	private static String algorithmPlainLanguage(Snapshot s)
-	{
-		switch (s.algorithm)
-		{
-			case RecommendationModeSupport.COS_SIM:
-				return "compare word overlap and direction";
-			case RecommendationModeSupport.K_MEANS:
-				return "group similar text profiles into clusters";
-				case RecommendationModeSupport.K_MEANS_EUCLIDEAN:
-					return "group nearby text profiles by distance";
-				case RecommendationModeSupport.COMMON_NEIGHBORS:
-					return "count shared text terms as common neighbors";
-				case RecommendationModeSupport.SVM:
-					return "learn which text patterns point to each label";
-			case RecommendationModeSupport.SCALABLE_SVM:
-				return "learn a sparse linear text classifier";
-			case RecommendationModeSupport.MLP:
-				return "learn text patterns with a neural network";
-			case RecommendationModeSupport.DOC2VEC:
-				return "turn each user's text into a learned vector";
-			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
-				return "fuse text, graph paths, timing, bridge value, and debias signals";
-			default:
-				return "use a legacy graph relationship rule";
-		}
 	}
 
 	private static String[] algorithmWorkbenchSteps(Snapshot s)
@@ -3200,23 +2837,6 @@ final class SimulatorHelpPanel extends JPanel
 					"",
 					"Scanning selected dataset...",
 					true);
-		}
-
-		String[] sampleColumnValues()
-		{
-			DsmpRow row = rows.isEmpty() ? null : rows.get(0);
-			if (row == null)
-			{
-				return new String[] {"-", "-", "-", "-", "-", "-"};
-			}
-			return new String[] {
-					compact(row.followee, 18),
-					compact(row.postId, 18),
-					compact(row.date, 18),
-					compact(row.userId, 18),
-					compact(row.userName, 18),
-					compact(row.text, 18)
-			};
 		}
 
 		List<String> candidatesFor(RecommendationCandidateType type, String target)
