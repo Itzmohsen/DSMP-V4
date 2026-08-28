@@ -9,9 +9,15 @@ The first run creates local build/runtime directories, installs the pinned Pytho
 runtime into `.venv`, compiles the Java source for Java 17, and opens the GUI.
 
 ```bash
-git clone https://github.com/Itzmohsen/DSMP-V4.git
+git -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false clone --depth 1 https://github.com/Itzmohsen/DSMP-V4.git
 cd DSMP-V4
 ```
+
+This fast-start clone includes everything required to open and run DSMP while
+leaving optional benchmark datasets and cached models as small Git LFS pointer
+files. It also avoids downloading the repository's large development history.
+Researchers who need those optional artifacts can fetch them later as described
+under **Required Software For A Source Clone**.
 
 ### macOS / Linux
 
