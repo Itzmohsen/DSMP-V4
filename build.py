@@ -15,6 +15,8 @@ needed, chooses a safe JADE port, writes a startup log, and starts the GUI.
 
 import argparse
 import datetime
+import hashlib
+import json
 import os
 import platform
 import re
@@ -40,16 +42,23 @@ REQUIREMENTS_FILE = os.path.join(PROJECT_ROOT, "requirements.txt")
 LOCKED_REQUIREMENTS_FILE = os.path.join(PROJECT_ROOT, "requirements-lock.txt")
 DOC2VEC_PREFLIGHT = os.path.join(SRC_DIR, "doc2vec_preflight.py")
 RUNTIME_PROPERTIES = os.path.join(PROJECT_ROOT, ".simulator-runtime.properties")
+PYTHON_BOOTSTRAP_STAMP = os.path.join(VENV_DIR, ".dsmp-bootstrap.json")
+JAVA_BUILD_STAMP = os.path.join(CLASSES_DIR, ".dsmp-build.json")
 
 JAVA_MAIN_CLASS = "jade.Boot"
 JAVA_MAIN_AGENT = "controller:TwitterGatherDataFollowers.userRyersonU.ControllerAgent"
-MIN_JAVA_VERSION = 8
-MIN_PYTHON_VERSION = (3, 9)
-SUPPORTED_PYTHON_VERSION_STR = "3.9 or newer"
+JAVA_RELEASE = 17
+MIN_JAVA_VERSION = JAVA_RELEASE
+MIN_PYTHON_VERSION = (3, 11)
+MAX_PYTHON_VERSION = (3, 13)
+SUPPORTED_PYTHON_VERSION_STR = "3.11 or 3.12"
 DEFAULT_HEAP_MB = 1424
 DEFAULT_JADE_PORT = 35240
 DEFAULT_DF_MAXRESULT = 100000
 RESTART_EXIT_CODE = 42
+BOOTSTRAP_FORMAT_VERSION = 2
+JAVA_BUILD_FORMAT_VERSION = 1
+GUI_READY_MARKER = "ControllerAgentGui visible at"
 
 REQUIRED_JARS = {
     "jade.jar": ["jade/Boot.class"],
@@ -70,6 +79,17 @@ REQUIRED_JARS = {
     "LibSVM-1.0.10.jar": [],
     "commons-math3-3.6.1.jar": [],
     "commons-lang3-3.9.jar": [],
+}
+
+# These files remain in lib/ for provenance/legacy experiments but must not be
+# placed on the production classpath. In particular, slf4j-nop conflicts with
+# the Logback binding used by Neuroph and prints a warning on first model use.
+CLASSPATH_EXCLUDED_JARS = {
+    "commons-lang3-3.9-sources.jar",
+    "commons-lang3-3.9-test-sources.jar",
+    "commons-lang3-3.9-tests.jar",
+    "junit-4.12.jar",
+    "slf4j-nop-1.7.6.jar",
 }
 
 VERBOSE = False
@@ -162,13 +182,20 @@ def fetch_py_version(python_exe):
     return raw, version_tuple_from_text(raw)
 
 
+def python_version_supported(version):
+    return bool(
+        version
+        and MIN_PYTHON_VERSION <= tuple(version) < MAX_PYTHON_VERSION
+    )
+
+
 def ensure_supported_script_python():
     current = sys.version_info[:2]
-    if current < MIN_PYTHON_VERSION:
+    if not python_version_supported(current):
         perr(
-            f"This bootstrap needs Python {SUPPORTED_PYTHON_VERSION_STR}; "
+            f"This bootstrap supports Python {SUPPORTED_PYTHON_VERSION_STR}; "
             f"you are running Python {sys.version_info.major}.{sys.version_info.minor}.",
-            suggestion="Install Python 3.9+ or run with a newer Python interpreter.",
+            suggestion="Install Python 3.11 or 3.12 and rerun the platform launcher.",
         )
 
 
@@ -207,6 +234,35 @@ def check_java_runtime():
     return major
 
 
+def check_java_compiler():
+    check_tool("javac", "Java Compiler (JDK)", "compile")
+    result = run_cmd(["javac", "-version"], check=False, capture_output=True)
+    raw = ((result.stdout or "") + (result.stderr or "")).strip()
+    version = version_tuple_from_text(raw)
+    major = version[0] if version else None
+    if result.returncode != 0 or not major:
+        perr(
+            f"Could not determine the Java compiler version from '{raw}'.",
+            suggestion=f"Install a complete Java {JAVA_RELEASE}+ JDK.",
+        )
+    if major < JAVA_RELEASE:
+        perr(
+            f"Java compiler {raw} detected, but Java {JAVA_RELEASE}+ is required.",
+            suggestion=f"Install a complete Java {JAVA_RELEASE}+ JDK and make sure javac is on PATH.",
+        )
+    pinfo(f"Java compiler detected: {raw}")
+    return major
+
+
+def is_lfs_pointer(path):
+    try:
+        with open(path, "rb") as handle:
+            prefix = handle.read(200)
+        return prefix.startswith(b"version https://git-lfs.github.com/spec/v1")
+    except OSError:
+        return False
+
+
 def validate_required_jars():
     if not os.path.isdir(LIB_DIR):
         perr(f"Java dependency folder is missing: {LIB_DIR}",
@@ -214,10 +270,28 @@ def validate_required_jars():
 
     missing = []
     invalid = []
+    lfs_pointers = []
+    for jar_name in sorted(os.listdir(LIB_DIR)):
+        if not jar_name.endswith(".jar"):
+            continue
+        jar_path = os.path.join(LIB_DIR, jar_name)
+        if is_lfs_pointer(jar_path):
+            lfs_pointers.append(jar_name)
+            continue
+        try:
+            with zipfile.ZipFile(jar_path) as jar:
+                bad_entry = jar.testzip()
+            if bad_entry:
+                invalid.append(f"{jar_name} contains a corrupt entry: {bad_entry}")
+        except (OSError, zipfile.BadZipFile):
+            invalid.append(f"{jar_name} is not a valid jar/zip file")
+
     for jar_name, required_entries in REQUIRED_JARS.items():
         jar_path = os.path.join(LIB_DIR, jar_name)
         if not os.path.isfile(jar_path):
             missing.append(jar_name)
+            continue
+        if jar_name in lfs_pointers:
             continue
         if os.path.getsize(jar_path) == 0:
             invalid.append(f"{jar_name} is empty")
@@ -230,16 +304,28 @@ def validate_required_jars():
                     if entry not in names:
                         invalid.append(f"{jar_name} is missing {entry}")
             except zipfile.BadZipFile:
-                invalid.append(f"{jar_name} is not a valid jar/zip file")
+                pass
 
-    if missing or invalid:
+    required_lfs_pointers = sorted(
+        set(lfs_pointers).intersection(REQUIRED_JARS.keys())
+    )
+    if missing or invalid or required_lfs_pointers:
         message = []
         if missing:
             message.append("Missing jars: " + ", ".join(missing))
         if invalid:
             message.append("Invalid jars: " + "; ".join(invalid))
+        if required_lfs_pointers:
+            message.append(
+                "Required jars are unresolved Git LFS pointers: "
+                + ", ".join(required_lfs_pointers)
+            )
         perr("\n".join(message),
-             suggestion="Use a complete repository clone. Do not run Maven to replace these vendored jars.")
+             suggestion=(
+                 "Use a complete repository clone. If this is an older revision, "
+                 "install Git LFS and run 'git lfs pull'. Do not run Maven to "
+                 "replace the vendored jars."
+             ))
 
     pinfo(f"Vendored Java libraries verified in {LIB_DIR}")
 
@@ -266,12 +352,18 @@ def ensure_venv():
             venv.create(VENV_DIR, with_pip=True)
         except Exception as error:
             perr(f"Could not create Python virtual environment: {error}",
-                 suggestion="Install a complete Python 3.9+ distribution with the venv module enabled.")
+                 suggestion=(
+                     "Install a complete Python 3.11 or 3.12 distribution "
+                     "with the venv module enabled."
+                 ))
 
     version_text, version = fetch_py_version(venv_python)
-    if not version or version < MIN_PYTHON_VERSION:
+    if not python_version_supported(version):
         perr(f"The virtual environment Python is unsupported: {version_text}",
-             suggestion="Delete .venv and rerun launch with Python 3.9+.")
+             suggestion=(
+                 "Delete .venv and rerun the platform launcher with Python "
+                 f"{SUPPORTED_PYTHON_VERSION_STR}."
+             ))
     pinfo(f"Virtual environment Python: {version_text}")
     return venv_python
 
@@ -280,33 +372,113 @@ def requirements_path():
     return LOCKED_REQUIREMENTS_FILE if os.path.exists(LOCKED_REQUIREMENTS_FILE) else REQUIREMENTS_FILE
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_json_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_json_file(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, sort_keys=True, indent=2)
+        handle.write("\n")
+    os.replace(temporary, path)
+
+
+def python_bootstrap_fingerprint(python_exe, req):
+    version_text, _ = fetch_py_version(python_exe)
+    return {
+        "format": BOOTSTRAP_FORMAT_VERSION,
+        "python": version_text,
+        "requirements": os.path.basename(req),
+        "requirements_sha256": sha256_file(req),
+        "platform": platform.system(),
+        "machine": platform.machine(),
+    }
+
+
+def locked_python_packages_present(python_exe, req):
+    check_script = r"""
+import importlib.metadata
+import pathlib
+import re
+import sys
+
+missing = []
+for raw_line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([^\s]+)", line)
+    if not match:
+        raise SystemExit("Unsupported non-exact lock entry: " + line)
+    name, expected = match.groups()
+    try:
+        actual = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        missing.append(name + " (missing)")
+        continue
+    if actual != expected:
+        missing.append(name + " (expected " + expected + ", found " + actual + ")")
+if missing:
+    print("; ".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+"""
+    result = run_cmd(
+        [python_exe, "-c", check_script, req],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        pv("Pinned dependency verification: " + (result.stderr or "unknown failure").strip())
+        return False
+    return True
+
+
 def install_python_dependencies():
     python_exe = ensure_venv()
     req = requirements_path()
     if not os.path.exists(req):
         perr(f"Python requirements file is missing: {req}")
 
-    pinfo(f"Installing Python dependencies from {os.path.basename(req)}...")
-    run_cmd([python_exe, "-m", "pip", "install", "--upgrade", "pip"],
-            error_msg_on_fail="Failed to upgrade pip inside .venv")
-    run_cmd([python_exe, "-m", "pip", "install", "-r", req],
-            error_msg_on_fail="Failed to install Python dependencies")
+    fingerprint = python_bootstrap_fingerprint(python_exe, req)
+    if (
+        read_json_file(PYTHON_BOOTSTRAP_STAMP) == fingerprint
+        and locked_python_packages_present(python_exe, req)
+    ):
+        pinfo("Pinned Python dependencies are already installed.")
+        return
 
-    nltk_dir = os.path.join(RUNTIME_DIR, "nltk_data")
-    os.makedirs(nltk_dir, exist_ok=True)
-    nltk_script = (
-        "import nltk;"
-        f"nltk.data.path.insert(0, {nltk_dir!r});"
-        "nltk.download('punkt', download_dir=%r, quiet=True);"
-        "nltk.download('punkt_tab', download_dir=%r, quiet=True);"
-        "nltk.download('wordnet', download_dir=%r, quiet=True)"
-    ) % (nltk_dir, nltk_dir, nltk_dir)
-    result = run_cmd([python_exe, "-c", nltk_script], check=False,
-                     error_msg_on_fail="NLTK data download failed")
-    if result.returncode != 0:
-        pwarn("Could not download all NLTK data. Doc2Vec preflight may still pass if data is already cached.")
-        if result.stderr:
-            print(result.stderr.strip())
+    pinfo(f"Installing pinned Python dependencies from {os.path.basename(req)}...")
+    pip_env = os.environ.copy()
+    pip_env["PIP_CACHE_DIR"] = os.path.join(RUNTIME_DIR, "pip-cache")
+    pip_env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    os.makedirs(pip_env["PIP_CACHE_DIR"], exist_ok=True)
+    run_cmd([
+        python_exe,
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-input",
+        "-r",
+        req,
+    ], capture_output=False, env=pip_env,
+       error_msg_on_fail="Failed to install pinned Python dependencies")
+    write_json_file(PYTHON_BOOTSTRAP_STAMP, fingerprint)
 
 
 def venv_env_vars():
@@ -351,15 +523,44 @@ def java_source_files(include_tests=False):
     return sorted(files)
 
 
+def classpath_jar_files():
+    if not os.path.isdir(LIB_DIR):
+        return []
+    return [
+        os.path.join(LIB_DIR, name)
+        for name in sorted(os.listdir(LIB_DIR))
+        if name.endswith(".jar") and name not in CLASSPATH_EXCLUDED_JARS
+    ]
+
+
+def java_build_fingerprint():
+    inputs = []
+    for path in java_source_files(include_tests=False):
+        stat = os.stat(path)
+        inputs.append([
+            os.path.relpath(path, PROJECT_ROOT).replace("\\", "/"),
+            stat.st_size,
+            stat.st_mtime_ns,
+        ])
+    for path in classpath_jar_files():
+        stat = os.stat(path)
+        inputs.append([
+            os.path.relpath(path, PROJECT_ROOT).replace("\\", "/"),
+            stat.st_size,
+            stat.st_mtime_ns,
+        ])
+    return {
+        "format": JAVA_BUILD_FORMAT_VERSION,
+        "release": JAVA_RELEASE,
+        "inputs": inputs,
+    }
+
+
 def classes_need_compile():
     marker = os.path.join(CLASSES_DIR, "TwitterGatherDataFollowers", "userRyersonU", "ControllerAgent.class")
     if not os.path.exists(marker):
         return True
-    marker_mtime = os.path.getmtime(marker)
-    for source in java_source_files(include_tests=False):
-        if os.path.getmtime(source) > marker_mtime:
-            return True
-    return False
+    return read_json_file(JAVA_BUILD_STAMP) != java_build_fingerprint()
 
 
 def compile_java(force=False):
@@ -368,15 +569,16 @@ def compile_java(force=False):
         pinfo("Compiled Java classes are already up to date.")
         return
 
-    check_tool("javac", "Java Compiler (JDK)", "compile")
+    check_java_compiler()
     check_java_runtime()
     sources = java_source_files(include_tests=False)
     if not sources:
         perr(f"No Java source files found under {SRC_DIR}")
 
+    if os.path.isdir(CLASSES_DIR):
+        shutil.rmtree(CLASSES_DIR)
     os.makedirs(CLASSES_DIR, exist_ok=True)
-    jars = [os.path.join(LIB_DIR, name) for name in os.listdir(LIB_DIR) if name.endswith(".jar")]
-    classpath = os.pathsep.join([CLASSES_DIR] + sorted(jars))
+    classpath = os.pathsep.join([CLASSES_DIR] + classpath_jar_files())
 
     sources_file = os.path.join(PROJECT_ROOT, "sources.txt")
     classpath_file = os.path.join(PROJECT_ROOT, "classpath.txt")
@@ -393,10 +595,12 @@ def compile_java(force=False):
             "javac",
             "-nowarn",
             "-encoding", "UTF-8",
+            "--release", str(JAVA_RELEASE),
             "@classpath.txt",
             "-d", CLASSES_DIR,
             "@sources.txt",
         ], error_msg_on_fail="Java compilation failed")
+        write_json_file(JAVA_BUILD_STAMP, java_build_fingerprint())
         pinfo("Java compilation finished.")
     finally:
         for file_name in [sources_file, classpath_file]:
@@ -433,9 +637,17 @@ def configured_heap_mb():
 
 
 def port_is_free(port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(0.25)
-        return probe.connect_ex(("127.0.0.1", port)) != 0
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", port))
+        return True
+    except PermissionError as error:
+        perr(
+            f"Local networking is not permitted, so JADE cannot bind port {port}: {error}",
+            suggestion="Run the launcher from a normal desktop terminal rather than a restricted sandbox.",
+        )
+    except OSError:
+        return False
 
 
 def choose_jade_port():
@@ -454,9 +666,15 @@ def choose_jade_port():
 
     if port_is_free(DEFAULT_JADE_PORT):
         return DEFAULT_JADE_PORT
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+    except OSError as error:
+        perr(
+            f"Could not reserve a local JADE port: {error}",
+            suggestion="Check local firewall/security restrictions and try again.",
+        )
     pwarn(f"Default JADE port {DEFAULT_JADE_PORT} is busy. Using free port {port}.")
     return port
 
@@ -512,10 +730,7 @@ def java_runtime_opts(java_major, startup_log):
 
 
 def runtime_classpath():
-    jars = []
-    if os.path.isdir(LIB_DIR):
-        jars = [os.path.join(LIB_DIR, name) for name in os.listdir(LIB_DIR) if name.endswith(".jar")]
-    return os.pathsep.join([CLASSES_DIR] + sorted(jars))
+    return os.pathsep.join([CLASSES_DIR] + classpath_jar_files())
 
 
 def startup_log_path():
@@ -526,6 +741,8 @@ def startup_log_path():
 
 def run_java_process(command, env, log_file):
     pinfo(f"Startup log: {log_file}")
+    gui_ready = False
+    startup_failure = None
     with open(log_file, "w", encoding="utf-8", errors="replace") as log:
         log.write("DSMP startup command:\n")
         log.write(" ".join(command) + "\n\n")
@@ -546,6 +763,14 @@ def run_java_process(command, env, log_file):
                 print(line, end="")
                 log.write(line)
                 log.flush()
+                if GUI_READY_MARKER in line:
+                    gui_ready = True
+                if not gui_ready and (
+                    "No ICP active" in line
+                    or "ControllerAgent could not create the GUI" in line
+                    or "Exception in thread \"main\"" in line
+                ):
+                    startup_failure = line.strip()
             code = process.wait()
         except KeyboardInterrupt:
             pinfo("Interrupted. Stopping Java process...")
@@ -555,7 +780,7 @@ def run_java_process(command, env, log_file):
             except subprocess.TimeoutExpired:
                 process.kill()
                 code = process.wait()
-        return code
+        return code, gui_ready, startup_failure
 
 
 def preflight(require_classes=False):
@@ -603,7 +828,16 @@ def run():
         java_opts, jade_opts = java_runtime_opts(java_major, log_file)
         command = ["java"] + java_opts + ["-cp", runtime_classpath(), JAVA_MAIN_CLASS] + jade_opts + [JAVA_MAIN_AGENT]
         pinfo("Starting DSMP simulator...")
-        code = run_java_process(command, env, log_file)
+        code, gui_ready, startup_failure = run_java_process(command, env, log_file)
+        if not gui_ready:
+            detail = startup_failure or (
+                "The Java process exited before the GUI reported that it was visible."
+            )
+            perr(
+                f"DSMP did not finish starting: {detail}",
+                suggestion=f"Inspect the startup log: {log_file}",
+                exit_code=code if code else 1,
+            )
         if code == RESTART_EXIT_CODE:
             restart_count += 1
             pinfo(
@@ -666,6 +900,7 @@ def info():
     print(f"  Java:              {version or 'not found'}")
     javac = shutil.which("javac")
     print(f"  javac:             {javac or 'not found'}")
+    print(f"  Java target:       {JAVA_RELEASE}")
     print(f"  Bootstrap Python:  {platform.python_version()} at {sys.executable}")
     venv_python = py_exe_path()
     venv_version, _ = fetch_py_version(venv_python)
@@ -680,7 +915,9 @@ def info():
 def doctor():
     try:
         install()
+        check_java_runtime()
         if classes_need_compile():
+            check_java_compiler()
             pwarn("Java classes are missing or stale; launch will compile them.")
         else:
             pinfo("Java classes are present and up to date.")

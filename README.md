@@ -5,6 +5,13 @@ This repository contains the Java/JADE DSMP simulator, the modern Swing GUI, the
 ## Fast Start
 
 Clone the repository, open a terminal in the project folder, and run one command.
+The first run creates local build/runtime directories, installs the pinned Python
+runtime into `.venv`, compiles the Java source for Java 17, and opens the GUI.
+
+```bash
+git clone https://github.com/Itzmohsen/DSMP-V4.git
+cd DSMP-V4
+```
 
 ### macOS / Linux
 
@@ -32,17 +39,56 @@ or run:
 run.bat
 ```
 
-The launcher prepares the local Python environment, checks the bundled Java jars, compiles Java when needed, chooses a safe JADE port, runs the Doc2Vec runtime preflight, writes a startup log, and opens the GUI.
+The launcher prepares the local Python environment, checks every bundled Java
+jar, compiles Java when needed, chooses a safe JADE port, runs the Doc2Vec
+runtime preflight, writes a startup log, and opens the GUI. It treats a Java
+process that exits before the GUI becomes visible as a startup failure, even if
+old JADE code returns exit status zero.
 
 ## Required Software For A Source Clone
 
-A source clone still needs a few developer tools because the Java source has to be compiled locally.
+A source clone needs two host runtimes. Project libraries and build steps are
+handled by the launcher, but Git cannot include one executable runtime that runs
+unchanged on Windows, macOS, and Linux.
 
-- Python 3.9 or newer
-- Java JDK 8 or newer, preferably Java 17 LTS
+- Python 3.11 or 3.12 (64-bit CPython)
+- Java 17 or newer **JDK** (not a JRE-only install)
 - Git, if cloning from GitHub
+- Internet access on the first launch, for pinned Python wheels
 
-Maven is no longer required for normal startup. The simulator uses the checked-in `lib/*.jar` runtime set so students do not have to reconstruct PDFBox, JADE, Weka, Gephi, Neuroph, Twitter4J, MySQL, or other classpath dependencies manually.
+The pinned wheels cover Windows x64, Linux x64/ARM64 with a glibc 2.17+
+(`manylinux2014`) baseline, and Intel or Apple Silicon macOS. The Apple Silicon
+scientific stack requires macOS 12 or newer. A graphical desktop session is
+required because DSMP is a Swing application.
+
+Java 17 is the bytecode target even when a newer JDK performs the compile, so a
+clone built with Java 21 can still run on Java 17. Maven is not required for
+normal startup. The simulator uses the checked-in `lib/*.jar` runtime set so
+students do not have to reconstruct PDFBox, JADE, Weka, Gephi, Neuroph,
+Twitter4J, MySQL, or other classpath dependencies manually.
+
+Git LFS is optional for opening the core application. The required Gephi jar is
+stored as an ordinary Git file. Some very large benchmark datasets and cached
+models still use LFS; users who need every research artifact should install Git
+LFS and run:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+The optional live Twitter crawler does not contain API secrets. Configure it
+only when needed with `DSMP_TWITTER_CONSUMER_KEY`,
+`DSMP_TWITTER_CONSUMER_SECRET`, `DSMP_TWITTER_ACCESS_TOKEN`, and
+`DSMP_TWITTER_ACCESS_TOKEN_SECRET`. These variables are not required to open or
+run the simulator with the bundled text datasets. Credentials found in an older
+revision should be revoked because removing them from the current source does
+not remove them from Git history.
+
+The optional MySQL input mode reads `DSMP_DB_HOST`, `DSMP_DB_PORT`,
+`DSMP_DB_NAME`, `DSMP_DB_USER`, and `DSMP_DB_PASSWORD`. MySQL is not contacted
+during normal startup; the default and supported first-run source is a bundled
+text dataset.
 
 ## What The Launcher Does
 
@@ -67,6 +113,10 @@ python build.py clean
 - `run` starts the GUI only after preflight passes.
 - `info` prints detected paths and versions.
 - `clean` removes generated Java classes, the Python virtual environment, and runtime caches.
+
+The first successful Python setup is fingerprinted using the interpreter,
+platform, and `requirements-lock.txt` hash. Later launches skip `pip` entirely,
+which makes normal startup fast and allows it to work without network access.
 
 ## Interface And Theming
 
@@ -96,7 +146,7 @@ The day/night switch is the pill control in the top-right corner of the window.
 The launcher creates local generated folders:
 
 - `.venv/` for Python packages
-- `.runtime/` for Matplotlib and NLTK runtime cache
+- `.runtime/` for local package/cache data
 - `classes/` for compiled Java classes
 - `logs/` for startup logs
 
@@ -149,13 +199,17 @@ Doc2Vec uses the local Python virtual environment. The launcher always passes th
 
 That prevents Windows/macOS/Linux from accidentally using a different `python`, `python3`, or global package set.
 
-Python dependencies are bounded in:
+The complete supported Python dependency graph is pinned exactly in:
 
 ```text
 requirements-lock.txt
 ```
 
-The Doc2Vec preflight runs before JADE starts. If Gensim/Numpy/Scipy compatibility is broken, the simulator stops early with a clear error instead of opening a GUI that later fails.
+The Doc2Vec preflight runs before JADE starts. If Gensim/NumPy/SciPy
+compatibility is broken, the simulator stops early with a clear error instead
+of opening a GUI that later fails. Old standalone plotting experiments are not
+part of the application launch path and are intentionally excluded from the
+runtime dependency set.
 
 ## GitHub Verification
 
@@ -165,7 +219,9 @@ The repository includes a GitHub Actions workflow:
 .github/workflows/bootstrap-smoke.yml
 ```
 
-It verifies fresh-clone bootstrap and Java compilation on:
+It verifies both supported Python versions, the platform launcher, fresh-clone
+bootstrap, the exact Python lock, repeat/offline-ready bootstrap behavior, and
+Java 17 compilation on:
 
 - Windows
 - macOS
@@ -173,7 +229,10 @@ It verifies fresh-clone bootstrap and Java compilation on:
 
 ## Packaging Recommendation
 
-For non-developer users, the most reliable distribution is still a GitHub Release built with `jpackage` for each operating system. A packaged release can include a known Java runtime, so users do not need to install a JDK.
+For non-developer users, the most reliable distribution is a GitHub Release
+built with `jpackage` for each operating system. A packaged release can include
+a known Java runtime, so users do not need to install a JDK. Source clones use
+the launcher and the two host-runtime prerequisites above.
 
 For a source clone, the current launcher is the supported path.
 
@@ -183,8 +242,9 @@ If startup fails:
 
 1. Run `python build.py doctor`.
 2. Check `logs/startup-*.log`.
-3. Make sure Python 3.9+ and Java JDK 8+ are on PATH.
+3. Make sure Python 3.11/3.12 and a Java 17+ JDK are on PATH.
 4. If Python packages look corrupted, run `python build.py clean-python`, then `python build.py launch`.
 5. If Java classes look stale, run `python build.py rebuild`, then `python build.py launch`.
+6. If a large optional dataset is a short text file beginning with `version https://git-lfs`, run `git lfs pull`.
 
 Do not use old hand-written classpath commands. Use the launcher so the same checks run on every operating system.

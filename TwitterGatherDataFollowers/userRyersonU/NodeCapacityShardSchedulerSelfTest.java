@@ -5,9 +5,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-public final class NodeCapacitySchedulerSelfTest
+public final class NodeCapacityShardSchedulerSelfTest
 {
-	private NodeCapacitySchedulerSelfTest()
+	private NodeCapacityShardSchedulerSelfTest()
 	{
 	}
 
@@ -18,7 +18,7 @@ public final class NodeCapacitySchedulerSelfTest
 		verifyDeterministicTargetAssignment();
 		verifyQueueClaimsEveryShardOnce();
 		verifyActiveQueueClaimsRespectCapacity();
-		System.out.println("NodeCapacitySchedulerSelfTest passed");
+		System.out.println("NodeCapacityShardSchedulerSelfTest passed");
 	}
 
 	private static void verifyDefaultShardContract()

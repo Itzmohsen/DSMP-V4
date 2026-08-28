@@ -1,5 +1,8 @@
-*toolkit.jar filter=lfs diff=lfs merge=lfs -text
+# The Gephi runtime jar is intentionally stored as a normal Git blob. It is
+# required just to compile and open the application and is below GitHub's
+# per-file size limit, so a source clone must not depend on Git LFS for it.
 Dataset/Benchmarks/*.txt filter=lfs diff=lfs merge=lfs -text
-Dataset/TwitterObtained/GENERATED/*_GENERATED.txt filter=lfs diff=lfs merge=lfs -text
-important-stuff/*_GENERATED.txt filter=lfs diff=lfs merge=lfs -text
+"Dataset/TwitterObtained/GENERATED/Reduced_94k_2026-06-12 20-48-55-047-2a400824_GENERATED.txt" filter=lfs diff=lfs merge=lfs -text
+"Dataset/TwitterObtained/GENERATED/RyersonU_theCatTweeting_final_2026-06-12 18-12-02-270-5e44d311_GENERATED.txt" filter=lfs diff=lfs merge=lfs -text
+"important-stuff/Dataset-Test-RyersonU_theCatTweeting_final_2026-06-12 18-12-02-270-5e44d311_GENERATED.txt" filter=lfs diff=lfs merge=lfs -text
 Stored_Doc2VecModel/shared_cache/*.npy filter=lfs diff=lfs merge=lfs -text

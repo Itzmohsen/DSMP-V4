@@ -85,17 +85,17 @@ public class MobileAgent extends Agent {
 	private int kRecommend= 1;
 	//private static Scanner x;     // added by Sepide 
 
-	static String serverName = "127.0.0.1";
-	static String portNumber = "3306";
-	static String sid = "testmysql";
+	static String serverName = DatabaseSettings.host();
+	static String portNumber = DatabaseSettings.port();
+	static String sid = DatabaseSettings.database();
 
 	private Connection con;
 	private Statement stmt = null;
 
 	private ResultSet resultSet = null;
 
-	static String user = "root";
-	static String pass = "Asdf1234";                      
+	static String user = DatabaseSettings.user();
+	static String pass = DatabaseSettings.password();
 
 
 	private ArrayList<Integer> listRecServers; //List of recommender agents to tweet to

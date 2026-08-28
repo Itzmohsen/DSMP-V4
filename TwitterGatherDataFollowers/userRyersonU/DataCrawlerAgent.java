@@ -105,10 +105,7 @@ public class DataCrawlerAgent extends Agent
 				
 				final ConfigurationBuilder cb = new ConfigurationBuilder();
 				cb.setDebugEnabled(true);
-				cb.setOAuthConsumerKey("nz5M3lZWGoTImeSKzTArfugwe");
-				cb.setOAuthConsumerSecret("7COHctky30Jpb4O4ilVy8QMPCcJq1Kwz8RjZ1Us5gn2x5oRFct");
-				cb.setOAuthAccessToken("702093889453174784-LRGk2gKp2uGdUjHsPu0AqJFf6pat5IT");
-				cb.setOAuthAccessTokenSecret("VhsBXlvkgr6xiHrtii1lwlOhaXLF70ISt2NJVNiWVkUwP");
+				TwitterCredentials.configure(cb);
 					
 				Twitter twitter = new TwitterFactory(cb.build()).getInstance();
 				

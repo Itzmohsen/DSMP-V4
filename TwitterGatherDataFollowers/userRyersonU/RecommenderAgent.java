@@ -50,7 +50,6 @@ import java.lang.String;   //Sepide
 import java.util.Collections; //Sepide
 import weka.filters.Filter;   // Sepide
 import java.io.*;     // Sepide
-import org.junit.Assert;   // Sepide
 import java.lang.Object; // Sepide
 import java.util.HashMap;  //Sepide
 import java.util.Map.Entry;  //Sepide
@@ -191,17 +190,17 @@ public class RecommenderAgent extends Agent
 
 	private int numRecAgents =0;
 
-	static String serverName = "127.0.0.1";
-	static String portNumber = "3306";
-	static String sid = "testmysql";
+	static String serverName = DatabaseSettings.host();
+	static String portNumber = DatabaseSettings.port();
+	static String sid = DatabaseSettings.database();
 
 	private java.sql.Connection con;
 	private Statement stmt = null;
 	private PreparedStatement preparedStatement = null;
 	private ResultSet resultSet = null;
 
-	static String user = "root";
-	static String pass = "Asdf1234";
+	static String user = DatabaseSettings.user();
+	static String pass = DatabaseSettings.password();
 	
 	private ArrayList<String> textprocessing_wb_or_tfidf_Data = new ArrayList<String>();		
 
@@ -4783,7 +4782,11 @@ public class RecommenderAgent extends Agent
 					}
 					
 					int exitCode = p.waitFor();
-                    Assert.assertEquals("No errors should be detected", 0, exitCode);
+					if (exitCode != 0)
+					{
+						throw new IOException(
+								"Doc2Vec subprocess exited with code " + exitCode);
+					}
 					
 					             try 
 									 {

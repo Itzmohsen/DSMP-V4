@@ -139,15 +139,15 @@ public class ControllerAgent extends GuiAgent {
 	private ArrayList<AgentController> listOfAgentControllers = new ArrayList<AgentController>(); //List of all agents AID created
 	private ArrayList<Date> allUniqueDateTimes = new ArrayList<Date>(); 
 	
-	private static String serverName = "127.0.0.1";
-	private static String portNumber = "3306";
-	private static String sid = "testmysql";	 
+	private static String serverName = DatabaseSettings.host();
+	private static String portNumber = DatabaseSettings.port();
+	private static String sid = DatabaseSettings.database();
 
 	private Connection con;
 	private Statement stmt = null;
 	private ResultSet resultSet = null;
-	private static String user = "root";
-	private static String pass = "Asdf1234";
+	private static String user = DatabaseSettings.user();
+	private static String pass = DatabaseSettings.password();
 
 	public static final int QUIT = 0;
 	public static final int START_SIM = 1;

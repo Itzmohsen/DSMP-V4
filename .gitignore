@@ -1,6 +1,8 @@
 *.gitconfig
 */*.iml
-./classes
+.DS_Store
+.env
+*.class
 .simulator-runtime.properties
 .simulator-runtime.properties.tmp
 .venv/
