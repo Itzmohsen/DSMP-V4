@@ -3891,14 +3891,20 @@ public class ControllerAgent extends GuiAgent {
 				String warning = "Skipped " + malformedRows
 						+ " malformed dataset row(s); six tab-separated fields are required.";
 				System.err.println(warning);
-				myGui.appendResult(warning);
+				if (myGui != null)
+				{
+					myGui.appendResult(warning);
+				}
 			}
 			if (ambiguousMappings > 0)
 			{
 				String warning = "Found " + ambiguousMappings
 						+ " conflicting user-to-followee row(s). The first mapping was preserved.";
 				System.err.println(warning);
-				myGui.appendResult(warning);
+				if (myGui != null)
+				{
+					myGui.appendResult(warning);
+				}
 			}
 
 		} catch (IOException e) {

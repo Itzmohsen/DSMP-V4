@@ -133,7 +133,10 @@ public final class AdaptiveModelConcurrencySelfTest
 		int memoryLimit = (int)(
 				RecommendationMemoryCoordinator.modelBudgetBytes()
 				/ (96L * RecommendationMemoryCoordinator.MEBIBYTE));
-		require(expected == Math.min(8, Math.max(1, memoryLimit)),
+		//The configured limit defaults to the machine's CPU count, so a 4-core
+		//runner legitimately stops at 4; only a cap below both limits is wrong.
+		int configuredLimit = RecommendationMemoryCoordinator.snapshot().getConfiguredLimit();
+		require(expected == Math.min(Math.min(8, configuredLimit), Math.max(1, memoryLimit)),
 				"MLP training retained an arbitrary four-node ceiling");
 		RecommendationMemoryCoordinator.configureRequestedParallelism(
 				Integer.MAX_VALUE);
