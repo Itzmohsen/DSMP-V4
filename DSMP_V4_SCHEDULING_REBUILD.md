@@ -137,7 +137,9 @@ Every emulated nanosecond is recorded per node (compute, speed emulation,
 network emulation, interactive pacing) and printed with the run.
 
 *Fidelity condition.* The emulation is faithful when the machine has a core for
-every busy lane; the timing report says when it does not.
+every busy lane; the timing report says when it does not. Work is measured with
+the JVM's thread CPU clock, which on Windows advances in 15.6 ms steps, so there
+the slowdown of work shorter than a step is approximate.
 
 ## 5. Exactness of each algorithm
 
