@@ -44,12 +44,6 @@ public final class UserGenerationEngine
 	private static final int CLUSTER_COUNT = 3;
 	private static final int MAX_CLUSTER_ITERATIONS = 10;
 	private static final long MINIMUM_FREE_SPACE_BYTES = 64L * 1024L * 1024L;
-	private static final Pattern PUNCTUATION_PATTERN = Pattern.compile("[\\p{P}]");
-	private static final Pattern LINK_PATTERN =
-			Pattern.compile("http[a-zA-Z0-9]*|bitly[a-zA-Z0-9]*|www[a-zA-Z0-9]*");
-	private static final Pattern SPECIAL_CHARACTER_PATTERN =
-			Pattern.compile("[^a-zA-Z\\p{Z}]");
-	private static final Pattern SPACE_PATTERN = Pattern.compile(" +");
 	private static final Set<String> STOP_WORDS = createStopWords();
 
 	public interface ProgressListener
@@ -1609,28 +1603,14 @@ public final class UserGenerationEngine
 
 	private static List<String> preprocess(String originalText)
 	{
-		String text = " " + originalText + " ";
-		if (text.contains("Photo:"))
-		{
-			text = text.substring(0, text.indexOf("Photo:"));
-		}
-		if (text.contains("Photoset:"))
-		{
-			text = text.substring(0, text.indexOf("Photoset:"));
-		}
-		if (text.contains("RT @"))
-		{
-			return Collections.emptyList();
-		}
-
-		Matcher matcher = PUNCTUATION_PATTERN.matcher(text);
-		text = matcher.replaceAll("");
-		matcher = LINK_PATTERN.matcher(text);
-		text = matcher.replaceAll(" ");
-		matcher = SPECIAL_CHARACTER_PATTERN.matcher(text);
-		text = matcher.replaceAll(" ");
-		text = SPACE_PATTERN.matcher(text.toLowerCase(Locale.ROOT).trim())
-				.replaceAll(" ");
+		//Shared with the simulator so generated corpora are built from the same
+		//tokens the simulator will later extract from them.
+		String text = TweetTextNormalizer.normalize(
+				originalText,
+				true,
+				true,
+				false,
+				null);
 		if (text.isEmpty())
 		{
 			return Collections.emptyList();

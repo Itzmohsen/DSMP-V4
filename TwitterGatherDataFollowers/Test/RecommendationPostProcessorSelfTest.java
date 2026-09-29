@@ -167,11 +167,12 @@ public final class RecommendationPostProcessorSelfTest
 				"fallback edge IDs were incorrect");
 	}
 
+	/** Reads a file with the platform line separator (CRLF on Windows) as "\n". */
 	private static String read(File file) throws Exception
 	{
 		return new String(
 				Files.readAllBytes(file.toPath()),
-				StandardCharsets.UTF_8);
+				StandardCharsets.UTF_8).replace(System.lineSeparator(), "\n");
 	}
 
 	private static void require(boolean condition, String message)

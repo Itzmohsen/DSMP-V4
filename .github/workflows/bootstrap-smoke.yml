@@ -50,3 +50,6 @@ jobs:
         run: python build.py doctor
         env:
           PIP_NO_INDEX: "1"
+
+      - name: Run Java self-test suite
+        run: python build.py test

@@ -1,6 +1,9 @@
 package TwitterGatherDataFollowers.userRyersonU;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -55,15 +58,35 @@ public final class SvmTargetPreflightSelfTest
 				"all-invalid SVM targets should fail before recommender agents start");
 	}
 
+	/** True for a Git LFS pointer file ("version https://git-lfs..."), not real content. */
+	private static boolean isGitLfsPointer(File file) throws IOException
+	{
+		if (file.length() > 1024L)
+		{
+			return false;
+		}
+		BufferedReader reader = new BufferedReader(new FileReader(file));
+		try
+		{
+			String first = reader.readLine();
+			return first != null && first.startsWith("version https://git-lfs");
+		}
+		finally
+		{
+			reader.close();
+		}
+	}
+
 	private static void journalTargetSurvivesAfterAvailableIndexIsPopulated()
 			throws Exception
 	{
 		File dataset = new File(
 				"Dataset/Benchmarks/Extreme-15-Minute-Plus-Journal-245k.txt");
-		if (!dataset.isFile())
+		if (!dataset.isFile() || isGitLfsPointer(dataset))
 		{
+			//A clone without Git LFS content has only a small pointer file here.
 			System.out.println("Skipping journal target preflight regression: "
-					+ dataset.getPath() + " is not present");
+					+ dataset.getPath() + " is not present (run git lfs pull)");
 			return;
 		}
 

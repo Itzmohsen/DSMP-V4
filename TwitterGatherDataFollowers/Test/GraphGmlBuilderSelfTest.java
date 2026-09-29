@@ -108,8 +108,10 @@ public final class GraphGmlBuilderSelfTest {
 		return path.toFile();
 	}
 
+	/** Reads a file with the platform line separator (CRLF on Windows) as "\n". */
 	private static String read(File file) throws IOException {
-		return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+		return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)
+				.replace(System.lineSeparator(), "\n");
 	}
 
 	private static int count(String value, String target) {

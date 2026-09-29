@@ -3,15 +3,26 @@ package TwitterGatherDataFollowers.userRyersonU;
 import java.text.DecimalFormat;
 import java.util.Locale;
 
+/**
+ * One node's capacity contract, as entered by the user.
+ *
+ * Every field is physically emulated in scheduled runs (see {@link NodeSpec}):
+ * the CPU multiplier sets relative speed (slower nodes' measured work is
+ * dilated), max concurrent jobs sets worker lanes, the memory limit is an
+ * admission budget, queue capacity is the most units the node may hold at once
+ * (running plus prefetched), network delay is the one-way latency of the
+ * node's link, slowdown divides speed further, and failure probability loses
+ * that fraction of unit executions in fault-injection runs.
+ */
 final class NodeCapacityProfile
 {
 	enum Role
 	{
-		NORMAL("Normal", "Balanced node"),
-		WEAK("Weak", "Lower CPU and smaller queue"),
-		STRONG("Strong", "Higher CPU and larger queue"),
-		MEMORY_HEAVY("Memory-heavy", "More memory budget"),
-		UNRELIABLE("Unreliable", "Failure/slowdown scenario");
+		NORMAL("Normal", "Reference speed, one lane"),
+		WEAK("Weak", "Half speed, half memory, 25 ms link"),
+		STRONG("Strong", "Double speed, two lanes, double memory"),
+		MEMORY_HEAVY("Memory-heavy", "Reference speed, double memory"),
+		UNRELIABLE("Unreliable", "0.75 speed, 1.5x slowdown, 100 ms link, 5% failures");
 
 		private final String label;
 		private final String description;
@@ -47,7 +58,7 @@ final class NodeCapacityProfile
 	static final int MIN_NETWORK_DELAY_MS = 0;
 	static final int MAX_NETWORK_DELAY_MS = 600000;
 	static final int MIN_QUEUE_CAPACITY = 1;
-	static final int MAX_QUEUE_CAPACITY = 1000000;
+	static final int MAX_QUEUE_CAPACITY = 4096;
 	static final double MIN_SLOWDOWN_MULTIPLIER = 1.00;
 	static final double MAX_SLOWDOWN_MULTIPLIER = 50.00;
 	static final int MIN_FAILURE_PERCENT = 0;
@@ -99,7 +110,7 @@ final class NodeCapacityProfile
 				MIN_NETWORK_DELAY_MS,
 				MAX_NETWORK_DELAY_MS);
 		this.queueCapacity = clampInt(
-				queueCapacity,
+				Math.max(queueCapacity, this.maxConcurrentJobs),
 				MIN_QUEUE_CAPACITY,
 				MAX_QUEUE_CAPACITY);
 		this.slowdownSimulationEnabled = slowdownSimulationEnabled;
@@ -142,7 +153,7 @@ final class NodeCapacityProfile
 					Math.max(MIN_MEMORY_MB, baseMemory / 2),
 					1,
 					25,
-					250,
+					1,
 					false,
 					1.0,
 					false,
@@ -157,7 +168,7 @@ final class NodeCapacityProfile
 					Math.min(MAX_MEMORY_MB, baseMemory * 2),
 					2,
 					0,
-					2500,
+					2,
 					false,
 					1.0,
 					false,
@@ -172,7 +183,7 @@ final class NodeCapacityProfile
 					Math.min(MAX_MEMORY_MB, baseMemory * 2),
 					1,
 					0,
-					1000,
+					1,
 					false,
 					1.0,
 					false,
@@ -187,7 +198,7 @@ final class NodeCapacityProfile
 					baseMemory,
 					1,
 					100,
-					250,
+					1,
 					true,
 					1.50,
 					true,
@@ -200,11 +211,28 @@ final class NodeCapacityProfile
 				baseMemory,
 				1,
 				0,
-				1000,
+				1,
 				false,
 				1.0,
 				false,
 				0);
+	}
+
+	/** The same profile for a different node index. */
+	NodeCapacityProfile withNodeIndex(int index)
+	{
+		return new NodeCapacityProfile(
+				index,
+				role,
+				cpuMultiplier,
+				memoryLimitMb,
+				maxConcurrentJobs,
+				networkDelayMs,
+				queueCapacity,
+				slowdownSimulationEnabled,
+				slowdownMultiplier,
+				failureSimulationEnabled,
+				failureProbabilityPercent);
 	}
 
 	private static int defaultMemoryMb(int requestedNodes, int heapMb)

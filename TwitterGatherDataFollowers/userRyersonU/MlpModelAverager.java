@@ -9,13 +9,31 @@ import org.neuroph.core.Neuron;
 import org.neuroph.core.Weight;
 import org.neuroph.nnet.MultiLayerPerceptron;
 
+/**
+ * Uniform federated averaging of the legacy Neuroph MLP node models.
+ *
+ * Every node model contributes exactly 1/N of each connection weight, which is
+ * the plain FedAvg update for equally weighted clients. Models are streamed one
+ * at a time so only two networks are resident at once.
+ *
+ * The averaged weight is order independent: reordering the input model paths
+ * cannot change the result.
+ */
 final class MlpModelAverager
 {
 	private MlpModelAverager()
 	{
 	}
 
-	static void averageLegacyCompatible(List<String> modelPaths, String outputPath)
+	/**
+	 * Averages the input-connection weights of every supplied MLP and writes the
+	 * result to {@code outputPath}.
+	 *
+	 * @param modelPaths one saved Neuroph {@code .nnet} file per node; all must
+	 *                   share the same topology
+	 * @param outputPath destination for the averaged network
+	 */
+	static void average(List<String> modelPaths, String outputPath)
 	{
 		if (modelPaths == null || modelPaths.isEmpty())
 		{
@@ -25,21 +43,18 @@ final class MlpModelAverager
 		MultiLayerPerceptron averaged =
 				(MultiLayerPerceptron) NeuralNetwork.createFromFile(modelPaths.get(0));
 		int connectionCount = countInputConnections(averaged);
-		double[] originalFirstWeights = new double[connectionCount];
 		double[] weightSums = new double[connectionCount];
-		accumulateInputWeights(
-				averaged, weightSums, originalFirstWeights, true);
+		accumulateInputWeights(averaged, weightSums);
 
 		for (int i = 1; i < modelPaths.size(); i++)
 		{
 			MultiLayerPerceptron current =
 					(MultiLayerPerceptron) NeuralNetwork.createFromFile(modelPaths.get(i));
-			accumulateInputWeights(current, weightSums, null, false);
+			accumulateInputWeights(current, weightSums);
 			current = null;
 		}
 
-		applyLegacyCompatibleWeights(
-				averaged, weightSums, originalFirstWeights, modelPaths.size());
+		applyAveragedWeights(averaged, weightSums, modelPaths.size());
 		averaged.save(outputPath);
 	}
 
@@ -59,9 +74,7 @@ final class MlpModelAverager
 
 	private static void accumulateInputWeights(
 			MultiLayerPerceptron network,
-			double[] sums,
-			double[] firstWeights,
-			boolean recordFirst)
+			double[] sums)
 	{
 		int index = 0;
 		List<Layer> layers = network.getLayers();
@@ -71,12 +84,12 @@ final class MlpModelAverager
 			{
 				for (Connection connection : neuron.getInputConnections())
 				{
-					double value = connection.getWeight().getValue();
-					sums[index] += value;
-					if (recordFirst)
+					if (index >= sums.length)
 					{
-						firstWeights[index] = value;
+						throw new IllegalStateException(
+								"MLP models do not share the same topology");
 					}
+					sums[index] += connection.getWeight().getValue();
 					index++;
 				}
 			}
@@ -87,10 +100,9 @@ final class MlpModelAverager
 		}
 	}
 
-	private static void applyLegacyCompatibleWeights(
+	private static void applyAveragedWeights(
 			MultiLayerPerceptron network,
 			double[] sums,
-			double[] firstWeights,
 			int modelCount)
 	{
 		int index = 0;
@@ -101,11 +113,7 @@ final class MlpModelAverager
 			{
 				for (Connection connection : neuron.getInputConnections())
 				{
-					double trueAverage = sums[index] / modelCount;
-					double otherModelsSum = sums[index] - firstWeights[index];
-					double legacyFinalWeight =
-							(trueAverage + otherModelsSum) / modelCount;
-					connection.setWeight(new Weight(legacyFinalWeight));
+					connection.setWeight(new Weight(sums[index] / modelCount));
 					index++;
 				}
 			}

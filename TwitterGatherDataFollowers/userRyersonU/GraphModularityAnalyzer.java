@@ -82,7 +82,10 @@ final class GraphModularityAnalyzer
 					graphController.getGraphModel(), "GraphModel");
 			Modularity modularity = new Modularity();
 			modularity.setResolution(GEPHI_RESOLUTION);
-			modularity.setRandom(true);
+			//Deterministic node ordering. With randomisation on, Gephi's Louvain
+			//produced a different community assignment and a different modularity
+			//value on every run over identical input.
+			modularity.setRandom(false);
 			modularity.setUseWeight(true);
 			modularity.execute(graphModel);
 

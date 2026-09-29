@@ -1076,7 +1076,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 					writer.write("- Score: " + decimal(candidate.finalScore)
 							+ " | rank #" + candidate.rank);
 					writer.newLine();
-					writer.write("- Confidence interval: ["
+					writer.write("- Score band (heuristic, not a confidence interval): ["
 							+ decimal(candidate.confidenceLower)
 							+ ", " + decimal(candidate.confidenceUpper) + "]");
 					writer.newLine();
@@ -1177,7 +1177,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 						writer.write("- #" + score.rank + " "
 								+ score.candidateName()
 								+ ": score " + decimal(score.finalScore)
-								+ ", CI [" + decimal(score.confidenceLower)
+								+ ", band [" + decimal(score.confidenceLower)
 								+ ", " + decimal(score.confidenceUpper) + "]"
 								+ ", calibration " + score.calibrationVerdict
 								+ ", fragile "
@@ -1491,7 +1491,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 							+ "<br><span style='color:"
 							+ hex(NebulaDesign.currentTextSecondary()) + ";'>"
 							+ score.calibrationVerdict
-							+ ", CI [" + scoreText(score.confidenceLower)
+							+ ", band [" + scoreText(score.confidenceLower)
 							+ ", " + scoreText(score.confidenceUpper) + "]"
 							+ "</span></html>");
 			label.setFont(NebulaDesign.fontBody(12f));

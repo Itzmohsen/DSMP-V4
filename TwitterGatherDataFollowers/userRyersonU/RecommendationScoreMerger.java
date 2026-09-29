@@ -284,6 +284,13 @@ final class RecommendationScoreMerger
 		return targetDetails == null ? null : targetDetails.get(candidate);
 	}
 
+	/**
+	 * Ranks candidates and rescales them to 0-100 relative to the best candidate.
+	 *
+	 * The top candidate is therefore always exactly 100.0 by construction. This is
+	 * a within-list relative rank score: it is not a similarity, a probability or
+	 * a confidence, and it is not comparable between targets or between runs.
+	 */
 	static LinkedHashMap<String,Double> normalizeAndSort(Map<String,Double> rawScores)
 	{
 		ArrayList<Map.Entry<String,Double>> entries =

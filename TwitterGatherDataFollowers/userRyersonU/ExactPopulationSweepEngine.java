@@ -383,14 +383,9 @@ final class ExactPopulationSweepEngine
 		}
 	}
 
-	private static final Pattern RETWEET_PATTERN = Pattern.compile("RT @");
-	private static final Pattern PUNCTUATION_PATTERN = Pattern.compile("[\\p{P}]");
-	private static final Pattern LINK_PATTERN = Pattern.compile(
-			"http[a-zA-Z0-9]*|bitly[a-zA-Z0-9]*|www[a-zA-Z0-9]*");
-	private static final Pattern SPECIAL_CHARACTER_PATTERN =
-			Pattern.compile("[^a-zA-Z\\p{Z}]");
-	private static final Pattern NON_ALPHA_PATTERN = Pattern.compile("[^a-zA-Z ]");
-	private static final Pattern MULTI_SPACE_PATTERN = Pattern.compile(" +");
+
+	private static final java.util.Set<String> SWEEP_STOP_WORDS =
+			TweetTextNormalizer.stopWordSet(RecommenderAgent.stopWordsArray);
 	private static final double TEST_SET_PERCENT = 0.30;
 
 	private ExactPopulationSweepEngine()
@@ -689,416 +684,280 @@ final class ExactPopulationSweepEngine
 		return new ArrayList<String>(users.subList(0, limit));
 	}
 
+	/**
+	 * Runs every target as one work unit of a scheduling phase on
+	 * {@code requestedWorkers} nodes. The one-worker baseline, and the
+	 * parallel pass under the original DSMP plan, pin the units round-robin
+	 * to nodes with no emulation; otherwise the scheduler plan's policy
+	 * places them and the node profiles are emulated live (with injected
+	 * failures in the fault-injection mode). Every target is committed
+	 * exactly once, whatever is retried, and its result does not depend on
+	 * where it ran, so the parallel pass can be verified against the baseline.
+	 */
 	private static ExecutionResult execute(
-			Config config,
-			DatasetSnapshot snapshot,
-			PreparedSvm preparedSvm,
-			List<String> targets,
-			int requestedWorkers,
-			boolean baseline,
-			Listener listener,
-			CancellationToken token) throws Exception
-	{
-		int workerCount = Math.max(1, Math.min(requestedWorkers, targets.size()));
-		if (config.algorithm == Algorithm.DOC2VEC)
-		{
-			return executeDoc2Vec(
-					config, targets, workerCount, baseline, listener, token);
-		}
-		return executeJavaWorkers(
-				config,
-				snapshot,
-				preparedSvm,
-				targets,
-				workerCount,
-				baseline,
-				listener,
-				token);
-	}
-
-	private static ExecutionResult executeJavaWorkers(
 			final Config config,
 			final DatasetSnapshot snapshot,
 			final PreparedSvm preparedSvm,
-			List<String> targets,
-			int workerCount,
+			final List<String> targets,
+			int requestedWorkers,
 			final boolean baseline,
 			final Listener listener,
 			final CancellationToken token) throws Exception
 	{
-		final List<List<String>> assignments = baseline
-				? assignRoundRobin(targets, workerCount)
-				: NodeCapacityScheduler.assignTargetJobs(targets, workerCount);
+		final int workerCount = Math.max(1, Math.min(requestedWorkers, targets.size()));
+		RecommendationSchedulerPlan plan = RecommendationSchedulerRegistry.snapshot();
+		final SchedulingRunContext.Mode mode = baseline
+				? SchedulingRunContext.Mode.BASELINE
+				: SchedulingRunContext.Mode.fromPlan(plan);
+		final SchedulingRunContext context = new SchedulingRunContext(
+				"population-sweep-" + System.nanoTime(),
+				mode,
+				plan.getPolicy(),
+				baseline ? null : NodeCapacityRegistry.snapshot(),
+				workerCount,
+				-1,
+				RecommendationSchedulerRegistry.FAULT_SEED,
+				RecommendationSchedulerRegistry.MAX_FAILURES_PER_UNIT,
+				RecommendationSchedulerRegistry.STALL_TIMEOUT_MS,
+				0);
+		final WorkPhase phase = context.openPhase(
+				"population-targets",
+				config.algorithm + " target jobs",
+				new SchedulingRunContext.UnitSupplier()
+				{
+					public List<WorkUnitSpec> units()
+					{
+						ArrayList<WorkUnitSpec> units = new ArrayList<WorkUnitSpec>();
+						for (int index = 0; index < targets.size(); index++)
+						{
+							units.add(new WorkUnitSpec(
+									index + 1,
+									targets.get(index),
+									1.0,
+									0,
+									0,
+									Double.POSITIVE_INFINITY,
+									mode == SchedulingRunContext.Mode.BASELINE
+											? index % workerCount + 1 : 0,
+									null));
+						}
+						return units;
+					}
+				});
+		final LinkedHashMap<String,TargetResult> results = new LinkedHashMap<String,TargetResult>();
 		final AtomicInteger completedTotal = new AtomicInteger();
 		ExecutorService executor = Executors.newFixedThreadPool(workerCount);
-		ArrayList<Future<WorkerResult>> futures =
-				new ArrayList<Future<WorkerResult>>();
+		ArrayList<Future<WorkerMetrics>> futures = new ArrayList<Future<WorkerMetrics>>();
 		try
 		{
-			for (int workerOffset = 0; workerOffset < workerCount; workerOffset++)
+			for (int node = 1; node <= workerCount; node++)
 			{
-				final int workerIndex = workerOffset + 1;
-				final List<String> assignedTargets = assignments.get(workerOffset);
-				final NodeCapacityProfile capacityProfile =
-						NodeCapacityRegistry.profileForNode(workerIndex);
-				futures.add(executor.submit(new Callable<WorkerResult>()
+				final int workerIndex = node;
+				futures.add(executor.submit(new Callable<WorkerMetrics>()
 				{
-					public WorkerResult call() throws Exception
+					public WorkerMetrics call() throws Exception
 					{
-						long workerStart = System.nanoTime();
-						int completed = 0;
-						if (!baseline)
-						{
-							listener.onWorker(
-									workerIndex,
-									WorkerState.READY,
-									null,
-									0,
-									assignedTargets.size(),
-									0L,
-									NodeCapacityScheduler.assignmentDetail(
-											workerIndex,
-											assignedTargets.size()));
-						}
-						LinkedHashMap<String,TargetResult> results =
-								new LinkedHashMap<String,TargetResult>();
-						try
-						{
-							for (String target : assignedTargets)
-							{
-								token.throwIfCancelled();
-								if (!baseline)
-								{
-									NodeCapacityScheduler.applyPerJobSimulation(
-											capacityProfile,
-											target,
-											workerIndex,
-											new NodeCapacityScheduler.CancellationCheck()
-											{
-												public void throwIfCancelled()
-														throws InterruptedException
-												{
-													token.throwIfCancelled();
-												}
-											});
-								}
-								if (!baseline)
-								{
-									listener.onWorker(
-											workerIndex,
-											WorkerState.RUNNING,
-											target,
-											completed,
-											assignedTargets.size(),
-											elapsedMillis(workerStart),
-											capacityProfile.shortLabel()
-													+ " | computing a complete "
-													+ config.algorithm
-													+ " target job.");
-								}
-								TargetResult result = config.algorithm == Algorithm.SIMILARITY
-										? scoreSimilarity(
-												target, snapshot.tfidf, config.topResults)
-											: scoreSvm(
-													target,
-													preparedSvm,
-													config.topResults,
-													workerIndex,
-													config.algorithmSettings);
-								results.put(target, result);
-								completed++;
-								int totalComplete = completedTotal.incrementAndGet();
-								listener.onProgress(
-										baseline, totalComplete, countAssigned(assignments));
-								if (!baseline)
-								{
-									listener.onTargetResult(
-											target, result.getTopScores());
-								}
-							}
-							if (!baseline)
-							{
-								listener.onWorker(
-										workerIndex,
-										WorkerState.COMPLETE,
-										null,
-										completed,
-										assignedTargets.size(),
-										elapsedMillis(workerStart),
-										"All assigned target jobs completed.");
-							}
-							return new WorkerResult(
-									results,
-									new WorkerMetrics(
-											workerIndex,
-											assignedTargets.size(),
-											completed,
-											elapsedMillis(workerStart)));
-						}
-						catch (InterruptedException exception)
-						{
-							if (!baseline)
-							{
-								listener.onWorker(
-										workerIndex,
-										WorkerState.CANCELLED,
-										null,
-										completed,
-										assignedTargets.size(),
-										elapsedMillis(workerStart),
-										"Cancelled.");
-							}
-							throw exception;
-						}
-						catch (Exception exception)
-						{
-							if (!baseline)
-							{
-								listener.onWorker(
-										workerIndex,
-										WorkerState.FAILED,
-										null,
-										completed,
-										assignedTargets.size(),
-										elapsedMillis(workerStart),
-										exception.getMessage());
-							}
-							throw exception;
-						}
+						return runWorker(config, snapshot, preparedSvm, targets, workerIndex,
+								baseline, context, phase, results, completedTotal, listener, token);
 					}
 				}));
 			}
-			return collectWorkerResults(futures, targets);
+			ArrayList<WorkerMetrics> metrics = new ArrayList<WorkerMetrics>();
+			Exception failure = null;
+			for (Future<WorkerMetrics> future : futures)
+			{
+				try
+				{
+					metrics.add(future.get());
+				}
+				catch (ExecutionException exception)
+				{
+					Throwable cause = exception.getCause();
+					if (failure == null)
+					{
+						failure = cause instanceof Exception
+								? (Exception)cause : new RuntimeException(cause);
+					}
+				}
+			}
+			if (token.isCancelled())
+			{
+				throw new InterruptedException("Population sweep cancelled.");
+			}
+			if (failure != null)
+			{
+				throw failure;
+			}
+			LinkedHashMap<String,TargetResult> ordered = new LinkedHashMap<String,TargetResult>();
+			for (String target : targets)
+			{
+				TargetResult result = results.get(target);
+				if (result == null)
+				{
+					throw new IllegalStateException("Target did not produce a result: " + target);
+				}
+				ordered.put(target, result);
+			}
+			return new ExecutionResult(ordered, metrics);
 		}
 		finally
 		{
+			context.close("population sweep pass finished");
 			executor.shutdownNow();
 		}
 	}
 
-	private static ExecutionResult executeDoc2Vec(
+	/** One node of a pass: its lanes claim target units until the phase completes. */
+	private static WorkerMetrics runWorker(
 			final Config config,
-			List<String> targets,
-			int workerCount,
+			final DatasetSnapshot snapshot,
+			final PreparedSvm preparedSvm,
+			final List<String> targets,
+			final int workerIndex,
 			final boolean baseline,
+			final SchedulingRunContext context,
+			final WorkPhase phase,
+			final Map<String,TargetResult> results,
+			final AtomicInteger completedTotal,
 			final Listener listener,
 			final CancellationToken token) throws Exception
 	{
-		final List<List<String>> assignments = baseline
-				? assignRoundRobin(targets, workerCount)
-				: NodeCapacityScheduler.assignTargetJobs(targets, workerCount);
-		final AtomicInteger completedTotal = new AtomicInteger();
-		ExecutorService executor = Executors.newFixedThreadPool(workerCount);
-		ArrayList<Future<WorkerResult>> futures =
-				new ArrayList<Future<WorkerResult>>();
+		final long workerStart = System.nanoTime();
+		final int[] completed = new int[1];
+		final String profile = context.currentSpecs().get(workerIndex - 1).describe();
+		final Doc2VecWorker[] doc2VecWorkers = new Doc2VecWorker[Math.max(1, context.lanesOf(workerIndex))];
+		if (!baseline)
+		{
+			listener.onWorker(workerIndex, WorkerState.READY, null, 0, 0, 0L, profile);
+		}
 		try
 		{
-			for (int workerOffset = 0; workerOffset < workerCount; workerOffset++)
-			{
-				final int workerIndex = workerOffset + 1;
-				final List<String> assignedTargets = assignments.get(workerOffset);
-				final NodeCapacityProfile capacityProfile =
-						NodeCapacityRegistry.profileForNode(workerIndex);
-				futures.add(executor.submit(new Callable<WorkerResult>()
-				{
-					public WorkerResult call() throws Exception
+			NodeWorkRunner.run(
+					context,
+					phase,
+					workerIndex,
+					new NodeWorkRunner.UnitExecutor()
 					{
-						long workerStart = System.nanoTime();
-						if (!baseline)
+						public NodeWorkRunner.UnitOutput execute(
+								WorkDispatcher.Assignment assignment, int lane) throws Exception
 						{
-							listener.onWorker(
-									workerIndex,
-									WorkerState.READY,
-									null,
-									0,
-									assignedTargets.size(),
-									0L,
-									NodeCapacityScheduler.assignmentDetail(
-											workerIndex,
-											assignedTargets.size())
-									+ " | loading shared Doc2Vec scoring index.");
-						}
-						token.throwIfCancelled();
-						Doc2VecBatchRunner.Result batch = Doc2VecBatchRunner.run(
-								config.pythonCommand,
-								doc2VecScript(),
-								config.topResults,
-								config.datasetFile,
-								1,
-								1,
-									doc2VecTrainingWorkers(),
-									assignedTargets,
-									config.algorithmSettings,
-									new Doc2VecBatchRunner.ProgressListener()
-								{
-									public void onProgress(String event, String detail)
-									{
-										if (!baseline)
-										{
-											listener.onWorker(
-													workerIndex,
-													WorkerState.RUNNING,
-													null,
-													0,
-													assignedTargets.size(),
-													elapsedMillis(workerStart),
-													detail);
-										}
-									}
-								});
-						if (batch.getExitCode() != 0)
-						{
-							throw new IOException(
-									"Doc2Vec worker " + workerIndex
-											+ " exited with code " + batch.getExitCode()
-											+ "." + batch.getDiagnosticSummary());
-						}
-						if (batch.hasUnsafeNumericalDiagnostic())
-						{
-							throw new IOException(
-									"Doc2Vec reported an unsafe numerical runtime diagnostic.");
-						}
-
-						LinkedHashMap<String,TargetResult> results =
-								new LinkedHashMap<String,TargetResult>();
-						int completed = 0;
-						for (String target : assignedTargets)
-						{
-							token.throwIfCancelled();
+							if (token.isCancelled())
+							{
+								phase.close("population sweep cancelled");
+								throw new InterruptedException("Population sweep cancelled.");
+							}
+							String target = targets.get(assignment.getUnitId() - 1);
 							if (!baseline)
 							{
-								NodeCapacityScheduler.applyPerJobSimulation(
-										capacityProfile,
-										target,
-										workerIndex,
-										new NodeCapacityScheduler.CancellationCheck()
-										{
-											public void throwIfCancelled()
-													throws InterruptedException
-											{
-												token.throwIfCancelled();
-											}
-										});
+								listener.onWorker(workerIndex, WorkerState.RUNNING, target,
+										completed[0], completed[0] + 1, elapsedMillis(workerStart),
+										profile + " | computing a complete " + config.algorithm
+												+ " target job.");
+							}
+							if (config.algorithm == Algorithm.SIMILARITY)
+							{
+								return NodeWorkRunner.UnitOutput.measured(
+										scoreSimilarity(target, snapshot.tfidf, config.topResults));
+							}
+							if (config.algorithm == Algorithm.SVM)
+							{
+								ExactSvmWorkerResult[] worker = new ExactSvmWorkerResult[1];
+								TargetResult result = scoreSvm(target, preparedSvm, config.topResults,
+										workerIndex, config.algorithmSettings, worker);
+								return NodeWorkRunner.UnitOutput.external(result,
+										worker[0] == null ? 0L : worker[0].getWorkerCpuNanos());
+							}
+							if (doc2VecWorkers[lane] == null)
+							{
+								doc2VecWorkers[lane] = new Doc2VecWorker(
+										config.pythonCommand,
+										doc2VecScript(),
+										config.datasetFile,
+										doc2VecTrainingWorkers(),
+										config.algorithmSettings,
+										null);
+							}
+							Doc2VecWorker.Scored scored;
+							try
+							{
+								scored = doc2VecWorkers[lane].score(
+										1, 1, config.topResults, Collections.singletonList(target));
+							}
+							catch (IOException failure)
+							{
+								doc2VecWorkers[lane].close();
+								doc2VecWorkers[lane] = null;
+								throw failure;
+							}
+							Doc2VecBatchRunner.Result batch = scored.getResult();
+							if (batch.hasUnsafeNumericalDiagnostic())
+							{
+								throw new IOException(
+										"Doc2Vec reported an unsafe numerical runtime diagnostic.");
 							}
 							if (!batch.isCompleted(target) || batch.hasError(target))
 							{
-								throw new IOException(
-										"Doc2Vec did not complete target " + target
-												+ (batch.hasError(target)
-														? ": " + batch.getErrors().get(target)
-														: "."));
+								throw new IOException("Doc2Vec did not complete target " + target
+										+ (batch.hasError(target) ? ": " + batch.getErrors().get(target) : "."));
 							}
 							TreeMap<String,Double> scores = batch.getScores(target);
-							TargetResult result = buildTargetResult(
-									target,
-									scores == null
-											? Collections.<String,Double>emptyMap()
-											: scores,
-									config.topResults);
-							results.put(target, result);
-							completed++;
-							int totalComplete = completedTotal.incrementAndGet();
-							listener.onProgress(
-									baseline, totalComplete, countAssigned(assignments));
+							return NodeWorkRunner.UnitOutput.external(
+									buildTargetResult(target,
+											scores == null ? Collections.<String,Double>emptyMap() : scores,
+											config.topResults),
+									scored.getCpuNanos());
+						}
+					},
+					new NodeWorkRunner.CommitSink()
+					{
+						public void commit(WorkDispatcher.Assignment assignment, Object value)
+						{
+							TargetResult result = (TargetResult)value;
+							synchronized (results)
+							{
+								if (results.put(result.getTarget(), result) != null)
+								{
+									throw new IllegalStateException(
+											"Target was completed more than once: " + result.getTarget());
+								}
+							}
+							completed[0]++;
+							listener.onProgress(baseline, completedTotal.incrementAndGet(), targets.size());
 							if (!baseline)
 							{
-								listener.onTargetResult(
-										target, result.getTopScores());
-								listener.onWorker(
-										workerIndex,
-										WorkerState.RUNNING,
-										target,
-										completed,
-										assignedTargets.size(),
-										elapsedMillis(workerStart),
-										capacityProfile.shortLabel()
-												+ " | scored " + completed + " of "
-												+ assignedTargets.size() + " assigned targets.");
+								listener.onTargetResult(result.getTarget(), result.getTopScores());
 							}
 						}
-						if (!baseline)
-						{
-							listener.onWorker(
-									workerIndex,
-									WorkerState.COMPLETE,
-									null,
-									completed,
-									assignedTargets.size(),
-									elapsedMillis(workerStart),
-									"All assigned target jobs completed.");
-						}
-						return new WorkerResult(
-								results,
-								new WorkerMetrics(
-										workerIndex,
-										assignedTargets.size(),
-										completed,
-										elapsedMillis(workerStart)));
-					}
-				}));
+					});
+		}
+		catch (RuntimeException failure)
+		{
+			if (!baseline)
+			{
+				listener.onWorker(workerIndex,
+						token.isCancelled() ? WorkerState.CANCELLED : WorkerState.FAILED,
+						null, completed[0], completed[0], elapsedMillis(workerStart),
+						token.isCancelled() ? "Cancelled." : failure.getMessage());
 			}
-			return collectWorkerResults(futures, targets);
+			throw failure;
 		}
 		finally
 		{
-			executor.shutdownNow();
-		}
-	}
-
-	private static ExecutionResult collectWorkerResults(
-			List<Future<WorkerResult>> futures,
-			List<String> targetOrder) throws Exception
-	{
-		Map<String,TargetResult> unordered =
-				new LinkedHashMap<String,TargetResult>();
-		ArrayList<WorkerMetrics> metrics = new ArrayList<WorkerMetrics>();
-		for (Future<WorkerResult> future : futures)
-		{
-			try
+			for (Doc2VecWorker worker : doc2VecWorkers)
 			{
-				WorkerResult workerResult = future.get();
-				for (Map.Entry<String,TargetResult> entry
-						: workerResult.results.entrySet())
+				if (worker != null)
 				{
-					if (unordered.put(entry.getKey(), entry.getValue()) != null)
-					{
-						throw new IllegalStateException(
-								"Target was completed more than once: " + entry.getKey());
-					}
+					worker.close();
 				}
-				metrics.add(workerResult.metrics);
-			}
-			catch (ExecutionException exception)
-			{
-				Throwable cause = exception.getCause();
-				if (cause instanceof Exception)
-				{
-					throw (Exception)cause;
-				}
-				throw new RuntimeException(cause);
 			}
 		}
-		LinkedHashMap<String,TargetResult> ordered =
-				new LinkedHashMap<String,TargetResult>();
-		for (String target : targetOrder)
+		if (!baseline)
 		{
-			TargetResult result = unordered.get(target);
-			if (result == null)
-			{
-				throw new IllegalStateException(
-						"Target did not produce a result: " + target);
-			}
-			ordered.put(target, result);
+			listener.onWorker(workerIndex, WorkerState.COMPLETE, null, completed[0], completed[0],
+					elapsedMillis(workerStart), profile + " | "
+							+ context.emulator(workerIndex).getLedger().summary());
 		}
-		Collections.sort(metrics, new Comparator<WorkerMetrics>()
-		{
-			public int compare(WorkerMetrics first, WorkerMetrics second)
-			{
-				return Integer.compare(
-						first.workerIndex, second.workerIndex);
-			}
-		});
-		return new ExecutionResult(ordered, metrics);
+		return new WorkerMetrics(workerIndex, completed[0], completed[0], elapsedMillis(workerStart));
 	}
 
 	private static TargetResult scoreSimilarity(
@@ -1126,12 +985,18 @@ final class ExactPopulationSweepEngine
 		return buildTargetResult(target, scores, topResults);
 	}
 
+	/**
+	 * One target's SVM job: a model trained on the stratified split of every
+	 * other labelled user (the target is held out of its own training data),
+	 * applied to the target.
+	 */
 	private static TargetResult scoreSvm(
 			String target,
 			PreparedSvm prepared,
 			int topResults,
 			int workerIndex,
-			AlgorithmParameterSettings settings) throws Exception
+			AlgorithmParameterSettings settings,
+			ExactSvmWorkerResult[] workerOut) throws Exception
 	{
 		if (prepared == null)
 		{
@@ -1143,80 +1008,86 @@ final class ExactPopulationSweepEngine
 			throw new IllegalArgumentException(
 					"Target has no prepared TF-IDF document: " + target);
 		}
-
+		LinkedHashMap<String,List<String>> usersByClass = new LinkedHashMap<String,List<String>>();
+		for (Map.Entry<String,List<String>> entry : prepared.usersByClass.entrySet())
+		{
+			ArrayList<String> members = new ArrayList<String>(entry.getValue());
+			members.remove(target);
+			usersByClass.put(entry.getKey(), members);
+		}
+		SvmReproducibility.Split split = SvmReproducibility.stratifiedSplit(usersByClass, TEST_SET_PERCENT);
+		File trainFile = File.createTempFile(
+				"exact-sweep-train-" + workerIndex + "-", ".arff", prepared.directory);
 		File recommendFile = File.createTempFile(
-				"exact-sweep-recommend-" + workerIndex + "-", ".arff",
-				prepared.directory);
+				"exact-sweep-recommend-" + workerIndex + "-", ".arff", prepared.directory);
 		try
 		{
+			try (BufferedWriter writer = new BufferedWriter(
+					new java.io.OutputStreamWriter(
+							new FileOutputStream(trainFile),
+							StandardCharsets.UTF_8)))
+			{
+				SparseArffWriter.writeHeader(writer, "trainingSet", prepared.terms, prepared.classes);
+				for (String user : split.getTrainUsers())
+				{
+					SparseArffWriter.writeIndexedRow(writer, prepared.tfidf.get(user),
+							prepared.termIndex, prepared.terms.size(), prepared.userFollowees.get(user));
+				}
+			}
 			try (BufferedWriter writer = new BufferedWriter(
 					new java.io.OutputStreamWriter(
 							new FileOutputStream(recommendFile),
 							StandardCharsets.UTF_8)))
 			{
-				SparseArffWriter.writeHeader(
-						writer,
-						"recommendSet",
-						prepared.terms,
-						prepared.classes);
-				SparseArffWriter.writeRow(
-						writer,
-						targetDocument,
-						prepared.terms,
-						prepared.userFollowees.get(target));
+				SparseArffWriter.writeHeader(writer, "recommendSet", prepared.terms, prepared.classes);
+				SparseArffWriter.writeIndexedRow(writer, targetDocument,
+						prepared.termIndex, prepared.terms.size(), prepared.userFollowees.get(target));
 			}
-
 			ExactSvmWorkerResult workerResult = ExactSvmWorkerRunner.run(
 					"Exact-Sweep-Node-" + workerIndex,
 					"SVM target " + target,
 					null,
-					prepared.trainFile,
+					trainFile,
 					prepared.emptyTestFile,
-						recommendFile,
-						prepared.terms.size(),
-						prepared.trainUsers.size(),
-						prepared.classes.size(),
-						settings);
-				String predictedClass =
-						workerResult.getPredictedClasses().get(0);
-				double[] distribution =
-						workerResult.getDistributions().get(0);
-				TreeMap<String,Double> scores = new TreeMap<String,Double>();
-				for (String className : prepared.classes)
+					recommendFile,
+					prepared.terms.size(),
+					split.getTrainUsers().size(),
+					prepared.classes.size(),
+					settings);
+			workerOut[0] = workerResult;
+			String predictedClass = workerResult.getPredictedClasses().get(0);
+			double[] distribution = workerResult.getDistributions().get(0);
+			TreeMap<String,Double> scores = new TreeMap<String,Double>();
+			for (String className : prepared.classes)
+			{
+				scores.put(className, 0.0);
+			}
+			if (distribution != null)
+			{
+				for (int index = 0; index < distribution.length; index++)
 				{
-					scores.put(className, 0.0);
+					double score = distribution[index];
+					scores.put(workerResult.getClassNames().get(index), Double.isFinite(score) ? score : 0.0);
 				}
-				if (distribution != null)
+			}
+			boolean positive = false;
+			for (Double score : scores.values())
+			{
+				if (score != null && score > 0.0)
 				{
-					for (int index = 0; index < distribution.length; index++)
-					{
-						double score = distribution[index];
-						if (!Double.isFinite(score))
-						{
-							score = 0.0;
-						}
-						scores.put(
-								workerResult.getClassNames().get(index),
-								score);
-					}
+					positive = true;
+					break;
 				}
-				boolean positive = false;
-				for (Double score : scores.values())
-				{
-					if (score != null && score > 0.0)
-					{
-						positive = true;
-						break;
-					}
-				}
-				if (!positive && scores.containsKey(predictedClass))
-				{
-					scores.put(predictedClass, 1.0);
-				}
-				return buildTargetResult(target, scores, topResults);
+			}
+			if (!positive && scores.containsKey(predictedClass))
+			{
+				scores.put(predictedClass, 1.0);
+			}
+			return buildTargetResult(target, scores, topResults);
 		}
 		finally
 		{
+			Files.deleteIfExists(trainFile.toPath());
 			Files.deleteIfExists(recommendFile.toPath());
 		}
 	}
@@ -1251,8 +1122,7 @@ final class ExactPopulationSweepEngine
 		SvmReproducibility.Split split =
 				SvmReproducibility.stratifiedSplit(
 						usersByClass, TEST_SET_PERCENT);
-		ArrayList<String> trainUsers = split.getTrainUsers();
-		if (trainUsers.size() < 2)
+		if (split.getTrainUsers().size() < 2)
 		{
 			throw new IllegalArgumentException(
 					"SVM needs at least two training users after the deterministic split.");
@@ -1262,36 +1132,20 @@ final class ExactPopulationSweepEngine
 		{
 			terms.addAll(document.keySet());
 		}
+		LinkedHashMap<String,Integer> termIndex = new LinkedHashMap<String,Integer>();
+		for (String term : terms)
+		{
+			termIndex.put(term, Integer.valueOf(termIndex.size()));
+		}
 		ArrayList<String> classes =
 				SvmReproducibility.sortedNonNullValues(usersByClass.keySet());
-		// Every sweep worker trains the same full exact model; worker count
-		// parallelizes targets, not the model's class space.
+		// Every target's model is a full exact model; worker count parallelizes
+		// targets, not the model's class space.
 		ExactSvmWorkerRunner.validateBestCaseStructure(
-				trainUsers.size(), classes.size(), 1);
+				split.getTrainUsers().size(), classes.size(), 1);
 		File directory = Files.createTempDirectory(
 				"exact-population-svm-").toFile();
-		File trainFile = new File(directory, "training.arff");
 		File emptyTestFile = new File(directory, "empty-test.arff");
-		try (BufferedWriter writer = new BufferedWriter(
-				new java.io.OutputStreamWriter(
-						new FileOutputStream(trainFile),
-						StandardCharsets.UTF_8)))
-		{
-			SparseArffWriter.writeHeader(
-					writer, "trainingSet", terms, classes);
-			for (String user : trainUsers)
-			{
-				Map<String,Double> document = snapshot.tfidf.get(user);
-				if (document != null)
-				{
-					SparseArffWriter.writeRow(
-							writer,
-							document,
-							terms,
-							snapshot.userFollowees.get(user));
-				}
-			}
-		}
 		try (BufferedWriter writer = new BufferedWriter(
 				new java.io.OutputStreamWriter(
 						new FileOutputStream(emptyTestFile),
@@ -1302,15 +1156,16 @@ final class ExactPopulationSweepEngine
 		}
 		return new PreparedSvm(
 				directory,
-				trainFile,
 				emptyTestFile,
 				terms,
+				termIndex,
 				classes,
-				trainUsers,
+				usersByClass,
 				snapshot.tfidf,
 				snapshot.userFollowees);
 	}
 
+	/** Prepares the shared Doc2Vec model once, before any worker times its jobs. */
 	private static void warmDoc2Vec(
 			Config config,
 			String firstTarget,
@@ -1318,31 +1173,35 @@ final class ExactPopulationSweepEngine
 			CancellationToken token) throws Exception
 	{
 		token.throwIfCancelled();
-		Doc2VecBatchRunner.Result warmup = Doc2VecBatchRunner.run(
+		Doc2VecWorker worker = new Doc2VecWorker(
 				config.pythonCommand,
 				doc2VecScript(),
-				1,
 				config.datasetFile,
-				1,
-				1,
-					doc2VecTrainingWorkers(),
-					Collections.singletonList(firstTarget),
-					config.algorithmSettings,
-					new Doc2VecBatchRunner.ProgressListener()
+				doc2VecTrainingWorkers(),
+				config.algorithmSettings,
+				new Doc2VecBatchRunner.ProgressListener()
 				{
 					public void onProgress(String event, String detail)
 					{
 						listener.onPhase("PREPARING DOC2VEC", detail);
 					}
 				});
-		if (warmup.getExitCode() != 0
-				|| warmup.hasError(firstTarget)
-				|| !warmup.isCompleted(firstTarget)
-				|| warmup.hasUnsafeNumericalDiagnostic())
+		try
 		{
-			throw new IOException(
-					"Doc2Vec shared-model preparation failed."
-							+ warmup.getDiagnosticSummary());
+			Doc2VecBatchRunner.Result warmup = worker.score(
+					1, 1, 1, Collections.singletonList(firstTarget)).getResult();
+			if (warmup.hasError(firstTarget)
+					|| !warmup.isCompleted(firstTarget)
+					|| warmup.hasUnsafeNumericalDiagnostic())
+			{
+				throw new IOException(
+						"Doc2Vec shared-model preparation failed."
+								+ warmup.getDiagnosticSummary());
+			}
+		}
+		finally
+		{
+			worker.close();
 		}
 	}
 
@@ -1356,11 +1215,11 @@ final class ExactPopulationSweepEngine
 	private static File doc2VecScript()
 	{
 		File script = new File(
-				"TwitterGatherDataFollowers/userRyersonU/doc2vec_batch.py");
+				"TwitterGatherDataFollowers/userRyersonU/doc2vec_worker.py");
 		if (!script.isFile())
 		{
 			throw new IllegalStateException(
-					"Doc2Vec batch script is unavailable: "
+					"Doc2Vec worker script is unavailable: "
 							+ script.getAbsolutePath());
 		}
 		return script;
@@ -1441,49 +1300,15 @@ final class ExactPopulationSweepEngine
 			boolean removeRetweets,
 			boolean removeStopWords)
 	{
-		String currentText = text == null ? "" : text;
-		if (currentText.contains("Photo:"))
-		{
-			currentText = currentText.substring(0, currentText.indexOf("Photo:"));
-		}
-		if (currentText.contains("Photoset:"))
-		{
-			currentText = currentText.substring(
-					0, currentText.indexOf("Photoset:"));
-		}
-		if (currentText.contains("RT @") && removeRetweets)
-		{
-			currentText = "";
-		}
-		else
-		{
-			currentText = RETWEET_PATTERN.matcher(currentText).replaceAll("RT ");
-		}
-		currentText = PUNCTUATION_PATTERN.matcher(currentText).replaceAll("");
-		currentText = LINK_PATTERN.matcher(currentText).replaceAll(" ");
-		if (removeHashtags)
-		{
-			currentText = SPECIAL_CHARACTER_PATTERN.matcher(
-					currentText).replaceAll(" ");
-		}
-		currentText = currentText.toLowerCase(Locale.US);
-		if (removeStopWords)
-		{
-			String padded = " " + currentText + " ";
-			for (String stopWord : RecommenderAgent.stopWordsArray)
-			{
-				String pattern = " " + stopWord + " ";
-				if (padded.contains(pattern))
-				{
-					padded = padded.replace(pattern, " ");
-				}
-			}
-			currentText = padded;
-		}
-		currentText = currentText.trim();
-		currentText = NON_ALPHA_PATTERN.matcher(currentText).replaceAll("");
-		currentText = MULTI_SPACE_PATTERN.matcher(currentText).replaceAll(" ");
-		currentText = currentText.trim();
+		//Shared with the controller and every recommender node. A private copy of
+		//this pipeline here would make sweep statistics describe a tokenisation the
+		//simulator never actually performs.
+		String currentText = TweetTextNormalizer.normalize(
+				text,
+				removeRetweets,
+				removeHashtags,
+				removeStopWords,
+				SWEEP_STOP_WORDS);
 		if (currentText.length() == 0)
 		{
 			return Collections.emptyList();
@@ -1662,32 +1487,6 @@ final class ExactPopulationSweepEngine
 		}
 	}
 
-	private static List<List<String>> assignRoundRobin(
-			List<String> targets,
-			int workerCount)
-	{
-		ArrayList<List<String>> assignments = new ArrayList<List<String>>();
-		for (int worker = 0; worker < workerCount; worker++)
-		{
-			assignments.add(new ArrayList<String>());
-		}
-		for (int index = 0; index < targets.size(); index++)
-		{
-			assignments.get(index % workerCount).add(targets.get(index));
-		}
-		return assignments;
-	}
-
-	private static int countAssigned(List<List<String>> assignments)
-	{
-		int total = 0;
-		for (List<String> assignment : assignments)
-		{
-			total += assignment.size();
-		}
-		return total;
-	}
-
 	private static long elapsedMillis(long startNanos)
 	{
 		return Math.max(0L, (System.nanoTime() - startNanos) / 1000000L);
@@ -1795,30 +1594,30 @@ final class ExactPopulationSweepEngine
 	private static final class PreparedSvm
 	{
 		private final File directory;
-		private final File trainFile;
 		private final File emptyTestFile;
 		private final TreeSet<String> terms;
+		private final Map<String,Integer> termIndex;
 		private final ArrayList<String> classes;
-		private final ArrayList<String> trainUsers;
+		private final Map<String,List<String>> usersByClass;
 		private final LinkedHashMap<String,LinkedHashMap<String,Double>> tfidf;
 		private final LinkedHashMap<String,String> userFollowees;
 
 		private PreparedSvm(
 				File directory,
-				File trainFile,
 				File emptyTestFile,
 				TreeSet<String> terms,
+				Map<String,Integer> termIndex,
 				ArrayList<String> classes,
-				ArrayList<String> trainUsers,
+				Map<String,List<String>> usersByClass,
 				LinkedHashMap<String,LinkedHashMap<String,Double>> tfidf,
 				LinkedHashMap<String,String> userFollowees)
 		{
 			this.directory = directory;
-			this.trainFile = trainFile;
 			this.emptyTestFile = emptyTestFile;
 			this.terms = terms;
+			this.termIndex = termIndex;
 			this.classes = classes;
-			this.trainUsers = trainUsers;
+			this.usersByClass = usersByClass;
 			this.tfidf = tfidf;
 			this.userFollowees = userFollowees;
 		}
@@ -1826,20 +1625,6 @@ final class ExactPopulationSweepEngine
 		private void close()
 		{
 			deleteRecursively(directory);
-		}
-	}
-
-	private static final class WorkerResult
-	{
-		private final LinkedHashMap<String,TargetResult> results;
-		private final WorkerMetrics metrics;
-
-		private WorkerResult(
-				LinkedHashMap<String,TargetResult> results,
-				WorkerMetrics metrics)
-		{
-			this.results = results;
-			this.metrics = metrics;
 		}
 	}
 

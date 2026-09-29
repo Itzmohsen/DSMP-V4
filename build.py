@@ -928,6 +928,122 @@ def doctor():
         perr(f"Doctor check failed unexpectedly: {error}")
 
 
+# Self-tests that take a dataset path or other required argument. They are tools
+# rather than assertions, so the suite runner skips them instead of failing.
+PARAMETERIZED_SELF_TESTS = {
+    "MillionRowIngestionSelfTest",
+    "MillionRowSparseSvmSelfTest",
+}
+
+
+def self_test_module_flags():
+    """--add-opens flags the bundled jars need on Java 9 and newer."""
+    flags = []
+    major = check_java_runtime()
+    if major and major >= 9:
+        for module in [
+            "java.base/java.lang",
+            "java.base/java.io",
+            "java.base/java.util",
+            "java.base/java.util.concurrent",
+            "java.base/sun.nio.ch",
+            "java.base/java.net",
+        ]:
+            flags.extend(["--add-opens", f"{module}=ALL-UNNAMED"])
+    return flags
+
+
+def run_self_tests():
+    """Compiles the Java self-test suite and runs every no-argument test.
+
+    A test passes when it exits zero and prints a line containing "passed";
+    anything else is reported and fails the command, so a broken assertion
+    cannot be mistaken for success.
+    """
+    compile_java(force=False)
+    check_tool("javac", "Java Compiler (JDK)", "test")
+    check_java_runtime()
+
+    sources = java_source_files(include_tests=True)
+    if not sources:
+        perr(f"No Java source files found under {SRC_DIR}")
+
+    test_classes_dir = os.path.join(PROJECT_ROOT, "classes-test")
+    if os.path.isdir(test_classes_dir):
+        shutil.rmtree(test_classes_dir, ignore_errors=True)
+    os.makedirs(test_classes_dir, exist_ok=True)
+
+    jars = [os.path.join(LIB_DIR, name) for name in os.listdir(LIB_DIR) if name.endswith(".jar")]
+    classpath = os.pathsep.join([CLASSES_DIR] + sorted(jars))
+
+    sources_file = os.path.join(PROJECT_ROOT, "test-sources.txt")
+    classpath_file = os.path.join(PROJECT_ROOT, "test-classpath.txt")
+    try:
+        with open(sources_file, "w", encoding="utf-8") as handle:
+            for source in sources:
+                handle.write('"%s"\n' % source.replace("\\", "/"))
+        with open(classpath_file, "w", encoding="utf-8") as handle:
+            handle.write("-cp\n")
+            handle.write('"%s"\n' % classpath.replace("\\", "/"))
+
+        pinfo(f"Compiling {len(sources)} Java source files (including tests)...")
+        run_cmd([
+            "javac",
+            "-nowarn",
+            "-encoding", "UTF-8",
+            "@test-classpath.txt",
+            "-d", test_classes_dir,
+            "@test-sources.txt",
+        ], error_msg_on_fail="Java test compilation failed")
+    finally:
+        for path in (sources_file, classpath_file):
+            if os.path.exists(path):
+                os.remove(path)
+
+    run_classpath = os.pathsep.join([test_classes_dir, CLASSES_DIR] + sorted(jars))
+    test_names = sorted(
+        os.path.basename(path)[:-5]
+        for path in java_source_files(include_tests=True)
+        if path.startswith(TEST_SRC_DIR) and os.path.basename(path).endswith("SelfTest.java")
+    )
+
+    passed, failed, skipped = [], [], []
+    for name in test_names:
+        if name in PARAMETERIZED_SELF_TESTS:
+            skipped.append(name)
+            continue
+        class_name = "TwitterGatherDataFollowers.userRyersonU." + name
+        try:
+            completed = subprocess.run(
+                ["java"] + self_test_module_flags() + ["-cp", run_classpath, class_name],
+                cwd=PROJECT_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=900,
+            )
+            output = completed.stdout or ""
+            ok = completed.returncode == 0 and "passed" in output
+        except Exception as error:  # noqa: BLE001 - report, never abort the sweep
+            output = str(error)
+            ok = False
+        if ok:
+            passed.append(name)
+            pinfo(f"PASS {name}")
+        else:
+            failed.append(name)
+            print(f"FAIL {name}")
+            for line in (output or "").strip().splitlines()[-12:]:
+                print(f"     {line}")
+
+    print("")
+    pinfo(f"Self-tests: {len(passed)} passed, {len(failed)} failed, {len(skipped)} skipped.")
+    if skipped:
+        pinfo("Skipped (require arguments): " + ", ".join(skipped))
+    if failed:
+        perr("Failing self-tests: " + ", ".join(failed))
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="DSMP reliable build and launch tool",
@@ -937,6 +1053,7 @@ def parse_args():
               python build.py launch      Prepare everything and open the GUI
               python build.py doctor      Check this clone without starting the GUI
               python build.py rebuild     Recompile Java from scratch
+              python build.py test        Compile and run the Java self-test suite
         """),
     )
     parser.add_argument(
@@ -950,6 +1067,7 @@ def parse_args():
             "compile",
             "run",
             "rebuild",
+            "test",
             "doctor",
             "info",
             "clean",
@@ -986,6 +1104,8 @@ def main():
     elif args.command == "rebuild":
         clean_java_output()
         compile_java(force=True)
+    elif args.command == "test":
+        run_self_tests()
     elif args.command == "doctor":
         doctor()
     elif args.command == "info":

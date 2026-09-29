@@ -122,8 +122,9 @@ final class NodeCapacitySettingsDialog extends JDialog
 		title.setForeground(TEXT);
 		title.setAlignmentX(Component.LEFT_ALIGNMENT);
 		Paragraph detail = new Paragraph(
-				"Set each recommender node's scheduling contract. "
-				+ "Recommendation scoring stays untouched.",
+				"Set each recommender node's capacity. In the scheduled modes it decides "
+				+ "where work runs and is emulated live, so it changes run timing; "
+				+ "recommendations are identical for every capacity profile.",
 				NebulaDesign.fontBody(12.5f),
 				MUTED,
 				420);
@@ -141,7 +142,7 @@ final class NodeCapacitySettingsDialog extends JDialog
 				RuntimeResourceSettings.formatMegabytes(heapMb),
 				"current run limit", GREEN));
 		stats.add(new SummaryCard("Contract",
-				"Scoring-safe", "scheduler hints only", AMBER));
+				"Placement", "changes timing, not scores", AMBER));
 		header.add(copy, BorderLayout.CENTER);
 		header.add(stats, BorderLayout.EAST);
 		return header;
@@ -153,19 +154,19 @@ final class NodeCapacitySettingsDialog extends JDialog
 		panel.setOpaque(false);
 		panel.add(new PolicyCard(
 				"CPU multiplier",
-				"Relative processing capacity used by scheduling experiments.",
+				"Relative speed. Emulated runs slow a node to cpu x scale / fastest / slowdown.",
 				BLUE));
 		panel.add(new PolicyCard(
 				"Memory budget",
-				"Per-node model budget hint. The global heap and safe-wave scheduler still protect the JVM.",
+				"Memory a node may commit to running units; the memory-aware policy admits units only where they fit.",
 				GREEN));
 		panel.add(new PolicyCard(
 				"Queues and jobs",
-				"How much work a node should accept in scheduling scenarios.",
+				"Lanes run units at once; the queue caps how many units a node holds claimed.",
 				AMBER));
 		panel.add(new PolicyCard(
 				"Failure and slowdown",
-				"Stored for what-if simulation. Not injected into live scoring by default.",
+				"Link delay and slowdown are emulated in scheduled modes; failures are injected only in fault-injection mode.",
 				NebulaDesign.PURPLE));
 		return panel;
 	}
@@ -361,16 +362,16 @@ final class NodeCapacitySettingsDialog extends JDialog
 				? "Original DSMP default is selected: all requested nodes run "
 						+ "with the same neutral capacity contract they would have "
 						+ "had before this feature existed."
-				: "These values now drive capacity-aware work assignment. "
-						+ "They change which node receives more work, not the "
-						+ "recommendation model formulas or candidate-score math.";
+				: "In the scheduled modes these values decide where work runs and "
+						+ "are emulated live (speed, lanes, memory, queue, link delay). "
+						+ "They change timing, never the recommendations.";
 		if (memoryTotal > heapMb)
 		{
 			warning += " Total node budget exceeds the Java heap, so safe waves may be needed.";
 		}
 		if (simulated > 0)
 		{
-			warning += " Delay, slowdown, and failure simulation are applied in the Exact Multi-Node Lab so what-if scheduling scenarios stay isolated from normal scoring runs.";
+			warning += " Delay and slowdown are emulated in the scheduled modes; failures are injected only in the fault-injection mode, and failed units are retried exactly once each.";
 		}
 		warningLabel.setText(warning);
 	}

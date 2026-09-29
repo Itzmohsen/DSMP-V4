@@ -3,11 +3,17 @@ package TwitterGatherDataFollowers.userRyersonU;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
+/**
+ * The Scheduler Lab: what-if scheduling of synthetic recommender workloads.
+ *
+ * The lab no longer has scheduling rules of its own. It runs the workload
+ * through {@link WorkDispatcher}, the dispatcher the live simulator uses, in
+ * virtual time ({@link SchedulingSimulator}), so a policy's behaviour here is
+ * exactly its behaviour in a live run with the same node profiles.
+ */
 final class SchedulerLabEngine
 {
 	enum WorkloadUnitType
@@ -84,41 +90,47 @@ final class SchedulerLabEngine
 		}
 	}
 
+	/**
+	 * The scheduling policies. Each has one precise definition, implemented once
+	 * by {@link PlacementPlanner} (static placement) and {@link WorkDispatcher}
+	 * (execution), and shared by the Scheduler Lab, the Dynamic Queue Lab and the
+	 * live simulator.
+	 */
 	enum SchedulingPolicy
 	{
 		STATIC_EQUAL_SPLIT(
 				"Static equal split",
-				"baseline: jobs are divided evenly by index"),
+				"static baseline: contiguous blocks of equal size in canonical order; ignores cost and speed"),
 		ROUND_ROBIN(
 				"Round robin",
-				"each next job moves to the next node"),
+				"static: unit k goes to node k mod N; ignores cost and speed"),
 		WEIGHTED_ROUND_ROBIN(
 				"Weighted round robin",
-				"strong nodes receive more turns"),
+				"static: smooth weighted round robin; unit counts proportional to node throughput"),
 		LEAST_LOADED_NODE(
 				"Least loaded node",
-				"new work goes to the node with the smallest planned load"),
+				"static: each unit to the node with the least assigned cost (Graham list scheduling); ignores speed"),
 		FASTEST_NODE_FIRST(
 				"Fastest node first",
-				"highest capacity node fills first, then others"),
+				"static: each unit to the node that frees up first, ties to the fastest; ignores unit size"),
 		MEMORY_AWARE_SAFE_WAVE(
 				"Memory-aware safe-wave",
-				"starts only the jobs that fit the active memory budget"),
+				"dynamic: largest memory first; a unit starts only where it fits the free memory budget, the rest wait for the next wave"),
 		CAPACITY_WEIGHTED(
 				"Capacity-weighted",
-				"uses CPU, memory, queue, delay, slowdown, and failure hints"),
+				"static: largest units first, each to the node where it finishes earliest (LPT-EFT)"),
 		QUEUE_LENGTH(
 				"Queue-length",
-				"chooses the shortest eligible queue"),
+				"dynamic: idle lanes pull from one queue; simultaneous requests favour the shortest node queue"),
 		WORK_STEALING(
 				"Work stealing",
-				"idle nodes pull queued work from busier nodes"),
+				"dynamic: starts from the capacity-weighted plan; idle nodes steal from the node with the most remaining work"),
 		DEADLINE_PRIORITY(
 				"Deadline / priority",
-				"higher priority and earlier deadline jobs are placed first"),
+				"dynamic: highest priority, then earliest deadline first; urgent units go to the fastest idle node"),
 		FAILURE_AWARE_RESCHEDULING(
 				"Failure-aware rescheduling",
-				"failed jobs retry on more reliable eligible nodes");
+				"dynamic: failed units retry away from the node that failed them, preferring reliable throughput");
 
 		private final String label;
 		private final String description;
@@ -137,6 +149,12 @@ final class SchedulerLabEngine
 		String getDescription()
 		{
 			return description;
+		}
+
+		/** True for policies that rebalance while the work runs. */
+		boolean isDynamic()
+		{
+			return WorkDispatcher.modeOf(this) != WorkDispatcher.ExecutionMode.STATIC;
 		}
 
 		public String toString()
@@ -346,16 +364,19 @@ final class SchedulerLabEngine
 			return queuePeak;
 		}
 
+		/** Ticks of work executed on the node (cost / speed, all executions). */
 		long getPlannedCost()
 		{
 			return plannedCost;
 		}
 
+		/** Lane-ticks spent executing. */
 		long getBusyTicks()
 		{
 			return busyTicks;
 		}
 
+		/** Lane-ticks idle before the run finished. */
 		long getIdleTicks()
 		{
 			return idleTicks;
@@ -384,6 +405,7 @@ final class SchedulerLabEngine
 		private final long totalBusyTicks;
 		private final long totalIdleTicks;
 		private final int heapMb;
+		private final double lowerBoundTicks;
 
 		Result(
 				SchedulingPolicy policy,
@@ -400,7 +422,8 @@ final class SchedulerLabEngine
 				int makespanTicks,
 				long totalBusyTicks,
 				long totalIdleTicks,
-				int heapMb)
+				int heapMb,
+				double lowerBoundTicks)
 		{
 			this.policy = policy;
 			this.template = template;
@@ -421,6 +444,7 @@ final class SchedulerLabEngine
 			this.totalBusyTicks = totalBusyTicks;
 			this.totalIdleTicks = totalIdleTicks;
 			this.heapMb = heapMb;
+			this.lowerBoundTicks = lowerBoundTicks;
 		}
 
 		SchedulingPolicy getPolicy()
@@ -498,6 +522,21 @@ final class SchedulerLabEngine
 			return heapMb;
 		}
 
+		/**
+		 * A lower bound on any schedule's makespan for this workload and these
+		 * nodes: max(total work / total throughput, largest unit / fastest node).
+		 */
+		double getLowerBoundTicks()
+		{
+			return lowerBoundTicks;
+		}
+
+		/** Makespan divided by the lower bound (1.0 is provably optimal). */
+		double efficiencyRatio()
+		{
+			return lowerBoundTicks <= 0.0 ? 1.0 : makespanTicks / lowerBoundTicks;
+		}
+
 		double utilization()
 		{
 			long denominator = totalBusyTicks + totalIdleTicks;
@@ -509,69 +548,10 @@ final class SchedulerLabEngine
 		}
 	}
 
-	private static final class JobState
-	{
-		private final WorkloadUnit job;
-		private int attempts;
-
-		JobState(WorkloadUnit job)
-		{
-			this.job = job;
-		}
-	}
-
-	private static final class RunningJob
-	{
-		private final JobState state;
-		private int remainingTicks;
-
-		RunningJob(JobState state, int remainingTicks)
-		{
-			this.state = state;
-			this.remainingTicks = remainingTicks;
-		}
-	}
-
-	private static final class NodeRuntime
-	{
-		private final NodeSummary summary;
-		private final ArrayList<JobState> queue = new ArrayList<JobState>();
-		private final ArrayList<RunningJob> running =
-				new ArrayList<RunningJob>();
-
-		NodeRuntime(NodeSummary summary)
-		{
-			this.summary = summary;
-		}
-	}
-
-	private static final class SimulationState
-	{
-		private final SchedulingPolicy policy;
-		private final int heapMb;
-		private final ArrayList<NodeRuntime> nodes;
-		private final ArrayList<JobState> backlog;
-		private final ArrayList<TimelineEvent> events =
-				new ArrayList<TimelineEvent>();
-		private final ArrayList<String> logLines = new ArrayList<String>();
-		private long activeMemoryMb;
-		private int roundRobinCursor;
-		private int completedJobs;
-		private int failedJobs;
-		private int retriedJobs;
-
-		SimulationState(
-				SchedulingPolicy policy,
-				int heapMb,
-				ArrayList<NodeRuntime> nodes,
-				ArrayList<JobState> backlog)
-		{
-			this.policy = policy;
-			this.heapMb = heapMb;
-			this.nodes = nodes;
-			this.backlog = backlog;
-		}
-	}
+	/** Milliseconds represented by one lab tick of reference work. */
+	static final double MILLISECONDS_PER_TICK = 100.0;
+	/** Fixed seed so injected failures are reproducible run to run. */
+	static final long FAULT_SEED = 20260928L;
 
 	private SchedulerLabEngine()
 	{
@@ -594,6 +574,14 @@ final class SchedulerLabEngine
 		return jobs;
 	}
 
+	/**
+	 * Runs the workload through the shared work dispatcher in virtual time.
+	 *
+	 * One tick is 100 ms of reference work. Node speed, lanes, memory budget,
+	 * link delay and failure probability come from the capacity profiles exactly
+	 * as the live simulator interprets them; failure injection is on when any
+	 * profile enables it. Jobs no node could ever hold are skipped and reported.
+	 */
 	static Result simulate(
 			List<NodeCapacityProfile> profiles,
 			SchedulingPolicy policy,
@@ -605,90 +593,225 @@ final class SchedulerLabEngine
 				? SchedulingPolicy.CAPACITY_WEIGHTED : policy;
 		WorkloadTemplate safeTemplate = template == null
 				? WorkloadTemplate.BALANCED_RECOMMENDER_RUN : template;
-		ArrayList<NodeCapacityProfile> safeProfiles =
-				sanitizeProfiles(profiles, heapMb);
-		ArrayList<NodeRuntime> runtimes = new ArrayList<NodeRuntime>();
+		ArrayList<NodeCapacityProfile> safeProfiles = sanitizeProfiles(profiles, heapMb);
+		int safeHeap = Math.max(RuntimeResourceSettings.MIN_HEAP_MB, heapMb);
+		List<NodeSpec> specs = NodeSpec.fromProfiles(safeProfiles, null, true);
+		List<WorkloadUnit> safeJobs = jobs == null
+				? Collections.<WorkloadUnit>emptyList() : jobs;
+
+		ArrayList<TimelineEvent> events = new ArrayList<TimelineEvent>();
+		ArrayList<String> log = new ArrayList<String>();
+		ArrayList<WorkUnitSpec> units = new ArrayList<WorkUnitSpec>();
+		ArrayList<WorkloadUnit> byUnitId = new ArrayList<WorkloadUnit>();
+		int largestNodeMemory = 0;
+		boolean faults = false;
+		for (NodeSpec spec : specs)
+		{
+			largestNodeMemory = Math.max(largestNodeMemory, spec.getMemoryMb());
+			faults |= spec.getFailureProbability() > 0.0;
+		}
+		int skipped = 0;
+		for (int index = 0; index < safeJobs.size(); index++)
+		{
+			WorkloadUnit job = safeJobs.get(index);
+			if (job == null)
+			{
+				continue;
+			}
+			if (job.getMemoryMb() > largestNodeMemory || job.getMemoryMb() > safeHeap)
+			{
+				skipped++;
+				events.add(new TimelineEvent(0, 0, job.getId(), job.getType(),
+						EventType.SKIPPED,
+						"Needs " + job.getMemoryMb() + " MB; no node budget ("
+						+ largestNodeMemory + " MB) or the heap (" + safeHeap
+						+ " MB) can ever hold it."));
+				continue;
+			}
+			byUnitId.add(job);
+			units.add(new WorkUnitSpec(
+					byUnitId.size(),
+					String.format(Locale.US, "%06d:%s", index + 1, job.getId()),
+					job.getCostUnits(),
+					job.getMemoryMb(),
+					job.getPriority(),
+					job.getDeadlineTick(),
+					0,
+					null,
+					job.getMaxRetries() + 1));
+		}
+		log.add(String.format(Locale.US,
+				"t=0000  Scheduler Lab: %d unit(s), policy %s (%s), %d node(s), heap %d MB%s.",
+				units.size(), safePolicy.getLabel(),
+				safePolicy.isDynamic() ? "dynamic" : "static", specs.size(), safeHeap,
+				faults ? ", failure injection on" : ""));
+		for (NodeSpec spec : specs)
+		{
+			log.add("t=0000  " + spec.describe());
+		}
+
 		ArrayList<NodeSummary> summaries = new ArrayList<NodeSummary>();
 		for (NodeCapacityProfile profile : safeProfiles)
 		{
-			NodeSummary summary = new NodeSummary(profile);
-			summaries.add(summary);
-			runtimes.add(new NodeRuntime(summary));
+			summaries.add(new NodeSummary(profile));
+		}
+		double lowerBound = lowerBound(units, specs);
+		if (units.isEmpty())
+		{
+			return new Result(safePolicy, safeTemplate, safeJobs, summaries, events, log,
+					safeJobs.size(), 0, skipped, 0, 0, 0, 0L, 0L, safeHeap, lowerBound);
 		}
 
-		ArrayList<JobState> backlog = new ArrayList<JobState>();
-		if (jobs != null)
+		SchedulingSimulator.Trace trace = SchedulingSimulator.run(
+				new SchedulingSimulator.Config(
+						safePolicy,
+						specs,
+						units,
+						new WorkDispatcher.Options()
+								.faultInjection(faults, FAULT_SEED)
+								.globalMemoryBudgetMb(safeHeap),
+						MILLISECONDS_PER_TICK).phaseKey("scheduler-lab"));
+
+		int retried = 0;
+		for (SchedulingSimulator.Execution execution : trace.getExecutions())
 		{
-			for (WorkloadUnit job : jobs)
+			WorkloadUnit job = byUnitId.get(execution.getUnitId() - 1);
+			NodeSummary summary = summaries.get(execution.getNode() - 1);
+			summary.assignedJobs++;
+			summary.plannedCost += Math.round(execution.getEnd() - execution.getStart());
+			if (execution.getSource() == WorkDispatcher.Source.STOLEN)
 			{
-				if (job != null)
+				summary.stolenJobs++;
+				events.add(new TimelineEvent(tick(execution.getStart()), execution.getNode(),
+						job.getId(), job.getType(), EventType.STOLEN,
+						"Stolen by node " + execution.getNode() + "."));
+			}
+			events.add(new TimelineEvent(tick(execution.getStart()), execution.getNode(),
+					job.getId(), job.getType(), EventType.STARTED,
+					job.getType().getDescription()));
+			if (execution.getOutcome() == WorkDispatcher.Outcome.COMMITTED)
+			{
+				summary.completedJobs++;
+				events.add(new TimelineEvent(tick(execution.getEnd()), execution.getNode(),
+						job.getId(), job.getType(), EventType.COMPLETED,
+						"Finished on node " + execution.getNode() + "."));
+			}
+			else if (execution.getOutcome() == WorkDispatcher.Outcome.STALE)
+			{
+				events.add(new TimelineEvent(tick(execution.getEnd()), execution.getNode(),
+						job.getId(), job.getType(), EventType.SKIPPED,
+						"Revoked execution discarded."));
+			}
+			else
+			{
+				summary.failedJobs++;
+				events.add(new TimelineEvent(tick(execution.getEnd()), execution.getNode(),
+						job.getId(), job.getType(), EventType.FAILED,
+						"Simulated node failure; the work is lost."));
+				if (execution.getOutcome() != WorkDispatcher.Outcome.FINAL_FAILURE)
 				{
-					backlog.add(new JobState(job));
+					summary.retriedJobs++;
+					retried++;
+					events.add(new TimelineEvent(tick(execution.getEnd()), execution.getNode(),
+							job.getId(), job.getType(), EventType.RETRIED,
+							safePolicy == SchedulingPolicy.FAILURE_AWARE_RESCHEDULING
+									? "Retry queued away from this node."
+									: "Retry queued."));
 				}
 			}
 		}
-		sortBacklog(backlog, safePolicy);
-
-		int safeHeap = Math.max(RuntimeResourceSettings.MIN_HEAP_MB, heapMb);
-		SimulationState state =
-				new SimulationState(safePolicy, safeHeap, runtimes, backlog);
-		log(state, 0, "Scheduler Lab prepared " + backlog.size()
-				+ " work units using " + safePolicy.getLabel() + ".");
-		fillQueues(state, 0);
-
-		int tick = 0;
-		int guard = Math.max(1000, backlog.size() * 200 + 20000);
-		while (!isFinished(state) && tick < guard)
+		Collections.sort(events, new Comparator<TimelineEvent>()
 		{
-			startReadyJobs(state, tick);
-			processRunningJobs(state, tick);
-			if (safePolicy == SchedulingPolicy.WORK_STEALING)
+			public int compare(TimelineEvent first, TimelineEvent second)
 			{
-				stealWork(state, tick);
+				return Integer.compare(first.getTick(), second.getTick());
 			}
-			fillQueues(state, tick);
-			recordBusyIdleTicks(state);
-			tick++;
-		}
+		});
 
-		if (!isFinished(state))
+		double makespan = trace.getMakespan();
+		long totalBusy = 0L;
+		long totalIdle = 0L;
+		for (int index = 0; index < summaries.size(); index++)
 		{
-			for (JobState waiting : new ArrayList<JobState>(state.backlog))
+			NodeSummary summary = summaries.get(index);
+			NodeSpec spec = specs.get(index);
+			double busy = trace.getBusyTime(index + 1);
+			summary.busyTicks = Math.round(busy);
+			summary.idleTicks = Math.max(0L, Math.round(spec.getLanes() * makespan - busy));
+			summary.lastFinishTick = (int)Math.ceil(trace.getLastFinish(index + 1));
+			for (WorkDispatcher.NodeStats stats : trace.getDispatcher().nodeStats())
 			{
-				state.failedJobs++;
-				event(state, tick, 0, waiting.job, EventType.SKIPPED,
-						"Guard limit reached before scheduling.");
+				if (stats.getNode() == index + 1)
+				{
+					summary.queuePeak = stats.getQueuePeak();
+				}
 			}
-			state.backlog.clear();
+			totalBusy += summary.busyTicks;
+			totalIdle += summary.idleTicks;
 		}
-
-		long busy = 0L;
-		long idle = 0L;
-		int waitingJobs = state.backlog.size();
-		for (NodeSummary summary : summaries)
+		int committed = trace.getCommittedNode().size();
+		int permanentlyFailed = trace.getDispatcher().count(WorkDispatcher.UnitState.FAILED);
+		int waiting = units.size() - committed - permanentlyFailed;
+		log.add(String.format(Locale.US,
+				"t=%04d  Run finished: %d committed, %d failed permanently, %d retried, %d skipped; "
+				+ "makespan %.1f ticks, lower bound %.1f ticks (ratio %.3f).",
+				(int)Math.ceil(makespan), committed, permanentlyFailed, retried, skipped,
+				makespan, lowerBound, lowerBound <= 0.0 ? 1.0 : makespan / lowerBound));
+		if (trace.getDispatcher().hasFailed())
 		{
-			busy += summary.busyTicks;
-			idle += summary.idleTicks;
+			log.add("t=" + String.format(Locale.US, "%04d", (int)Math.ceil(makespan))
+					+ "  " + trace.getDispatcher().getFailureReason());
 		}
-		log(state, tick, "Run completed: " + state.completedJobs
-				+ " finished, " + state.failedJobs + " failed, "
-				+ state.retriedJobs + " retried.");
+		for (String violation : trace.getViolations())
+		{
+			log.add("INVARIANT  " + violation);
+		}
 		return new Result(
 				safePolicy,
 				safeTemplate,
-				jobs == null ? Collections.<WorkloadUnit>emptyList() : jobs,
+				safeJobs,
 				summaries,
-				state.events,
-				state.logLines,
-				jobs == null ? 0 : jobs.size(),
-				state.completedJobs,
-				state.failedJobs,
-				state.retriedJobs,
-				waitingJobs,
-				tick,
-				busy,
-				idle,
-				safeHeap);
+				events,
+				log,
+				safeJobs.size(),
+				committed,
+				permanentlyFailed + skipped,
+				retried,
+				Math.max(0, waiting),
+				(int)Math.ceil(makespan),
+				totalBusy,
+				totalIdle,
+				safeHeap,
+				lowerBound);
+	}
+
+	/** max(total work / total throughput, largest unit / fastest node). */
+	static double lowerBound(List<WorkUnitSpec> units, List<NodeSpec> nodes)
+	{
+		double work = 0.0;
+		double largest = 0.0;
+		double throughput = 0.0;
+		double fastest = 0.0;
+		for (NodeSpec node : nodes)
+		{
+			throughput += node.getThroughput();
+			fastest = Math.max(fastest, node.getSpeed());
+		}
+		for (WorkUnitSpec unit : units)
+		{
+			work += unit.getCost();
+			largest = Math.max(largest, unit.getCost());
+		}
+		if (throughput <= 0.0 || fastest <= 0.0)
+		{
+			return 0.0;
+		}
+		return Math.max(work / throughput, largest / fastest);
+	}
+
+	private static int tick(double time)
+	{
+		return (int)Math.round(time);
 	}
 
 	private static WorkloadUnit createJob(
@@ -836,615 +959,15 @@ final class SchedulerLabEngine
 						second.getNodeIndex());
 			}
 		});
-		return safe;
-	}
-
-	private static void fillQueues(SimulationState state, int tick)
-	{
-		boolean moved = true;
-		while (moved && !state.backlog.isEmpty())
+		//Re-number densely so node indexes are always 1..N.
+		ArrayList<NodeCapacityProfile> dense = new ArrayList<NodeCapacityProfile>();
+		for (int index = 0; index < safe.size(); index++)
 		{
-			moved = false;
-			JobState job = state.backlog.get(0);
-			int nodeIndex = chooseNode(state, job, null);
-			if (nodeIndex < 0)
-			{
-				if (!canAnyNodeEverRun(state, job))
-				{
-					state.backlog.remove(0);
-					state.failedJobs++;
-					event(state, tick, 0, job.job, EventType.SKIPPED,
-							"No node has enough per-node memory for this job.");
-					moved = true;
-				}
-				continue;
-			}
-			state.backlog.remove(0);
-			assignToNode(state, nodeIndex, job, tick, "queued");
-			moved = true;
+			NodeCapacityProfile profile = safe.get(index);
+			dense.add(profile.getNodeIndex() == index + 1
+					? profile : profile.withNodeIndex(index + 1));
 		}
-	}
-
-	private static int chooseNode(
-			SimulationState state,
-			JobState job,
-			Set<Integer> excludedNodes)
-	{
-		if (state.nodes.isEmpty())
-		{
-			return -1;
-		}
-		ArrayList<Integer> candidates = eligibleNodes(
-				state,
-				job,
-				excludedNodes);
-		if (candidates.isEmpty())
-		{
-			return -1;
-		}
-
-		if (state.policy == SchedulingPolicy.STATIC_EQUAL_SPLIT)
-		{
-			int target = Math.floorMod(job.job.getId().hashCode(),
-					state.nodes.size());
-			if (candidates.contains(Integer.valueOf(target)))
-			{
-				return target;
-			}
-		}
-		if (state.policy == SchedulingPolicy.ROUND_ROBIN)
-		{
-			for (int offset = 0; offset < state.nodes.size(); offset++)
-			{
-				int candidate = (state.roundRobinCursor + offset)
-						% state.nodes.size();
-				if (candidates.contains(Integer.valueOf(candidate)))
-				{
-					state.roundRobinCursor = (candidate + 1)
-							% state.nodes.size();
-					return candidate;
-				}
-			}
-		}
-		if (state.policy == SchedulingPolicy.WEIGHTED_ROUND_ROBIN
-				|| state.policy == SchedulingPolicy.CAPACITY_WEIGHTED)
-		{
-			return chooseLowestNormalizedLoad(state, candidates);
-		}
-		if (state.policy == SchedulingPolicy.LEAST_LOADED_NODE)
-		{
-			return chooseLowestPlannedLoad(state, candidates);
-		}
-		if (state.policy == SchedulingPolicy.FASTEST_NODE_FIRST)
-		{
-			return chooseFastest(state, candidates);
-		}
-		if (state.policy == SchedulingPolicy.QUEUE_LENGTH)
-		{
-			return chooseShortestQueue(state, candidates);
-		}
-		if (state.policy == SchedulingPolicy.DEADLINE_PRIORITY)
-		{
-			return chooseFastestThenDeadline(state, candidates);
-		}
-		if (state.policy == SchedulingPolicy.FAILURE_AWARE_RESCHEDULING)
-		{
-			return chooseMostReliable(state, candidates);
-		}
-		if (state.policy == SchedulingPolicy.MEMORY_AWARE_SAFE_WAVE)
-		{
-			return chooseMemoryFit(state, candidates, job);
-		}
-		return chooseLowestNormalizedLoad(state, candidates);
-	}
-
-	private static ArrayList<Integer> eligibleNodes(
-			SimulationState state,
-			JobState job,
-			Set<Integer> excludedNodes)
-	{
-		ArrayList<Integer> candidates = new ArrayList<Integer>();
-		for (int index = 0; index < state.nodes.size(); index++)
-		{
-			if (excludedNodes != null
-					&& excludedNodes.contains(Integer.valueOf(index)))
-			{
-				continue;
-			}
-			NodeRuntime node = state.nodes.get(index);
-			NodeCapacityProfile profile = node.summary.profile;
-			if (node.queue.size() >= profile.getQueueCapacity())
-			{
-				continue;
-			}
-			if (job.job.getMemoryMb() > profile.getMemoryLimitMb())
-			{
-				continue;
-			}
-			candidates.add(Integer.valueOf(index));
-		}
-		return candidates;
-	}
-
-	private static void assignToNode(
-			SimulationState state,
-			int nodeIndex,
-			JobState job,
-			int tick,
-			String reason)
-	{
-		NodeRuntime node = state.nodes.get(nodeIndex);
-		node.queue.add(job);
-		node.summary.assignedJobs++;
-		node.summary.plannedCost += estimatedRuntimeTicks(
-				job.job,
-				node.summary.profile);
-		node.summary.queuePeak = Math.max(
-				node.summary.queuePeak,
-				node.queue.size());
-		event(state, tick, node.summary.getNodeIndex(), job.job,
-				EventType.ASSIGNED, reason);
-	}
-
-	private static void startReadyJobs(SimulationState state, int tick)
-	{
-		for (NodeRuntime node : state.nodes)
-		{
-			NodeCapacityProfile profile = node.summary.profile;
-			while (!node.queue.isEmpty()
-					&& node.running.size() < profile.getMaxConcurrentJobs())
-			{
-				JobState job = node.queue.get(0);
-				if (state.activeMemoryMb + job.job.getMemoryMb()
-						> state.heapMb)
-				{
-					if (tick == 0 || tick % 25 == 0)
-					{
-						event(state, tick, profile.getNodeIndex(), job.job,
-								EventType.WAITING,
-								"waiting for memory-safe wave");
-					}
-					break;
-				}
-				node.queue.remove(0);
-				state.activeMemoryMb += job.job.getMemoryMb();
-				node.running.add(new RunningJob(
-						job,
-						estimatedRuntimeTicks(job.job, profile)));
-				event(state, tick, profile.getNodeIndex(), job.job,
-						EventType.STARTED,
-						job.job.getType().getDescription());
-			}
-		}
-	}
-
-	private static void processRunningJobs(SimulationState state, int tick)
-	{
-		for (NodeRuntime node : state.nodes)
-		{
-			ArrayList<RunningJob> finished = new ArrayList<RunningJob>();
-			for (RunningJob running : node.running)
-			{
-				running.remainingTicks--;
-				if (running.remainingTicks <= 0)
-				{
-					finished.add(running);
-				}
-			}
-			for (RunningJob running : finished)
-			{
-				node.running.remove(running);
-				state.activeMemoryMb = Math.max(
-						0L,
-						state.activeMemoryMb - running.state.job.getMemoryMb());
-				if (shouldFail(node.summary.profile, running.state))
-				{
-					handleFailure(state, node, running.state, tick);
-				}
-				else
-				{
-					node.summary.completedJobs++;
-					node.summary.lastFinishTick = tick;
-					state.completedJobs++;
-					event(state, tick, node.summary.getNodeIndex(),
-							running.state.job, EventType.COMPLETED,
-							"finished on node "
-									+ node.summary.getNodeIndex());
-				}
-			}
-		}
-	}
-
-	private static void handleFailure(
-			SimulationState state,
-			NodeRuntime node,
-			JobState job,
-			int tick)
-	{
-		node.summary.failedJobs++;
-		event(state, tick, node.summary.getNodeIndex(), job.job,
-				EventType.FAILED,
-				"simulated node failure");
-		if (job.attempts < job.job.getMaxRetries())
-		{
-			job.attempts++;
-			node.summary.retriedJobs++;
-			state.retriedJobs++;
-			HashSet<Integer> excluded = new HashSet<Integer>();
-			if (state.policy == SchedulingPolicy.FAILURE_AWARE_RESCHEDULING)
-			{
-				excluded.add(Integer.valueOf(
-						indexOfNode(state, node.summary.getNodeIndex())));
-			}
-			int next = chooseNode(state, job, excluded);
-			if (next < 0)
-			{
-				state.backlog.add(job);
-				event(state, tick, node.summary.getNodeIndex(), job.job,
-						EventType.RETRIED,
-						"retry waiting for any eligible node");
-			}
-			else
-			{
-				assignToNode(state, next, job, tick, "retry");
-				event(state, tick,
-						state.nodes.get(next).summary.getNodeIndex(),
-						job.job,
-						EventType.RETRIED,
-						"rescheduled after failure");
-			}
-		}
-		else
-		{
-			state.failedJobs++;
-		}
-	}
-
-	private static void stealWork(SimulationState state, int tick)
-	{
-		for (NodeRuntime idle : state.nodes)
-		{
-			if (!idle.running.isEmpty() || !idle.queue.isEmpty())
-			{
-				continue;
-			}
-			NodeRuntime donor = null;
-			for (NodeRuntime node : state.nodes)
-			{
-				if (node == idle || node.queue.size() < 2)
-				{
-					continue;
-				}
-				if (donor == null || node.queue.size() > donor.queue.size())
-				{
-					donor = node;
-				}
-			}
-			if (donor == null)
-			{
-				continue;
-			}
-			JobState job = donor.queue.remove(donor.queue.size() - 1);
-			if (job.job.getMemoryMb() > idle.summary.profile.getMemoryLimitMb())
-			{
-				donor.queue.add(job);
-				continue;
-			}
-			idle.queue.add(job);
-			idle.summary.stolenJobs++;
-			event(state, tick, idle.summary.getNodeIndex(), job.job,
-					EventType.STOLEN,
-					"stole from node " + donor.summary.getNodeIndex());
-		}
-	}
-
-	private static void recordBusyIdleTicks(SimulationState state)
-	{
-		for (NodeRuntime node : state.nodes)
-		{
-			if (node.running.isEmpty())
-			{
-				node.summary.idleTicks++;
-			}
-			else
-			{
-				node.summary.busyTicks++;
-			}
-		}
-	}
-
-	private static boolean isFinished(SimulationState state)
-	{
-		if (!state.backlog.isEmpty())
-		{
-			return false;
-		}
-		for (NodeRuntime node : state.nodes)
-		{
-			if (!node.queue.isEmpty() || !node.running.isEmpty())
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
-	private static boolean canAnyNodeEverRun(
-			SimulationState state,
-			JobState job)
-	{
-		for (NodeRuntime node : state.nodes)
-		{
-			if (job.job.getMemoryMb()
-					<= node.summary.profile.getMemoryLimitMb())
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static int chooseLowestNormalizedLoad(
-			SimulationState state,
-			ArrayList<Integer> candidates)
-	{
-		int best = candidates.get(0).intValue();
-		double bestScore = Double.MAX_VALUE;
-		for (Integer candidateValue : candidates)
-		{
-			int candidate = candidateValue.intValue();
-			NodeRuntime node = state.nodes.get(candidate);
-			double score = currentLoad(node)
-					/ Math.max(0.05, NodeCapacityScheduler.schedulingWeight(
-							node.summary.profile));
-			if (score < bestScore)
-			{
-				bestScore = score;
-				best = candidate;
-			}
-		}
-		return best;
-	}
-
-	private static int chooseLowestPlannedLoad(
-			SimulationState state,
-			ArrayList<Integer> candidates)
-	{
-		int best = candidates.get(0).intValue();
-		long bestScore = Long.MAX_VALUE;
-		for (Integer candidateValue : candidates)
-		{
-			int candidate = candidateValue.intValue();
-			long score = currentLoad(state.nodes.get(candidate));
-			if (score < bestScore)
-			{
-				bestScore = score;
-				best = candidate;
-			}
-		}
-		return best;
-	}
-
-	private static int chooseFastest(
-			SimulationState state,
-			ArrayList<Integer> candidates)
-	{
-		int best = candidates.get(0).intValue();
-		double bestWeight = -1.0;
-		for (Integer candidateValue : candidates)
-		{
-			int candidate = candidateValue.intValue();
-			double weight = NodeCapacityScheduler.schedulingWeight(
-					state.nodes.get(candidate).summary.profile);
-			if (weight > bestWeight)
-			{
-				bestWeight = weight;
-				best = candidate;
-			}
-		}
-		return best;
-	}
-
-	private static int chooseShortestQueue(
-			SimulationState state,
-			ArrayList<Integer> candidates)
-	{
-		int best = candidates.get(0).intValue();
-		int bestQueue = Integer.MAX_VALUE;
-		for (Integer candidateValue : candidates)
-		{
-			int candidate = candidateValue.intValue();
-			NodeRuntime node = state.nodes.get(candidate);
-			int queue = node.queue.size() + node.running.size();
-			if (queue < bestQueue)
-			{
-				bestQueue = queue;
-				best = candidate;
-			}
-		}
-		return best;
-	}
-
-	private static int chooseFastestThenDeadline(
-			SimulationState state,
-			ArrayList<Integer> candidates)
-	{
-		int fastest = chooseFastest(state, candidates);
-		NodeRuntime node = state.nodes.get(fastest);
-		if (node.queue.size() < node.summary.profile.getQueueCapacity())
-		{
-			return fastest;
-		}
-		return chooseLowestNormalizedLoad(state, candidates);
-	}
-
-	private static int chooseMostReliable(
-			SimulationState state,
-			ArrayList<Integer> candidates)
-	{
-		int best = candidates.get(0).intValue();
-		double bestScore = Double.MAX_VALUE;
-		for (Integer candidateValue : candidates)
-		{
-			int candidate = candidateValue.intValue();
-			NodeCapacityProfile profile =
-					state.nodes.get(candidate).summary.profile;
-			double score = profile.getFailureProbabilityPercent()
-					+ (profile.isSlowdownSimulationEnabled()
-							? profile.getSlowdownMultiplier() * 4.0 : 0.0)
-					+ profile.getNetworkDelayMs() / 1000.0
-					+ currentLoad(state.nodes.get(candidate))
-							/ Math.max(0.05,
-									NodeCapacityScheduler.schedulingWeight(
-											profile));
-			if (score < bestScore)
-			{
-				bestScore = score;
-				best = candidate;
-			}
-		}
-		return best;
-	}
-
-	private static int chooseMemoryFit(
-			SimulationState state,
-			ArrayList<Integer> candidates,
-			JobState job)
-	{
-		int best = candidates.get(0).intValue();
-		long bestRemainder = Long.MAX_VALUE;
-		for (Integer candidateValue : candidates)
-		{
-			int candidate = candidateValue.intValue();
-			NodeCapacityProfile profile =
-					state.nodes.get(candidate).summary.profile;
-			long remainder = profile.getMemoryLimitMb()
-					- job.job.getMemoryMb();
-			if (remainder >= 0 && remainder < bestRemainder)
-			{
-				bestRemainder = remainder;
-				best = candidate;
-			}
-		}
-		return best;
-	}
-
-	private static long currentLoad(NodeRuntime node)
-	{
-		long load = node.summary.plannedCost;
-		for (RunningJob running : node.running)
-		{
-			load += running.remainingTicks;
-		}
-		return load;
-	}
-
-	private static int estimatedRuntimeTicks(
-			WorkloadUnit job,
-			NodeCapacityProfile profile)
-	{
-		double cpu = Math.max(0.10, profile.getCpuMultiplier());
-		double cost = job.getCostUnits() / cpu;
-		if (profile.isSlowdownSimulationEnabled())
-		{
-			cost *= Math.max(1.0, profile.getSlowdownMultiplier());
-		}
-		cost += Math.max(0, profile.getNetworkDelayMs()) / 100.0;
-		return Math.max(1, (int)Math.ceil(cost));
-	}
-
-	private static boolean shouldFail(
-			NodeCapacityProfile profile,
-			JobState state)
-	{
-		if (!profile.isFailureSimulationEnabled()
-				|| profile.getFailureProbabilityPercent() <= 0)
-		{
-			return false;
-		}
-		String key = profile.getNodeIndex()
-				+ "|" + state.job.getId()
-				+ "|" + state.attempts;
-		int bucket = Math.floorMod(key.hashCode(), 100);
-		return bucket < profile.getFailureProbabilityPercent();
-	}
-
-	private static int indexOfNode(SimulationState state, int nodeIndex)
-	{
-		for (int index = 0; index < state.nodes.size(); index++)
-		{
-			if (state.nodes.get(index).summary.getNodeIndex() == nodeIndex)
-			{
-				return index;
-			}
-		}
-		return -1;
-	}
-
-	private static void sortBacklog(
-			ArrayList<JobState> backlog,
-			SchedulingPolicy policy)
-	{
-		if (policy == SchedulingPolicy.DEADLINE_PRIORITY)
-		{
-			Collections.sort(backlog, new Comparator<JobState>()
-			{
-				public int compare(JobState first, JobState second)
-				{
-					return deadlineCompare(first.job, second.job);
-				}
-			});
-		}
-	}
-
-	private static int deadlineCompare(
-			WorkloadUnit first,
-			WorkloadUnit second)
-	{
-		int priority = Integer.compare(second.getPriority(), first.getPriority());
-		if (priority != 0)
-		{
-			return priority;
-		}
-		return Integer.compare(first.getDeadlineTick(), second.getDeadlineTick());
-	}
-
-	private static void event(
-			SimulationState state,
-			int tick,
-			int nodeIndex,
-			WorkloadUnit job,
-			EventType type,
-			String detail)
-	{
-		state.events.add(new TimelineEvent(
-				tick,
-				nodeIndex,
-				job == null ? "" : job.getId(),
-				job == null ? WorkloadUnitType.TARGET_RECOMMENDATION_JOB
-						: job.getType(),
-				type,
-				detail));
-		if (type == EventType.FAILED
-				|| type == EventType.RETRIED
-				|| type == EventType.SKIPPED)
-		{
-			log(state, tick, "Node " + nodeIndex + " " + type
-					+ " " + (job == null ? "job" : job.getId())
-					+ ": " + detail);
-		}
-	}
-
-	private static void log(
-			SimulationState state,
-			int tick,
-			String message)
-	{
-		state.logLines.add(String.format(
-				Locale.US,
-				"t=%04d  %s",
-				Integer.valueOf(tick),
-				message));
+		return dense;
 	}
 
 	private static int clampInt(int value, int minimum, int maximum)

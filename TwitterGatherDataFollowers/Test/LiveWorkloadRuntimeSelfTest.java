@@ -1,8 +1,16 @@
 package TwitterGatherDataFollowers.userRyersonU;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
+/**
+ * Live controls against a running phase and live input routing: controls
+ * need the right run id, a paused node holds at phase boundaries and claims
+ * nothing, a drain revokes running units and the stale completion is
+ * discarded while the rerun commits, and input users are routed whole and
+ * only once.
+ */
 public final class LiveWorkloadRuntimeSelfTest
 {
 	private LiveWorkloadRuntimeSelfTest()
@@ -13,12 +21,11 @@ public final class LiveWorkloadRuntimeSelfTest
 	{
 		wrongRunIdCannotMutateActiveControls();
 		missingQueueSnapshotDoesNotInventWaitingWork();
-		inputBatchQueueTracksDispatchRetargetAndCompletion();
+		inputRoutingKeepsUsersWholeAndDecidesOnce();
 		runtimeClosedInputCanAdvanceWithRetainedRecords();
 		phaseBoundaryPauseWaitsForResume();
 		pauseBlocksFutureClaims();
-		drainRequeuesActiveShardAndIgnoresStaleCompletion();
-		targetJobQueueSupportsDrainAndStaleCompletionGuard();
+		drainRevokesRunningUnitAndIgnoresStaleCompletion();
 		RecommendationSchedulerRegistry.restoreDefault(2, 4096);
 		System.out.println("LiveWorkloadRuntimeSelfTest passed");
 	}
@@ -27,15 +34,14 @@ public final class LiveWorkloadRuntimeSelfTest
 	{
 		String runId = RecommendationRunLifecycle.createRunId();
 		beginControlledRun(runId, ControllerAgent.Doc2Vec, 8);
-		LiveWorkloadAdjustmentRegistry.setPaused(
-				runId + "-wrong",
-				1,
-				true);
+		require(!LiveWorkloadAdjustmentRegistry.setPaused(runId + "-wrong", 1, true),
+				"a wrong run id was accepted");
 		require(!LiveWorkloadAdjustmentRegistry.snapshot(runId).isPaused(1),
 				"wrong run ID was allowed to pause the active run");
 		LiveWorkloadAdjustmentRegistry.setPaused(runId, 1, true);
 		require(LiveWorkloadAdjustmentRegistry.snapshot(runId).isPaused(1),
 				"active run ID did not pause the node");
+		SchedulingRuntime.close(runId, "test finished");
 	}
 
 	private static void missingQueueSnapshotDoesNotInventWaitingWork()
@@ -43,91 +49,54 @@ public final class LiveWorkloadRuntimeSelfTest
 		String runId = RecommendationRunLifecycle.createRunId();
 		beginControlledRun(runId, ControllerAgent.COS_SIM, 40);
 		RecommendationWorkQueueRegistry.QueueSnapshot snapshot =
-				RecommendationWorkQueueRegistry.snapshotExperimentalCandidateQueue(
-						runId,
-						"Similarity",
-						4,
-						40);
+				RecommendationWorkQueueRegistry.snapshotPhase(
+						runId, RecommendationWorkQueueRegistry.CANDIDATES);
 		require(snapshot.getTotalShards() == 0
 						&& snapshot.getWaitingCount() == 0
 						&& snapshot.getEvents().isEmpty(),
-				"missing live queue was displayed as unclaimed waiting work");
+				"a phase that never opened was displayed as waiting work");
+		SchedulingRuntime.close(runId, "test finished");
 	}
 
-	private static void inputBatchQueueTracksDispatchRetargetAndCompletion()
+	private static void inputRoutingKeepsUsersWholeAndDecidesOnce()
 	{
 		String runId = RecommendationRunLifecycle.createRunId();
-		beginControlledRun(runId, ControllerAgent.COS_SIM, 4);
-		RecommendationWorkQueueRegistry.beginInputBatchQueue(runId, 2, 3);
-		RecommendationWorkQueueRegistry.QueueSnapshot snapshot =
-				RecommendationWorkQueueRegistry.snapshotInputBatchQueue(
-						runId,
-						2);
-		require(snapshot.getTotalShards() == 3
-						&& snapshot.getWaitingCount() == 3,
-				"input batch queue did not expose waiting batches");
-		RecommendationWorkQueueRegistry.dispatchInputBatch(
-				runId,
-				1,
-				2,
-				3,
-				1);
-		snapshot = RecommendationWorkQueueRegistry.snapshotInputBatchQueue(
-				runId,
-				2);
-		require(snapshot.getActiveCount() == 1
-						&& snapshot.getWaitingCount() == 2,
-				"input batch dispatch was not tracked as active work");
-		RecommendationWorkQueueRegistry.dispatchInputBatch(
-				runId,
-				2,
-				2,
-				3,
-				1);
-		RecommendationWorkQueueRegistry.completeInputBatch(
-				runId,
-				1,
-				2,
-				3,
-				1);
-		snapshot = RecommendationWorkQueueRegistry.snapshotInputBatchQueue(
-				runId,
-				2);
-		require(snapshot.getCompletedCount() == 0,
-				"stale input batch completion was counted after retarget");
-		RecommendationWorkQueueRegistry.completeInputBatch(
-				runId,
-				2,
-				2,
-				3,
-				1);
-		snapshot = RecommendationWorkQueueRegistry.snapshotInputBatchQueue(
-				runId,
-				2);
-		require(snapshot.getCompletedCount() == 1
-						&& snapshot.getActiveCount() == 0,
-				"retargeted input batch completion was not counted");
+		SchedulingRunContext context = beginControlledRun(runId, ControllerAgent.COS_SIM, 4);
+		context.inputPlanned(3);
+		require(context.isStreamedInput(), "announced input was not marked as streamed");
+		require(context.routeUsers(Arrays.asList("alice", "bob"), 1, 10.0) == 1,
+				"users should go to their planned node while it is available");
+		LiveWorkloadAdjustmentRegistry.setPaused(runId, 1, true);
+		require(context.routeUsers(Arrays.asList("carol"), 1, 5.0) == 0,
+				"a user of a paused node should be held, not split or moved");
+		LiveWorkloadAdjustmentRegistry.setPaused(runId, 1, false);
+		require(LiveWorkloadAdjustmentRegistry.drainNodeTo(runId, 1, 2, 0) >= 0,
+				"drain was refused");
+		require(context.routeUsers(Arrays.asList("carol"), 1, 5.0) == 2,
+				"a user of a drained node should go to the drain target");
+		require(context.routeUsers(Arrays.asList("alice"), 1, 10.0) == 1,
+				"a routed user must keep its receiver (its rows never split)");
+		context.inputDispatched("carol", 2);
+		context.inputDelivered("carol", 2);
+		require(context.inputDeliveredByUser().get("carol").intValue() == 2,
+				"delivery was not tracked");
+		SchedulingRuntime.close(runId, "test finished");
 	}
 
 	private static void runtimeClosedInputCanAdvanceWithRetainedRecords()
 	{
 		String runId = RecommendationRunLifecycle.createRunId();
-		RecommendationRunLifecycle lifecycle =
-				new RecommendationRunLifecycle();
+		RecommendationRunLifecycle lifecycle = new RecommendationRunLifecycle();
 		lifecycle.admit(runId);
 		lifecycle.markInputDeliveryComplete(runId);
 		require(!lifecycle.markTextProcessingCompleteIfReady(5, 10),
 				"legacy input close accepted a short node assignment");
 
 		String runtimeRunId = RecommendationRunLifecycle.createRunId();
-		RecommendationRunLifecycle runtimeLifecycle =
-				new RecommendationRunLifecycle();
+		RecommendationRunLifecycle runtimeLifecycle = new RecommendationRunLifecycle();
 		runtimeLifecycle.admit(runtimeRunId);
 		runtimeLifecycle.markInputDeliveryComplete(runtimeRunId);
-		require(runtimeLifecycle.markTextProcessingCompleteIfReady(
-						5,
-						10,
-						true),
+		require(runtimeLifecycle.markTextProcessingCompleteIfReady(5, 10, true),
 				"runtime-controlled input close did not accept retained records");
 		require(runtimeLifecycle.isTextProcessingComplete(),
 				"runtime-controlled input close did not advance text processing");
@@ -146,23 +115,18 @@ public final class LiveWorkloadRuntimeSelfTest
 			{
 				try
 				{
-					LiveWorkloadAdjustmentRegistry.waitUntilNodeEligible(
-							runId,
-							1,
-							"self-test boundary");
+					LiveWorkloadAdjustmentRegistry.waitUntilNodeEligible(runId, 1, "self-test boundary");
 					finished[0] = true;
 				}
-				catch (InterruptedException exception)
+				catch (RuntimeException exception)
 				{
-					Thread.currentThread().interrupt();
-					failure[0] = new RuntimeException(exception);
+					failure[0] = exception;
 				}
 			}
 		});
 		waiter.start();
 		sleep(100L);
-		require(!finished[0],
-				"phase boundary did not wait while node was paused");
+		require(!finished[0], "phase boundary did not wait while node was paused");
 		LiveWorkloadAdjustmentRegistry.setPaused(runId, 1, false);
 		try
 		{
@@ -177,196 +141,78 @@ public final class LiveWorkloadRuntimeSelfTest
 		{
 			throw failure[0];
 		}
-		require(finished[0],
-				"phase boundary did not resume after pause was cleared");
+		require(finished[0], "phase boundary did not resume after pause was cleared");
+		SchedulingRuntime.close(runId, "test finished");
 	}
 
 	private static void pauseBlocksFutureClaims()
 	{
 		String runId = RecommendationRunLifecycle.createRunId();
-		beginControlledRun(runId, ControllerAgent.Doc2Vec, 8);
+		SchedulingRunContext context = beginControlledRun(runId, ControllerAgent.Doc2Vec, 8);
+		WorkPhase phase = openPhase(context, 8);
 		LiveWorkloadAdjustmentRegistry.setPaused(runId, 1, true);
-		RecommendationWorkQueueRegistry.ShardClaim claim =
-				RecommendationWorkQueueRegistry.claimDoc2VecCandidateShard(
-						runId,
-						1,
-						2,
-						8);
-		require(!claim.hasShard() && claim.isDeferred(),
+		require(phase.getDispatcher().request(1, 0, phase.now()) == null,
 				"paused node claimed live queue work");
 		LiveWorkloadAdjustmentRegistry.setPaused(runId, 1, false);
-		claim = RecommendationWorkQueueRegistry.claimDoc2VecCandidateShard(
-				runId,
-				1,
-				2,
-				8);
-		require(claim.hasShard(),
+		require(phase.getDispatcher().request(1, 0, phase.now()) != null,
 				"resumed node did not claim live queue work");
+		SchedulingRuntime.close(runId, "test finished");
 	}
 
-	private static void drainRequeuesActiveShardAndIgnoresStaleCompletion()
+	private static void drainRevokesRunningUnitAndIgnoresStaleCompletion()
 	{
 		String runId = RecommendationRunLifecycle.createRunId();
-		beginControlledRun(runId, ControllerAgent.Doc2Vec, 8);
-		RecommendationWorkQueueRegistry.ShardClaim nodeOneClaim =
-				RecommendationWorkQueueRegistry.claimDoc2VecCandidateShard(
-						runId,
-						1,
-						2,
-						8);
-		require(nodeOneClaim.hasShard(),
-				"node 1 did not claim an initial shard");
-		int shard = nodeOneClaim.getShardNumber();
-		int moved = LiveWorkloadAdjustmentRegistry.drainNodeTo(
-				runId,
-				1,
-				2,
-				8);
-		require(moved == 1,
-				"drain did not requeue the active shard");
-		require(!RecommendationWorkQueueRegistry.isActiveDoc2VecCandidateShard(
-						runId,
-						1,
-						2,
-						8,
-						shard),
-				"drained shard remained active on source node");
-		RecommendationWorkQueueRegistry.ShardClaim nodeTwoClaim =
-				RecommendationWorkQueueRegistry.claimDoc2VecCandidateShard(
-						runId,
-						2,
-						2,
-						8);
-		require(nodeTwoClaim.hasShard()
-						&& nodeTwoClaim.getShardNumber() == shard,
-				"drained shard was not reclaimed by the target node");
-		RecommendationWorkQueueRegistry.completeDoc2VecCandidateShard(
-				runId,
-				1,
-				2,
-				8,
-				shard);
-		RecommendationWorkQueueRegistry.QueueSnapshot snapshot =
-				RecommendationWorkQueueRegistry.snapshotDoc2VecQueue(
-						runId,
-						2,
-						8);
-		require(snapshot.getCompletedCount() == 0,
-				"stale source completion was counted after drain");
-		RecommendationWorkQueueRegistry.completeDoc2VecCandidateShard(
-				runId,
-				2,
-				2,
-				8,
-				shard);
-		snapshot = RecommendationWorkQueueRegistry.snapshotDoc2VecQueue(
-				runId,
-				2,
-				8);
-		require(snapshot.getCompletedCount() == 1,
-				"target completion was not counted after drain");
+		SchedulingRunContext context = beginControlledRun(runId, ControllerAgent.SVM, 4);
+		WorkPhase phase = openPhase(context, 6);
+		WorkDispatcher dispatcher = phase.getDispatcher();
+		WorkDispatcher.Assignment onNodeOne = dispatcher.request(1, 0, phase.now());
+		require(onNodeOne != null, "node 1 did not claim an initial unit");
+		int unit = onNodeOne.getUnitId();
+		int revoked = LiveWorkloadAdjustmentRegistry.drainNodeTo(runId, 1, 2, 0);
+		require(revoked == 1, "drain did not revoke the running unit (revoked " + revoked + ")");
+		require(!phase.isLive(onNodeOne), "the drained execution stayed live");
+		require(phase.complete(onNodeOne) == WorkDispatcher.Outcome.STALE,
+				"a stale completion after a drain was accepted");
+		require(dispatcher.getCommittedCount() == 0, "a stale completion was counted");
+		int guard = 0;
+		while (!dispatcher.isComplete() && guard++ < 100)
+		{
+			WorkDispatcher.Assignment next = dispatcher.request(2, 0, phase.now());
+			require(next != null, "node 2 ran out of work before the phase completed");
+			require(phase.complete(next) == WorkDispatcher.Outcome.COMMITTED, "a unit did not commit");
+		}
+		require(dispatcher.isComplete(), "the phase did not complete on the remaining node");
+		require(dispatcher.committedNodeOf(unit) == 2,
+				"the revoked unit was not committed by the drain target");
+		SchedulingRuntime.close(runId, "test finished");
 	}
 
-	private static void targetJobQueueSupportsDrainAndStaleCompletionGuard()
-	{
-		String runId = RecommendationRunLifecycle.createRunId();
-		beginControlledRun(runId, ControllerAgent.SVM, 4);
-		List<String> targets = targetUsers(4);
-		RecommendationWorkQueueRegistry.TargetClaim first =
-				RecommendationWorkQueueRegistry.claimTargetUserJob(
-						runId,
-						"SVM",
-						1,
-						2,
-						targets);
-		require(first.hasTarget(),
-				"SVM target job queue did not issue an initial claim");
-		int job = first.getJobNumber();
-		int moved = LiveWorkloadAdjustmentRegistry.drainNodeTo(
-				runId,
-				1,
-				2,
-				4);
-		require(moved == 1,
-				"drain did not requeue the active SVM target job");
-		RecommendationWorkQueueRegistry.TargetClaim second =
-				RecommendationWorkQueueRegistry.claimTargetUserJob(
-						runId,
-						"SVM",
-						2,
-						2,
-						targets);
-		require(second.hasTarget() && second.getJobNumber() == job,
-				"SVM target job was not reclaimed by the drain target");
-		RecommendationWorkQueueRegistry.completeTargetUserJob(
-				runId,
-				"SVM",
-				1,
-				2,
-				targets.size(),
-				job);
-		RecommendationWorkQueueRegistry.QueueSnapshot snapshot =
-				RecommendationWorkQueueRegistry.snapshotTargetUserQueue(
-						runId,
-						"SVM",
-						2,
-						targets.size());
-		require(snapshot.getCompletedCount() == 0,
-				"stale SVM target-job completion was counted");
-		RecommendationWorkQueueRegistry.completeTargetUserJob(
-				runId,
-				"SVM",
-				2,
-				2,
-				targets.size(),
-				job);
-		snapshot = RecommendationWorkQueueRegistry.snapshotTargetUserQueue(
-				runId,
-				"SVM",
-				2,
-				targets.size());
-		require(snapshot.getCompletedCount() == 1,
-				"SVM target-job completion was not counted for the target node");
-		LiveWorkloadAdjustmentRegistry.setPaused(runId, 1, true);
-		RecommendationWorkQueueRegistry.TargetClaim paused =
-				RecommendationWorkQueueRegistry.claimTargetUserJob(
-						runId,
-						"SVM",
-						1,
-						2,
-						targets);
-		require(!paused.hasTarget() && paused.isDeferred(),
-				"paused node claimed an SVM target job");
-	}
-
-	private static void beginControlledRun(
-			String runId,
-			int algorithm,
-			int targetCount)
+	private static SchedulingRunContext beginControlledRun(String runId, int algorithm, int targetCount)
 	{
 		NodeCapacityRegistry.resetToDefaults(2, 4096);
 		RecommendationSchedulerRegistry.apply(
-				RecommendationSchedulerPlan.Mode.SCHEDULING_EXPERIMENT,
+				RecommendationSchedulerPlan.Mode.SCORING_SAFE,
 				SchedulerLabEngine.SchedulingPolicy.ROUND_ROBIN,
 				2,
 				4096,
 				"live workload self-test");
-		RecommendationSchedulerRegistry.beginRun(
-				runId,
-				2,
-				4096,
-				algorithm,
-				targetCount);
+		return RecommendationSchedulerRegistry.beginRun(runId, 2, 4096, algorithm, targetCount);
 	}
 
-	private static List<String> targetUsers(int count)
+	private static WorkPhase openPhase(SchedulingRunContext context, final int units)
 	{
-		ArrayList<String> targets = new ArrayList<String>();
-		for (int index = 1; index <= count; index++)
+		return context.openPhase("svm-targets", "self-test units", new SchedulingRunContext.UnitSupplier()
 		{
-			targets.add("Target" + index);
-		}
-		return targets;
+			public List<WorkUnitSpec> units()
+			{
+				ArrayList<WorkUnitSpec> list = new ArrayList<WorkUnitSpec>();
+				for (int id = 1; id <= units; id++)
+				{
+					list.add(new WorkUnitSpec(id, "unit-" + id, 1.0));
+				}
+				return list;
+			}
+		});
 	}
 
 	private static void sleep(long millis)

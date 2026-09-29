@@ -107,12 +107,14 @@ python build.py launch
 python build.py doctor
 python build.py compile
 python build.py rebuild
+python build.py test
 python build.py run
 python build.py info
 python build.py clean
 ```
 
 - `launch` is the recommended command. It prepares everything and opens the GUI.
+- `test` compiles the Java self-test suite and runs it. Also runs in CI.
 - `doctor` checks and prepares the local runtime without opening the GUI.
 - `compile` compiles the Java sources if needed.
 - `rebuild` deletes compiled classes and compiles again.
@@ -217,6 +219,77 @@ of opening a GUI that later fails. Old standalone plotting experiments are not
 part of the application launch path and are intentionally excluded from the
 runtime dependency set.
 
+## Reproducibility
+
+Every stochastic step is seeded, and the seed is printed in the run log.
+
+- **K-Means** uses deterministic farthest-first initialisation. The first
+  centroid is chosen by the **Cluster seed** in Advanced Algorithm Settings, so
+  the same seed always produces the same clustering. There are no dataset-specific
+  seed accounts any more.
+- **Text processing** is one shared implementation
+  (`TweetTextNormalizer`) used by the controller, every recommender node, the
+  user generator, and the population sweep, so every component tokenises
+  identically and the vocabularies cannot drift apart.
+- **Doc2Vec** trains single-threaded with a fixed seed, so the same dataset and
+  parameters always produce the same vectors on any machine. Set
+  `DSMP_DOC2VEC_ALLOW_PARALLEL=1` to train in parallel instead, which is faster
+  but no longer reproducible.
+- **SVM** keeps its existing stratified split seed and SMO model seed.
+- **Graph modularity** runs Gephi's Louvain with randomisation disabled, so the
+  community assignment and the modularity value are stable across runs.
+
+## Distributed Correctness
+
+For a fixed dataset, algorithm, settings and seeds, the final recommendations
+are identical bit for bit for any number of nodes, any node capacity profile,
+any scheduling policy, any live workload control and any retried failure; the
+scheduler changes only where and when work runs. See
+`DSMP_V4_SCHEDULING_REBUILD.md` for the design, the per-algorithm construction
+and the verification (including a live end-to-end check,
+`LiveExactnessHarness`). Two of the underlying properties:
+
+- **TF-IDF is corpus-wide.** Document frequency and corpus size are summed across
+  every node before weighting, so a term carries the same IDF everywhere and the
+  scores merged from different nodes live in one vector space. Each node
+  contributes only the users it owns, so a recommendation target replicated onto
+  every node is still counted as one document. Node count and node-capacity
+  settings change run timing, not recommendation scores.
+- **Each candidate is scored once.** Recommendation targets are replicated to
+  every node so each node can build their document; only the node that owns a
+  candidate contributes its score, so replicated targets are not multiplied by
+  the node count during the merge.
+
+If a node is lost mid-run, the corpus-wide TF-IDF barrier times out and the run
+fails with a clear message rather than silently falling back to per-node weights.
+
+## Recommendation Quality
+
+Runs report ranking quality, not just classifier accuracy. After the last target
+reports, the results pane prints hit rate, precision, recall and NDCG at the
+requested top-N, plus MRR and MAP, scored against the followee each user already
+has in the dataset. Targets with no known followee are skipped and counted rather
+than averaged in as zeros.
+
+The per-candidate number shown next to each recommendation is a **within-list
+relative rank score**: it is rescaled so the best candidate is exactly 100. It is
+not a similarity, a probability or a confidence, and it is not comparable between
+targets or between runs.
+
+## Credentials
+
+Twitter and database credentials are read from the environment, never from the
+source tree:
+
+```text
+DSMP_TWITTER_CONSUMER_KEY        DSMP_TWITTER_ACCESS_TOKEN
+DSMP_TWITTER_CONSUMER_SECRET     DSMP_TWITTER_ACCESS_TOKEN_SECRET
+DSMP_DB_USER                     DSMP_DB_PASSWORD
+```
+
+The normal simulator path reads a dataset file and needs none of them. Only live
+Twitter collection does, and it fails with a clear message when they are absent.
+
 ## GitHub Verification
 
 The repository includes a GitHub Actions workflow:
@@ -226,8 +299,8 @@ The repository includes a GitHub Actions workflow:
 ```
 
 It verifies both supported Python versions, the platform launcher, fresh-clone
-bootstrap, the exact Python lock, repeat/offline-ready bootstrap behavior, and
-Java 17 compilation on:
+bootstrap, the exact Python lock, repeat/offline-ready bootstrap behavior,
+Java 17 compilation, and the full Java self-test suite on:
 
 - Windows
 - macOS
