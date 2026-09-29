@@ -272,40 +272,50 @@ public final class ExactModelStagesSelfTest
 		double speed = context.speedOf(2);
 		require(speed < 1.0, "the weak node should be slower than the reference");
 		NodeEmulator.Span outer = weak.begin();
-		spin(20);
+		long burned = spin(20);
 		NodeEmulator.Span inner = weak.begin();
-		spin(20);
+		long innerBurned = spin(20);
+		burned += innerBurned;
 		weak.end(inner);
 		weak.checkpoint();
-		spin(20);
+		burned += spin(20);
 		weak.end(outer);
 		NodeEmulator.Ledger ledger = weak.getLedger();
 		double expected = ledger.getComputeNanos() * (1.0 / speed - 1.0);
 		require(Math.abs(ledger.getDilationNanos() - expected) <= 1.0e-3 * expected + 10.0,
 				"dilation " + ledger.getDilationNanos() + " is not compute x (1/speed - 1) = " + expected);
-		require(ledger.getComputeNanos() >= 45000000L,
-				"nested spans lost work: " + ledger.getComputeNanos() + " ns measured");
-		require(ledger.getComputeNanos() <= 90000000L,
-				"nested spans counted work twice: " + ledger.getComputeNanos() + " ns measured");
+		//Bounds are relative to the CPU time the spins measured, because the thread
+		//CPU clock can be coarse (Windows advances it in 15.6 ms steps). Counting the
+		//inner span twice would add all of innerBurned; losing a spin would drop it.
+		require(ledger.getComputeNanos() >= burned - innerBurned / 2,
+				"nested spans lost work: " + ledger.getComputeNanos()
+				+ " ns measured, " + burned + " ns burned");
+		require(ledger.getComputeNanos() < burned + innerBurned * 3 / 4,
+				"nested spans counted work twice: " + ledger.getComputeNanos()
+				+ " ns measured, " + burned + " ns burned");
 		context.close("self-test finished");
 	}
 
-	/** Burns about {@code millis} of this thread's CPU. */
-	private static void spin(long millis)
+	/** Burns about {@code millis} of this thread's CPU; returns the CPU time the clock measured. */
+	private static long spin(long millis)
 	{
-		long end = NodeEmulator.threadCpuNanos() + millis * 1000000L;
+		long start = NodeEmulator.threadCpuNanos();
+		long end = start + millis * 1000000L;
+		long now = start;
 		double sink = 0.0;
-		while (NodeEmulator.threadCpuNanos() < end)
+		while (now < end)
 		{
 			for (int index = 0; index < 1000; index++)
 			{
 				sink += Math.sqrt(index + sink);
 			}
+			now = NodeEmulator.threadCpuNanos();
 		}
 		if (sink == 42.0)
 		{
 			System.out.println(sink);
 		}
+		return now - start;
 	}
 
 	private static void require(boolean condition, String message)
