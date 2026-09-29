@@ -31,6 +31,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
@@ -137,16 +138,23 @@ public class RecommenderAgent extends Agent
 	private static final boolean WRITE_LEGACY_DOC2VEC_COMPATIBILITY_FILES = false;
 	private static final int COS_SIM_LOCAL_TOP_MIN_RESULTS = 20;
 	private static final int COS_SIM_LOCAL_TOP_MULTIPLIER = 10;
-	private static final Pattern RETWEET_PATTERN = Pattern.compile("RT @");
-	private static final Pattern PUNCTUATION_PATTERN = Pattern.compile("[\\p{P}]");
-	private static final Pattern LINK_PATTERN = Pattern.compile("http[a-zA-Z0-9]*|bitly[a-zA-Z0-9]*|www[a-zA-Z0-9]*");
-	private static final Pattern SPECIAL_CHARACTER_PATTERN = Pattern.compile("[^a-zA-Z\\p{Z}]");
-	private static final Pattern NON_ALPHA_PATTERN = Pattern.compile("[^a-zA-Z ]");
-	private static final Pattern MULTI_SPACE_PATTERN = Pattern.compile(" +");
+	//Matches whole URLs, including their punctuation, because links are now
+	//stripped before punctuation is converted to spaces. The old pattern only
+	//worked because punctuation had already been deleted, turning
+	//"http://t.co/x" into the single run "httptcox".
 	private static final double TEST_SET_PERCENT = 0.30;
 	private static final double TRAIN_SET_PERCENT = 0.70;
 	public static final int HIDDEN_NEURONS = 10;
 	public static final double LEARNING_RATE_MLP = 0.1;
+	/** Seed for the MLP row-presentation shuffle; fixed for reproducibility. */
+	private static final long MLP_PRESENTATION_SEED = 1L;
+	/** Seed of the legacy MLP's initial weights (Neuroph's own generator is unseeded). */
+	private static final long MLP_WEIGHT_SEED = 0x4D4C50L;
+	/**
+	 * Epoch limit of the legacy MLP, so a maximum error the network cannot reach
+	 * ends training instead of running forever; reported when it is hit.
+	 */
+	private static final int MLP_MAX_EPOCHS = Integer.getInteger("dsmp.mlp.maxEpochs", 10000).intValue();
 	public static final double MAX_ERROR_MLP = 0.01; 
 	
 
@@ -274,6 +282,11 @@ public class RecommenderAgent extends Agent
 			"yet","yo","you","youd","youll","your","youre","yours","yourself","yourselves","youve",
 			"z","zero"};
 
+	/** Constant-time stop-word lookup built once from {@link #stopWordsArray}. */
+	private static final java.util.Set<String> STOP_WORD_SET =
+			TweetTextNormalizer.stopWordSet(stopWordsArray);
+
+
 
 	public String nodeNumber ="";
 
@@ -302,6 +315,17 @@ public class RecommenderAgent extends Agent
 	private LinkedHashMap<String,Integer> allTermsDocumentFreq = new LinkedHashMap<String,Integer>();
 	public TreeSet<String> allUniqueDocTerms = new TreeSet<String>();  // Sepide changed the private access modifier to public
 	private int totalUsers=0,totalWords=0,totalDocuments=0;
+	//Corpus-wide user-document count agreed by every recommender node.
+	private int globalTotalDocuments=0;
+	//Time spent waiting for other nodes at the corpus-wide TF-IDF barrier.
+	private long completionTimeGlobalDfBarrier=0L;
+	//Document-frequency counting time, excluding the barrier wait.
+	private long completionTimeDocumentFrequency=0L;
+	//Top-N captured once when the run starts, so scoring cannot drift if the
+	//user edits the field while the run is in flight.
+	private int requestedTopRecommendations=0;
+	//Parsed node number; MIN_VALUE means not parsed yet.
+	private int cachedNodeNumber=Integer.MIN_VALUE;
 	private ArrayList<LinkedHashMap<String,Double>> userDocumentVectorsList = new ArrayList<LinkedHashMap<String,Double>>();
 	private LinkedHashMap<String,ArrayList<LinkedHashMap<String,Double>>> allUserDocumentVectors = new LinkedHashMap<String,ArrayList<LinkedHashMap<String,Double>>>();
 
@@ -354,20 +378,10 @@ public class RecommenderAgent extends Agent
 	private TreeSet<String> centralUniqueDocTerms = new TreeSet<String>();
 	
 	private DataSet dataSet;  // Data Set for Cross Validation Sepide
-	private DataSet trainMLP; //training set for MLP
-	private DataSet testMLP; //test set for MLP
-	private DataSet recMLP; //user getting recommendation set for MLP
-	private Map<String,Integer> followeeIndex; //index of array for followee
 	private Map<String,Integer> followerIndex; //index of array for followers
 	private MultiLayerPerceptron multiLayer;  // MLP for Cross Validation Sepide
-	private MultiLayerPerceptron nodeMLP; //initial MLP for node;
 	private MultilayerPerceptron mlp; //added by Sepide
-	private MultiLayerPerceptron averagedMLP; //MLP with averaged weights
 	private NeuralNetwork averagedNN; //NN with averaged weights
-	private boolean sparseFederatedMlpRun;
-	private List<SparseFederatedMlpModelSupport.TrainingExample> sparseMlpTestExamples;
-	private List<SparseFederatedMlpModelSupport.TrainingExample> sparseMlpRecExamples;
-	private RecommendationMemoryCoordinator.Lease activeMlpLease;
 	private RecommendationMemoryCoordinator.Lease activeKMeansLease;
 	private RecommendationMemoryCoordinator.Lease activeSvmLease;
 	private boolean exactSvmDiskBackedWaves;
@@ -375,7 +389,6 @@ public class RecommenderAgent extends Agent
 	private ExactSvmCorpusSpool exactSvmCorpusSpool;
 	private final LinkedHashSet<String> exactSvmUsableUsers =
 			new LinkedHashSet<String>();
-	private String[] followeeNames;
 	private String[] followerNames;    // Added by Sepide
 	public List<String> datasetFollowees; //followees of whole dataset Sepide changed the private access modifier to public
 	private List<String> centralTrainSetUsers;
@@ -526,8 +539,31 @@ public class RecommenderAgent extends Agent
 		getUserRecList = true;
 	}
 
+	/** Reads the requested top-N once, on the thread that starts the run. */
+	private int readRequestedTopRecommendations()
+	{
+		if (myGui == null || myGui.recommendationField == null)
+		{
+			return 0;
+		}
+		try
+		{
+			return Integer.parseInt(myGui.recommendationField.getText().trim());
+		}
+		catch (Exception ignored)
+		{
+			return 0;
+		}
+	}
+
 	private void resetForRecommendationRun(String runId)
 	{
+		//Drop any half-finished corpus-wide TF-IDF barrier from an aborted run so a
+		//stale partial submission cannot block or corrupt the next one.
+		GlobalDocumentFrequencyCoordinator.discard(runId);
+		requestedTopRecommendations = readRequestedTopRecommendations();
+		//Start this run's cluster dumps empty instead of appending to the last run's.
+		Cluster.resetClusterOutputFiles(runId);
 		System.out.println(getLocalName()+" resetting per-run state for "+runId);
 		RecommendationRunAbortRegistry.prepare(runId);
 		NodeExecutionMonitor.beginNodeRun(
@@ -553,6 +589,9 @@ public class RecommenderAgent extends Agent
 		totalUsers = 0;
 		totalWords = 0;
 		totalDocuments = 0;
+		globalTotalDocuments = 0;
+		completionTimeGlobalDfBarrier = 0L;
+		completionTimeDocumentFrequency = 0L;
 		userDocumentVectorsList.clear();
 		allUserDocumentVectors.clear();
 
@@ -571,25 +610,14 @@ public class RecommenderAgent extends Agent
 		trainSetUsers = null;
 		dataSetUsers = null;
 		dataSet = null;
-		trainMLP = null;
-		testMLP = null;
-		recMLP = null;
-		followeeIndex = null;
 		followerIndex = null;
 		multiLayer = null;
-		nodeMLP = null;
 		mlp = null;
-		averagedMLP = null;
 		averagedNN = null;
-		sparseFederatedMlpRun = false;
-		sparseMlpTestExamples = null;
-		sparseMlpRecExamples = null;
-		releaseActiveMlpLease();
 		releaseActiveKMeansLease();
 		releaseActiveSvmLease();
 		closeExactSvmCorpusSpool();
 		exactSvmUsableUsers.clear();
-		followeeNames = null;
 		followerNames = null;
 
 		startTimeTextProcessing = 0L;
@@ -642,20 +670,15 @@ public class RecommenderAgent extends Agent
 		}
 	}
 
+	/**
+	 * True when the run's input is streamed with run-time routing: users can be
+	 * moved between nodes, so this node's input ends with the delivery-complete
+	 * notice rather than at a tweet count known in advance.
+	 */
 	private boolean runtimeControlledInputQueueActive()
 	{
-		return RecommendationWorkQueueRegistry.snapshotInputBatchQueue(
-				runLifecycle.getActiveRunId(),
-				Math.max(1, numRecAgents)).getTotalShards() > 0;
-	}
-
-	private void releaseActiveMlpLease()
-	{
-		if (activeMlpLease != null)
-		{
-			activeMlpLease.close();
-			activeMlpLease = null;
-		}
+		SchedulingRunContext context = SchedulingRuntime.get(runLifecycle.getActiveRunId());
+		return context != null && context.isStreamedInput();
 	}
 
 	private void releaseActiveKMeansLease()
@@ -715,13 +738,33 @@ public class RecommenderAgent extends Agent
 		exactSvmUsableUsers.clear();
 	}
 
+	/** A message crossing this node's emulated link, ready at a wall-clock time. */
+	private static final class LinkEvent
+	{
+		private final long readyAtMillis;
+		private final ACLMessage message;
+		private final boolean outbound;
+
+		private LinkEvent(long readyAtMillis, ACLMessage message, boolean outbound)
+		{
+			this.readyAtMillis = readyAtMillis;
+			this.message = message;
+			this.outbound = outbound;
+		}
+	}
+
 	private class RecommenderServiceBehaviour extends CyclicBehaviour {
 		private static final long serialVersionUID = 1L;
+		private final java.util.ArrayDeque<LinkEvent> linkQueue = new java.util.ArrayDeque<LinkEvent>();
 
 		public RecommenderServiceBehaviour(Agent a) {
 			super(a);
 		}
 
+		/**
+		 * Holds this node at a phase boundary while the operator has it paused.
+		 * Returns false when the run ended or failed while holding.
+		 */
 		private boolean waitForLivePhaseBoundary(String phaseLabel)
 		{
 			try
@@ -732,13 +775,15 @@ public class RecommenderAgent extends Agent
 						phaseLabel);
 				return true;
 			}
-			catch (InterruptedException exception)
+			catch (RuntimeException exception)
 			{
-				Thread.currentThread().interrupt();
-				handleAlgorithmFailure(new IllegalStateException(
-						"Interrupted while waiting at live workload phase boundary "
-								+ phaseLabel,
-						exception));
+				if (!RecommendationRunAbortRegistry.isAborted(runLifecycle.getActiveRunId()))
+				{
+					handleAlgorithmFailure(new IllegalStateException(
+							"Stopped while holding at live workload phase boundary "
+									+ phaseLabel,
+							exception));
+				}
 				return false;
 			}
 		}
@@ -755,18 +800,124 @@ public class RecommenderAgent extends Agent
 			}
 		}
 
-		public void action() {
-			
+		/**
+		 * Handles one message. Everything this node computes while handling it
+		 * is node work: in an emulated run it is slowed to this node's speed
+		 * (nested work units and synchronization points settle their own share).
+		 */
+		public void action()
+		{
+			NodeEmulator emulator = activeEmulator();
+			NodeEmulator.Span span = emulator == null ? null : emulator.begin();
+			try
+			{
+				pumpLink(emulator);
+			}
+			finally
+			{
+				if (emulator != null)
+				{
+					try
+					{
+						emulator.end(span);
+					}
+					catch (RuntimeException runEnded)
+					{
+						//The run ended while this node was being slowed down.
+					}
+				}
+			}
+		}
+
+		/**
+		 * Emulates {@code messages} one-way messages on this node's link after
+		 * settling the work done so far, so a slow node's messages leave late.
+		 */
+		private void emulateLink(int messages)
+		{
+			NodeEmulator emulator = activeEmulator();
+			if (emulator == null)
+			{
+				return;
+			}
+			try
+			{
+				emulator.checkpoint();
+				emulator.linkDelay(messages);
+			}
+			catch (RuntimeException runEnded)
+			{
+				//The run ended; there is nothing left to emulate.
+			}
+		}
+
+		/**
+		 * This node's network link. In an emulated run every message to the
+		 * node becomes ready one link delay after it arrived and is handled in
+		 * arrival order; messages in flight overlap, as on a real link, so the
+		 * node is never blocked by latency, only by its own work. Replies that
+		 * cross the link (batch acknowledgements) leave the same way. Without
+		 * emulation messages are handled as they arrive.
+		 */
+		private void pumpLink(NodeEmulator emulator)
+		{
+			long delayMillis = emulator == null ? 0L : emulator.linkDelayMillis();
+			ACLMessage arrived;
+			while ((arrived = myAgent.receive()) != null)
+			{
+				long postedAt = arrived.getPostTimeStamp() > 0L
+						? arrived.getPostTimeStamp() : System.currentTimeMillis();
+				linkQueue.addLast(new LinkEvent(postedAt + delayMillis, arrived, false));
+				if (emulator != null && delayMillis > 0L)
+				{
+					emulator.noteLatency(1);
+				}
+			}
+			while (!linkQueue.isEmpty()
+					&& linkQueue.peekFirst().readyAtMillis <= System.currentTimeMillis())
+			{
+				LinkEvent event = linkQueue.pollFirst();
+				if (event.outbound)
+				{
+					send(event.message);
+				}
+				else
+				{
+					handleMessage(event.message);
+				}
+			}
+			if (linkQueue.isEmpty())
+			{
+				block();
+			}
+			else
+			{
+				block(Math.max(1L, linkQueue.peekFirst().readyAtMillis - System.currentTimeMillis()));
+			}
+		}
+
+		/** Sends a reply across this node's link: it leaves one link delay from now. */
+		private void sendOverLink(ACLMessage message)
+		{
+			NodeEmulator emulator = activeEmulator();
+			long delayMillis = emulator == null ? 0L : emulator.linkDelayMillis();
+			if (delayMillis <= 0L && linkQueue.isEmpty())
+			{
+				send(message);
+				return;
+			}
+			if (emulator != null)
+			{
+				emulator.noteLatency(1);
+			}
+			linkQueue.addLast(new LinkEvent(System.currentTimeMillis() + delayMillis, message, true));
+		}
+
+		private void handleMessage(ACLMessage msg)
+		{
 			if (!getUserRecList)
 			{
 				refreshRecommendationTargets();
-			}
-
-			ACLMessage msg= myAgent.receive();
-			if (msg == null)
-			{
-				block();
-				return;
 			}
 
 			if ("Prepare Recommendation Run".equals(msg.getOntology()))
@@ -1466,6 +1617,111 @@ public class RecommenderAgent extends Agent
 
 				try
 				{
+				//Corpus-wide TF-IDF is a barrier across every recommender node, so it
+				//runs before any memory lease is taken. Waiting at the barrier while
+				//holding a lease would let one node block here while another blocks
+				//acquiring the capacity only the first can release.
+				long documentFrequencyStart = System.nanoTime();
+
+				System.out.println(getLocalName()+" Get Document Freq of Terms");
+				int docFreq=0;
+				//Users this node is the primary owner of; the unit of the corpus-wide
+				//document count, so replicated targets are counted exactly once.
+				int ownedDocumentCount=0;
+				//Corpus-wide TF-IDF for every model except Doc2Vec (its own model) and
+				//the batch Scalable SVM (its shared coordinator weights raw documents).
+				//The exact SVM needs it in every mode: its models see the whole run.
+				boolean calculateGlobalTfidf = algorithmRec != Doc2Vec
+						&& !(algorithmRec == SCALABLE_SVM
+								&& isSvmBatchMode()
+								&& !isClassifierGuidedUserMode());
+				//Get the document frequency of terms
+				
+				if (calculateGlobalTfidf)
+				{
+					for (String term : allUniqueDocTerms)
+					{
+						//Initialize allTermsDocumentFreq to 0
+						allTermsDocumentFreq.put(term, 0);
+					}
+
+					for (String curName : allUserDocuments.keySet())
+					{
+						//Recommendation targets are replicated to every node, so only the
+						//node that owns a user may contribute it to the corpus-wide
+						//counts. Without this, a target would be counted once per node
+						//and both the corpus size and its terms' document frequency would
+						//grow with the node count, which is exactly the partition
+						//dependence the shared barrier exists to remove.
+						if (!ownsCandidate(curName))
+						{
+							continue;
+						}
+						ownedDocumentCount++;
+						LinkedHashMap<String,Double> curDoc = allUserDocuments.get(curName);
+						if (VERBOSE_TEXT_PROCESSING_DEBUG)
+						{
+							System.out.println("============================================");
+						}
+						//System.out.println(" Sepide testing if the document includes the users with their aggregated tweets" + allUserDocuments.get(curName));  // added by Sepide
+						for (String docTerm : curDoc.keySet())
+						{
+							//The map is pre-seeded from allUniqueDocTerms, which for
+							//distributed MLP is the controller's vocabulary. Treating a
+							//term the controller did not record as a fresh zero keeps a
+							//vocabulary mismatch from becoming a NullPointerException
+							//mid-run; the shared normaliser makes that mismatch unlikely,
+							//but the count stays correct either way.
+							Integer knownDocFreq = allTermsDocumentFreq.get(docTerm);
+							docFreq = knownDocFreq == null ? 0 : knownDocFreq.intValue();
+							docFreq++;
+							allTermsDocumentFreq.put(docTerm,docFreq);
+						}
+					}
+				}
+				//Document frequency and corpus size must describe the whole corpus,
+				//not this node's slice, or IDF becomes a function of the partition and
+				//scores merged from different nodes are not comparable.
+				if (calculateGlobalTfidf)
+				{
+					//Timed separately: waiting for slower nodes is synchronization
+					//cost, not TF-IDF work, and folding it into completionTimeTFIDF
+					//would distort any speedup comparison across node counts.
+					long globalDfStart = System.nanoTime();
+					emulateLink(1);
+					GlobalDocumentFrequencyCoordinator.Totals corpusTotals =
+							GlobalDocumentFrequencyCoordinator.combine(
+									getLocalName(),
+									runLifecycle.getActiveRunId(),
+									numRecAgents,
+									Integer.parseInt(nodeNumber),
+									allTermsDocumentFreq,
+									ownedDocumentCount);
+					emulateLink(1);
+					allTermsDocumentFreq = new LinkedHashMap<String,Integer>(
+							corpusTotals.getDocumentFrequency());
+					globalTotalDocuments = corpusTotals.getTotalDocuments();
+					completionTimeGlobalDfBarrier = System.nanoTime() - globalDfStart;
+					System.out.println(getLocalName()
+							+ " corpus-wide TF-IDF: totalDocuments="
+							+ globalTotalDocuments
+							+ " distinctTerms=" + allTermsDocumentFreq.size()
+							+ " (localDocuments=" + allUserDocuments.size()
+							+ ", ownedDocuments=" + ownedDocumentCount
+							+ ", nodes=" + numRecAgents
+							+ ", barrier wait "
+							+ convertMs(completionTimeGlobalDfBarrier) + " ms)");
+				}
+
+				//DF counting and the vocabulary sync are TF-IDF work; the barrier wait
+				//is not, and neither is the memory-lease wait that follows.
+				completionTimeDocumentFrequency = System.nanoTime()
+						- documentFrequencyStart - completionTimeGlobalDfBarrier;
+				if (completionTimeDocumentFrequency < 0L)
+				{
+					completionTimeDocumentFrequency = 0L;
+				}
+
 				if (algorithmRec == SVM && exactSvmDiskBackedWaves)
 				{
 					activeSvmLease =
@@ -1480,8 +1736,8 @@ public class RecommenderAgent extends Agent
 				}
 				if (algorithmRec == SVM && activeSvmLease == null)
 				{
-					boolean targetSpecificPreparation =
-							isSvmBatchMode() || isClassifierGuidedUserMode();
+					//The exact SVM's targets share one corpus-wide feature space.
+					boolean targetSpecificPreparation = false;
 					activeSvmLease =
 							RecommendationMemoryCoordinator.acquire(
 									getLocalName(),
@@ -1531,49 +1787,6 @@ public class RecommenderAgent extends Agent
 					}
 				 */
 
-				startTimeTFIDF = System.nanoTime();
-
-				System.out.println(getLocalName()+" Get Document Freq of Terms");
-				int docFreq=0;
-				boolean calculateGlobalTfidf = algorithmRec != Doc2Vec
-						&& !(RecommendationModeSupport.isSvmFamilyAlgorithm(algorithmRec)
-								&& isSvmBatchMode()
-								&& !isClassifierGuidedUserMode());
-				//Get the document frequency of terms
-				
-				//Make all unique terms from central for MLP inputs and num nodes > 1; Creates proper train/test files with correct num of attributes
-				if (algorithmRec == MLP && numRecAgents > 1)  // Sepide changed MLP to CommonNeighbors
-				//Make all unique terms from central training when SVM and num nodes > 1; Creates proper test files with correct num of attributes
-				// if (algorithmRec == SVM  && numRecAgents > 1)
-				{
-					allUniqueDocTerms.clear();
-					allUniqueDocTerms.addAll(centralUniqueDocTerms);
-				}
-				
-				if (calculateGlobalTfidf)
-				{
-					for (String term : allUniqueDocTerms)
-					{
-						//Initialize allTermsDocumentFreq to 0
-						allTermsDocumentFreq.put(term, 0);
-					}
-
-					for (String curName : allUserDocuments.keySet())
-					{
-						LinkedHashMap<String,Double> curDoc = allUserDocuments.get(curName);
-						if (VERBOSE_TEXT_PROCESSING_DEBUG)
-						{
-							System.out.println("============================================");
-						}
-						//System.out.println(" Sepide testing if the document includes the users with their aggregated tweets" + allUserDocuments.get(curName));  // added by Sepide
-						for (String docTerm : curDoc.keySet())
-						{
-							docFreq = allTermsDocumentFreq.get(docTerm);
-							docFreq++;
-							allTermsDocumentFreq.put(docTerm,docFreq);
-						}
-					}
-				}
 				
 								// FileWriter writer11;
 				// try {
@@ -1621,6 +1834,10 @@ public class RecommenderAgent extends Agent
 
 //				System.out.println(getLocalName()+ " allTermsDocumentFreq: "+allTermsDocumentFreq);
 
+				//Clock restarts here so a blocking memory-lease acquisition above is
+				//not counted as TF-IDF compute time.
+				startTimeTFIDF = System.nanoTime();
+
 				//*******************************@CALCULATE THE TF-IDF ************************************
 				//tf-idf = tf * idf
 				//tf log normalization= allUserDocumentVectors ; tf raw frequency = allUserDocumentVectors
@@ -1634,15 +1851,16 @@ public class RecommenderAgent extends Agent
 				ArrayList<LinkedHashMap<String,Double>> userDocumentsTFIDFList = new ArrayList<LinkedHashMap<String,Double>>();
 				ArrayList<LinkedHashMap<String,Double>> userDocumentsTFList = new ArrayList<LinkedHashMap<String,Double>>();
 				//totalDocuments = tweetIdDocumentVector.size();
-				totalDocuments = allUserDocuments.size();
-				System.out.println("User Documents size: " + totalDocuments);
+				//Local count is kept for telemetry; TF-IDF uses the corpus-wide count.
+				totalDocuments = calculateGlobalTfidf
+						? globalTotalDocuments : allUserDocuments.size();
+				System.out.println("User Documents size (local): "
+						+ allUserDocuments.size()
+						+ " TF-IDF corpus size: " + totalDocuments);
 				System.out.println(getLocalName()+" Calculating TF-IDF");
 
 				double vectorMagnitude=0.0;
-				boolean preserveRawDocuments =
-						algorithmRec == SCALABLE_SVM
-						|| RecommendationModeSupport.isSvmFamilyAlgorithm(algorithmRec)
-						&& (isSvmBatchMode() || isClassifierGuidedUserMode());
+				boolean preserveRawDocuments = algorithmRec == SCALABLE_SVM;
 				/*
 				//TF-IDF for each individual tweets
 				for (String curName : usersTweetIdsList.keySet())
@@ -1716,7 +1934,10 @@ public class RecommenderAgent extends Agent
 						//tf=1+Math.log10(tweetIdDoc.get(docTerm)); //tf log normalization
 						tf=userDoc.get(docTerm); //tf raw frequency
 						//tf = tf/userDoc.keySet().size(); //tf normalized by document
-						df=allTermsDocumentFreq.get(docTerm);
+						//Null-safe for the same reason as the counting pass: a term with
+						//no corpus-wide entry contributes nothing rather than throwing.
+						Integer corpusDocFreq = allTermsDocumentFreq.get(docTerm);
+						df = corpusDocFreq == null ? 0.0 : corpusDocFreq.doubleValue();
 						//idf=Math.log10((totalDocuments/df)+1); //idf smooth, adjust for zero log(1)
 						//idf=Math.log10(totalDocuments/df); //log base 10
 						idf=(double)Math.log10(totalDocuments/df) / Math.log10(2); //log base 2
@@ -1779,7 +2000,9 @@ public class RecommenderAgent extends Agent
 				System.out.println();
 
 				endTimeTFIDF = System.nanoTime();
-				completionTimeTFIDF = endTimeTFIDF - startTimeTFIDF;
+				//Report TF-IDF compute time only; the barrier wait is reported above.
+				completionTimeTFIDF = (endTimeTFIDF - startTimeTFIDF)
+						+ completionTimeDocumentFrequency;
 				System.out.println(getLocalName()+" completionTimeTFIDF: "+convertMs(completionTimeTFIDF)+" ms");
 				myGui.appendResult(getLocalName()+" completionTimeTFIDF: "+convertMs(completionTimeTFIDF)+" ms");
 				NodeExecutionMonitor.recordFeatureStats(
@@ -1956,363 +2179,8 @@ public class RecommenderAgent extends Agent
 				//@Jason added conditions to determine what algorithms to use for recommender
 
 				//Only used for classifiers for Weka
-				String trainSetFilePath = "";
-				String testSetFilePath = "";
-				String recommendSetFilePath = "";
-				String dataSetFilePath = "";
-				String dataSetFilePath1 = "";
-				String trainSetFilePath1 = "";
 				
 				
-				//Create Arff files for Weka, *INCORRECT*Only determineTrainingTestSet when it is a single node and algorithmRec == SVM
-				 if (algorithmRec == SVM
-						 && !isSvmBatchMode()
-						 && !isClassifierGuidedUserMode())
-				{
-					
-					System.out.println("Test Sepide to see if the arff file is created");
-					String arffDirName = "Dataset/Arff_files/";
-					File arffDir = new File(arffDirName);
-					if (!arffDir.exists())
-					{
-							arffDir.mkdirs();
-					}
-					
-					// if (numRecAgents < 2)
-					// {
-					determineTrainingTestSet();
-					dataSetUsers = new ArrayList<String>(trainSetUsers);
-					dataSetUsers.addAll(testSetUsers);
-					System.out.println(getLocalName()+" test set "+ testSetUsers.size() +": "+testSetUsers);
-					System.out.println(getLocalName()+" train set "+ trainSetUsers.size() +": "+trainSetUsers);
-					System.out.println(getLocalName()+" data set "+ dataSetUsers.size() +": "+dataSetUsers);  // added by Sepide
-											
-					//Create the arff training file attributes
-					FileWriter trainWriter;	
-                    FileWriter dataWriter;					
-					BufferedWriter bufferedWriterTrain;
-					BufferedWriter bufferedWriterData;
-					
-					int uniqueWordCountTrain = 0;
-					trainSetFilePath = arffDirName + "train_set_rec"+nodeNumber+".txt";
-					trainSetFilePath = arffDirName + "train_set_rec"+nodeNumber+".txt";
-					trainSetFilePath1 = arffDirName + "train_set_rec1"+nodeNumber+".txt";  // added by Sepide 
-					dataSetFilePath = arffDirName + "data_set_rec"+nodeNumber+".txt";
-					dataSetFilePath1 = arffDirName + "data_set_rec1"+nodeNumber+".txt";    // added by Sepide 
-									
-					try {
-							trainWriter = new FileWriter(trainSetFilePath, false);
-                            dataWriter = new FileWriter(dataSetFilePath, false);							
-							bufferedWriterTrain = new BufferedWriter(trainWriter);
-							bufferedWriterData = new BufferedWriter(dataWriter);
-										
-							bufferedWriterTrain.write("@relation trainingSet");
-							bufferedWriterData.write("@relation dataSet");
-							bufferedWriterTrain.newLine();
-							bufferedWriterTrain.newLine();
-							bufferedWriterData.newLine();
-							bufferedWriterData.newLine();
-														
-							for (String uniqueWord: allUniqueDocTerms)
-							{
-								bufferedWriterTrain.write("@attribute word"+ uniqueWordCountTrain +" numeric");
-								bufferedWriterData.write("@attribute word"+ uniqueWordCountTrain +" numeric");
-								bufferedWriterTrain.newLine();
-                                bufferedWriterData.newLine();								
-								uniqueWordCountTrain++;
-							}
-							
-							String attributeClass = buildArffClassAttribute(followeeFollowers.keySet());
-							
-							bufferedWriterTrain.write(attributeClass);
-							bufferedWriterData.write(attributeClass);
-							bufferedWriterTrain.newLine();
-							bufferedWriterData.newLine();
-							bufferedWriterTrain.newLine();
-							bufferedWriterData.newLine();
-							bufferedWriterTrain.newLine();
-							bufferedWriterData.newLine();
-							bufferedWriterTrain.write("@data");
-							bufferedWriterData.write("@data");
-							bufferedWriterTrain.newLine();
-                            bufferedWriterData.newLine();							
-							
-							bufferedWriterTrain.close();
-							bufferedWriterData.close();
-							
-					}
-					catch (IOException e) {
-						e.printStackTrace();
-					}
-					
-					//Write the vector data of each user for training, test, recommend set to arff files
-					try {
-							trainWriter = new FileWriter(trainSetFilePath, true);
-							dataWriter = new FileWriter(dataSetFilePath, true);
-							bufferedWriterTrain = new BufferedWriter(trainWriter);
-							bufferedWriterData = new BufferedWriter(dataWriter);
-
-							StringJoiner tfidfJoiner;
-							double currTfidf;
-															
-							 for (String currUser : trainSetUsers)
-							//S for (String currUser : dataSetUsers)
-							{
-								// tfidfJoiner = new StringJoiner(",");
-								Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
-								
-								// for (String uniqueWord: allUniqueDocTerms)
-								// {
-									// if (currDocTfidf.keySet().contains(uniqueWord))
-										// currTfidf = currDocTfidf.get(uniqueWord);
-									// else
-										// currTfidf = 0.0;
-									
-									// tfidfJoiner.add(String.valueOf(currTfidf));
-								// }
-								SparseArffWriter.writeRow(bufferedWriterTrain, currDocTfidf,
-										allUniqueDocTerms, userFollowee.get(currUser));
-								SparseArffWriter.writeRow(bufferedWriterData, currDocTfidf,
-										allUniqueDocTerms, userFollowee.get(currUser));
-								//S bufferedWriterData.write(tfidfJoiner.toString());
-								
-							}
-							bufferedWriterTrain.close();
-                            							
-
-					
-					
-					 for (String currUser : dataSetUsers)
-							{
-								// tfidfJoiner = new StringJoiner(",");
-								Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
-								
-								// for (String uniqueWord: allUniqueDocTerms)
-								// {
-									// if (currDocTfidf.keySet().contains(uniqueWord))
-										// currTfidf = currDocTfidf.get(uniqueWord);
-									// else
-										// currTfidf = 0.0;
-									
-									// tfidfJoiner.add(String.valueOf(currTfidf));
-								// }
-								SparseArffWriter.writeRow(bufferedWriterData, currDocTfidf,
-										allUniqueDocTerms, userFollowee.get(currUser));
-								//S bufferedWriterData.write(tfidfJoiner.toString());
-								
-							}
-							bufferedWriterData.close();
-							
-						}
-					catch (IOException e) {
-						e.printStackTrace();
-					}
-					
-					/* Code added by Sepide for Word embedding part   */
-
-                     //try {
-						//Map<Integer,String> mapEmbedding = new HashMap<Integer,String>();
-						//Scanner scanner = new Scanner(new FileReader("vectors-corrected.txt"));
-						//int i =0;
-						//while (scanner.hasNextLine()) {
-								
-								//String[] columns = scanner.nextLine().split("\t");
-
-                                //mapEmbedding.put(i,columns[0]);
-								//i++;
-							            
-                         //}
-							//trainWriter = new FileWriter(trainSetFilePath1, true);
-							//dataWriter = new FileWriter(dataSetFilePath1, true);
-							//bufferedWriterTrain = new BufferedWriter(trainWriter);
-							//bufferedWriterData = new BufferedWriter(dataWriter);
-							//File file=new File("vectors-corrected.txt");    //creates a new file instance
-                            //FileReader fr=new FileReader(file);   //reads the file
-                            //BufferedReader br=new BufferedReader(fr);  //creates a buffering character input stream   							
-                            //String line; 
-							//line=br.readLine();
-							
-							//StringJoiner tfidfJoiner;
-							//double currTfidf;
-															
-							//S for (String currUser : trainSetUsers)
-							//for (String currUser : dataSetUsers)
-							//{
-								// tfidfJoiner = new StringJoiner(",");
-								//Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
-								
-								// for (String uniqueWord: allUniqueDocTerms)
-								// {
-									// if (currDocTfidf.keySet().contains(uniqueWord))
-										// currTfidf = currDocTfidf.get(uniqueWord);
-									// else
-										// currTfidf = 0.0;
-									
-									// tfidfJoiner.add(String.valueOf(currTfidf));
-								// }
-								//tfidfJoiner = vectorArffFormat(mapEmbedding,allUniqueDocTerms);
-								
-								//bufferedWriterTrain.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
-								//bufferedWriterData.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
-								//S bufferedWriterData.write(tfidfJoiner.toString());
-								//bufferedWriterTrain.newLine();
-								//bufferedWriterData.newLine();
-								//line=br.readLine();
-								
-							//}
-							//bufferedWriterTrain.close();
-                            //bufferedWriterData.close();						
-                            
-							
-                            //line=br.readLine();
-							//double input1_vector[] = new double[70];
-							//double input2_vector[] = new double[70];
-							//if (line != null) {
-								//input1_vector.add(line);
-								//line=br.readLine();
-								//input2_vector.add(line);
-							//}
-								
-                            //double dot_product = Nd4j.getBlasWrapper().dot(input1_vector[].class, input2_vector[].class);
-                            
-							 //double cosine_similarity(double[] input1_vector, double[] input2_vector, double dot_product){
-									//double norm_a = 0.0;
-									//double norm_b = 0.0;
-								  //Its assumed input1_vector and input2_vector have same length (300 dimensions)
-									//for (int i = 0; i < input1_vector.length; i++) 
-								   // {
-										//norm_a += Math.pow(input1_vector[i], 2);
-										//norm_b += Math.pow(input2_vector[i], 2);
-									//}   
-								  //double cosine_sim = (dot_product / (Math.sqrt(norm_a) * Math.sqrt(norm_b)));
-								  ///return cosine_sim;
-							     // }
-							
-							//double cosine_sim = cosine_similarity(input1_vector[].class, input2_vector[].class, dot_product);
-
-							 
-
-					//}
-					//catch (IOException e) {
-						//e.printStackTrace(); 
-					//}					
-					
-					/* End of code added by Sepide for Word embedding part */
-					
-					// }
-					// else
-					// {
-						// trainSetFilePath = arffDirName + "train_set_controller.txt";
-						// testSetUsers = new ArrayList<String>();
-						// /*for (String testUser : allUserDocumentsTFIDF.keySet())*/
-						// for (AID testUser : allUserAgentConnectedtoThisServer)
-						// {
-							// String testUserName = testUser.getLocalName().split("-")[0];
-							// testSetUsers.add(testUserName);
-							// System.out.println(getLocalName()+" testUser: "+testUserName);
-						// }
-						/*testset is list of original users connected to rec agent (does not include duplicated recommended user)*/
-						
-						// System.out.println(getLocalName()+" testSetUsers.size: "+testSetUsers.size());
-					// }
-					
-					
-					FileWriter testWriter;
-					FileWriter recommendWriter;
-					BufferedWriter bufferedWriterTest;
-					BufferedWriter bufferedWriterRecommend;
-					int uniqueWordCountTest = 0;
-					testSetFilePath = arffDirName + "test_set_rec"+nodeNumber+".txt";
-					recommendSetFilePath = arffDirName + "recommend_set_rec"+nodeNumber+".txt";
-					try{
-						testWriter = new FileWriter(testSetFilePath, false);
-						recommendWriter = new FileWriter(recommendSetFilePath, false);
-						
-						bufferedWriterTest = new BufferedWriter(testWriter);
-						bufferedWriterTest.write("@relation testSet");
-						bufferedWriterTest.newLine();
-						bufferedWriterTest.newLine();
-						
-						bufferedWriterRecommend = new BufferedWriter(recommendWriter);
-						bufferedWriterRecommend.write("@relation recommendSet");
-						bufferedWriterRecommend.newLine();
-						bufferedWriterRecommend.newLine();
-						
-						for (String uniqueWord: allUniqueDocTerms)
-						{
-							bufferedWriterTest.write("@attribute word"+ uniqueWordCountTest +" numeric");
-							bufferedWriterTest.newLine();
-							bufferedWriterRecommend.write("@attribute word"+ uniqueWordCountTest +" numeric");
-							bufferedWriterRecommend.newLine();		
-							uniqueWordCountTest++;
-						}
-						
-						String attributeClass = buildArffClassAttribute(followeeFollowers.keySet());
-						
-						
-						bufferedWriterTest.write(attributeClass);
-						bufferedWriterTest.newLine();
-						bufferedWriterTest.newLine();
-						bufferedWriterTest.newLine();
-						bufferedWriterTest.write("@data");
-						bufferedWriterTest.newLine();
-						
-						bufferedWriterRecommend.write(attributeClass);
-						bufferedWriterRecommend.newLine();
-						bufferedWriterRecommend.newLine();
-						bufferedWriterRecommend.newLine();
-						bufferedWriterRecommend.write("@data");
-						bufferedWriterRecommend.newLine();
-						
-						bufferedWriterTest.close();
-						bufferedWriterRecommend.close();
-						
-					}
-					catch (IOException e)
-					{
-						e.printStackTrace();
-					}
-					
-					//Write the vector data of each user for training, test, recommend set to arff files
-					try {
-						testWriter = new FileWriter(testSetFilePath, true);
-						recommendWriter = new FileWriter(recommendSetFilePath, true);
-						bufferedWriterTest = new BufferedWriter(testWriter);
-						bufferedWriterRecommend = new BufferedWriter(recommendWriter);
-
-						StringJoiner tfidfJoiner;
-						double currTfidf;
-						
-						for (String currUser : testSetUsers)
-						{
-							System.out.println(getLocalName()+" currUser: "+currUser);
-							Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
-							// System.out.println(getLocalName()+" currUser tfidf: ");
-							// StringJoiner tfidfString = new StringJoiner(",");
-							// for (String wordTfidf: currDocTfidf.keySet())
-							// {
-								// tfidfString.add(String.valueOf(currDocTfidf.get(wordTfidf)));
-							// }
-							// System.out.println(tfidfString.toString());
-							
-							SparseArffWriter.writeRow(bufferedWriterTest, currDocTfidf,
-									allUniqueDocTerms, userFollowee.get(currUser));
-						}
-						bufferedWriterTest.close();
-
-						for (String currUser : usersRec)
-						{
-							Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);							
-							SparseArffWriter.writeRow(bufferedWriterRecommend, currDocTfidf,
-									allUniqueDocTerms, userFollowee.get(currUser));
-						}
-						bufferedWriterRecommend.close();	
-					}
-					catch (IOException e) {
-						e.printStackTrace();
-					}
-					
-				}
 				
 				// Code added for Doc2Vec by Sepide on Nov.3 
 				String dataSetFilePath4 = "";
@@ -2412,9 +2280,7 @@ public class RecommenderAgent extends Agent
 				// End of Code added for Doc2Vec by Sepide on Nov. 3
 
 				int preparedModelFeatureCount = allUniqueDocTerms.size();
-				if (algorithmRec != SCALABLE_SVM
-						&& !(RecommendationModeSupport.isSvmFamilyAlgorithm(algorithmRec)
-						&& (isSvmBatchMode() || isClassifierGuidedUserMode())))
+				if (algorithmRec != SCALABLE_SVM)
 				{
 					allUserDocuments.clear();
 				}
@@ -2440,11 +2306,14 @@ public class RecommenderAgent extends Agent
 				{
 					return;
 				}
+				//Rows are cut at the requested top-N, so every node must use the same value.
+				requestedTopRecommendations = schedulingContext().agree(
+						"top-recommendations", requestedTopRecommendations);
 				NodeExecutionMonitor.modelRunning(
 						getLocalName(),
 						"Executing "
 								+ RecommendationModeSupport.algorithmName(algorithmRec)
-								+ " for this node's assigned shard.");
+								+ " as work units of the run's scheduler.");
 
 				//Cosine Similarity
 				if (algorithmRec == COS_SIM)
@@ -2460,65 +2329,17 @@ public class RecommenderAgent extends Agent
 
 					startTimeAlgorithm = System.nanoTime();
 
-					//setup array of users
-					String[] users = new String[allUserDocumentsTFIDF.keySet().size()];
-					String[] usersForRec = new String[usersRec.size()];
-					users = allUserDocumentsTFIDF.keySet().toArray(users);
-					usersForRec = usersRec.toArray(usersForRec);
-
 					System.out.println(getLocalName()+ "CALCULATING COS-SIM SCORES");
-
-					int localResultLimit = getCosSimLocalResultLimit();
-					if (isExperimentalCandidateSchedulingEnabled(COS_SIM))
-					{
-						allUserScores = runExperimentalCandidateShardScheduling(
-								users,
-								usersForRec,
-								false,
-								localResultLimit);
-					}
-					else
-					{
-						allUserScores = initializeTargetScoreRows(usersRec, users);
-						for (int i = 0; i < usersForRec.length; i++)
-						{
-							String recUser = usersForRec[i];
-							LinkedHashMap<String, Double> recDoc = allUserDocumentsTFIDF.get(recUser);
-							TreeMap<String,Double> userScores = new TreeMap<String,Double>();
-
-							if (recDoc != null)
-							{
-								for (int j = 0; j < users.length; j++)
-								{
-									String candidateUser = users[j];
-									if (!recUser.equals(candidateUser))
-									{
-										LinkedHashMap<String, Double> candidateDoc = allUserDocumentsTFIDF.get(candidateUser);
-										double score = calculateSparseCosineScore(recDoc, candidateDoc);
-										userScores.put(candidateUser, score);
-									}
-								}
-							}
-
-							if (numRecAgents > 1 && !isUserRankerFolloweeMode())
-							{
-								userScores = keepTopCosSimScores(userScores, localResultLimit);
-							}
-							allUserScores.put(recUser, userScores);
-						}
-					}
-
-
-					// System.out.println(getLocalName()+" After COS SIM scores: "+allUserScores);
+					allUserScores = runCandidateScoring(false);
 
 					endTimeAlgorithm = System.nanoTime();
 					completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
 
 					//Output for cosSIM
-					textprocessing_wb_or_tfidf_Data.add("CosSim=TP+TFIDF+CosSim" + "\t" + agentName + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
-					System.out.println(agentName+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " TFIDF: " + convertMs(completionTimeTFIDF) + " CosSim: " + convertMs(completionTimeAlgorithm) + " Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm));
-//					myGui.appendResult(agentName+"\nTotal Tweets Processed: " + tweetCount + " TP:" + round(completionTimeTextProcessing/1000000.00,2) + "ms TFIDF:" + round(completionTimeTFIDF/1000000.00,2) + "ms CosSim:" + round(completionTimeAlgorithm/1000000.00,2) + "ms Total:" + round((completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)/1000000.00,2)+"ms");
-					myGui.appendResult(agentName+"\nTotal Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms CosSim: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
+					textprocessing_wb_or_tfidf_Data.add("CosSim=TP+TFIDF+CosSim" + "\t" + agentName + "\t" + usableTweetCount + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
+					System.out.println(agentName+"- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " TFIDF: " + convertMs(completionTimeTFIDF) + " CosSim: " + convertMs(completionTimeAlgorithm) + " Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm));
+//					myGui.appendResult(agentName+"\nTweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP:" + round(completionTimeTextProcessing/1000000.00,2) + "ms TFIDF:" + round(completionTimeTFIDF/1000000.00,2) + "ms CosSim:" + round(completionTimeAlgorithm/1000000.00,2) + "ms Total:" + round((completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)/1000000.00,2)+"ms");
+					myGui.appendResult(agentName+"\nTweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms CosSim: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
 				
 				   // Code added by Sepide
 				   
@@ -2558,67 +2379,9 @@ public class RecommenderAgent extends Agent
 					{
 						startTimeAlgorithm = System.nanoTime();
 
-						String[] users = new String[allUserDocumentsTFIDF.keySet().size()];
-						String[] usersForRec = new String[usersRec.size()];
-						users = allUserDocumentsTFIDF.keySet().toArray(users);
-						usersForRec = usersRec.toArray(usersForRec);
-
 						System.out.println(getLocalName()
 								+ " CALCULATING COMMON-NEIGHBOR SCORES");
-
-						int localResultLimit = getCosSimLocalResultLimit();
-						if (isExperimentalCandidateSchedulingEnabled(CommonNeighbors))
-						{
-							allUserScores = runExperimentalCandidateShardScheduling(
-									users,
-									usersForRec,
-									true,
-									localResultLimit);
-						}
-						else
-						{
-							allUserScores = initializeTargetScoreRows(usersRec, users);
-							int currentNode = Integer.parseInt(nodeNumber);
-
-							for (int i = 0; i < usersForRec.length; i++)
-							{
-								String recUser = usersForRec[i];
-								LinkedHashMap<String, Double> recDoc =
-										allUserDocumentsTFIDF.get(recUser);
-								TreeMap<String,Double> userScores =
-										new TreeMap<String,Double>();
-
-								if (recDoc != null)
-								{
-									for (int j = 0; j < users.length; j++)
-									{
-										String candidateUser = users[j];
-										if (!recUser.equals(candidateUser))
-										{
-											Integer primaryServer =
-													userPrimaryRecServer.get(candidateUser);
-											if (primaryServer != null
-													&& primaryServer.intValue() != currentNode)
-											{
-												continue;
-											}
-											LinkedHashMap<String, Double> candidateDoc =
-													allUserDocumentsTFIDF.get(candidateUser);
-											double score = calculateCommonNeighborScore(
-													recDoc, candidateDoc);
-											userScores.put(candidateUser, score);
-										}
-									}
-								}
-
-								if (numRecAgents > 1 && !isUserRankerFolloweeMode())
-								{
-									userScores = keepTopCosSimScores(
-											userScores, localResultLimit);
-								}
-								allUserScores.put(recUser, userScores);
-							}
-						}
+						allUserScores = runCandidateScoring(true);
 
 						endTimeAlgorithm = System.nanoTime();
 						completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
@@ -2626,13 +2389,13 @@ public class RecommenderAgent extends Agent
 						textprocessing_wb_or_tfidf_Data.add(
 								"CommonNeighbors=TP+TFIDF+CommonNeighbors"
 										+ "\t" + agentName
-										+ "\t" + tweetCount
+										+ "\t" + usableTweetCount + "\t" + tweetCount
 										+ "\t" + completionTimeTextProcessing
 										+ "\t" + completionTimeTFIDF
 										+ "\t" + completionTimeAlgorithm
 										+ "\t" + System.getProperty("line.separator"));
 						System.out.println(agentName
-								+"- Total Tweets Processed: " + tweetCount
+								+"- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount
 								+ " TP: " + convertMs(completionTimeTextProcessing)
 								+ " ms TFIDF: " + convertMs(completionTimeTFIDF)
 								+ " ms CommonNeighbors: "
@@ -2643,7 +2406,7 @@ public class RecommenderAgent extends Agent
 										+ completionTimeAlgorithm)
 								+ " ms");
 						myGui.appendResult(agentName
-								+"\nTotal Tweets Processed: " + tweetCount
+								+"\nTweets Received: " + tweetCount + " Processed: " + usableTweetCount
 								+ " TP: " + convertMs(completionTimeTextProcessing)
 								+ " ms TFIDF: " + convertMs(completionTimeTFIDF)
 								+ " ms CommonNeighbors: "
@@ -2662,22 +2425,7 @@ public class RecommenderAgent extends Agent
 								+ " CALCULATING TEMPORAL GRAPH FOUNDATION SCORES");
 
 						TemporalGraphFoundationModelSupport.Result result =
-								TemporalGraphFoundationModelSupport.score(
-										new TemporalGraphFoundationModelSupport.Input(
-												runLifecycle.getActiveRunId(),
-												getConfiguredDatasetFile(),
-												allUserDocumentsTFIDF,
-												userFollowee,
-												datasetUserFollowee,
-												usersRec,
-												userPrimaryRecServer,
-												Math.max(1, Integer.parseInt(nodeNumber)),
-												numRecAgents,
-												getCosSimLocalResultLimit()));
-						allUserScores = result.getScores();
-						temporalGraphCandidateDetails.clear();
-						temporalGraphCandidateDetails.putAll(result.getDetails());
-						TemporalGraphFoundationRegistry.record(result);
+								runTemporalGraphFoundation();
 
 						endTimeAlgorithm = System.nanoTime();
 						completionTimeAlgorithm =
@@ -2685,13 +2433,13 @@ public class RecommenderAgent extends Agent
 						textprocessing_wb_or_tfidf_Data.add(
 								"TGF=TP+TFIDF+TemporalGraphFoundation"
 										+ "\t" + agentName
-										+ "\t" + tweetCount
+										+ "\t" + usableTweetCount + "\t" + tweetCount
 										+ "\t" + completionTimeTextProcessing
 										+ "\t" + completionTimeTFIDF
 										+ "\t" + completionTimeAlgorithm
 										+ "\t" + System.getProperty("line.separator"));
 						String timing = agentName
-								+ "- Total Tweets Processed: " + tweetCount
+								+ "- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount
 								+ " TP: " + convertMs(completionTimeTextProcessing)
 								+ " ms TFIDF: " + convertMs(completionTimeTFIDF)
 								+ " ms Temporal Graph Foundation: "
@@ -2717,1140 +2465,30 @@ public class RecommenderAgent extends Agent
 					    }
 					 */
 					//**************CALCULATE K-Means SCORES******************
-					/*
-					//k-means on every individual tweets 
-					int kClusters = 3; //number of k clusters
-					long initialTweetId;
-					boolean notDuplicateInitialTweetId = false; 
-					boolean convergence = false; //documents remain in the same clusters
-					int maxIterations = 10;
-					ArrayList<Long> initialTweetIds = new ArrayList<Long>();
-					List<Long> allTweetIds = new ArrayList<Long>(tweetIdDocumentVector.keySet());
-					List<Long> usableTweetIds = new ArrayList<Long>(allTweetIds); //Tweet ids excluding initial tweet ids
-					List<Cluster> allClusters = new ArrayList<Cluster>();
-					LinkedHashMap<String,Double> centroidTFIDF = new LinkedHashMap<String,Double>();
-					LinkedHashMap<String,Double> baseCentroidTFIDF = new LinkedHashMap<String,Double>(); //tfidf of 0.0 for all unique doc terms
-					List<List<Point>> prevListPoints = new ArrayList<List<Point>>();
-
-					if (kClusters > allTweetIds.size())
-						kClusters = allTweetIds.size();
-					if (kClusters < 2)
-						kClusters = 2;
-
-					for (String term : allUniqueDocTerms)
-					{
-						baseCentroidTFIDF.put(term, 0.0);
-					}
-
-
-					startTimeAlgorithm = System.nanoTime();
-
-					System.out.println("Calculating k-means");
-
-					//Choose random initial points for cluster centroid
-					for (int i = 0; i < kClusters; i++)
-					{
-						Collections.shuffle(allTweetIds);
-						initialTweetId = allTweetIds.get(0);
-						if (initialTweetIds.contains(initialTweetId))
-						{
-							notDuplicateInitialTweetId = true;
-							while (notDuplicateInitialTweetId)
-							{
-								System.out.println("Duplicated");
-								Collections.shuffle(allTweetIds);
-								initialTweetId = allTweetIds.get(0);
-								if (!initialTweetIds.contains(initialTweetId))
-									notDuplicateInitialTweetId = false;
-							}
-						}
-
-						initialTweetIds.add(initialTweetId);
-
-						Cluster cluster = new Cluster(i);
-						LinkedHashMap<String,Double> currTFIDF = tweetIdTFIDF.get(initialTweetId);
-						Point initialPoint = new Point(initialTweetId,currTFIDF);
-						initialPoint.setCluster(i);
-						cluster.addPoint(initialPoint);
-
-						centroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-
-						for (String term : currTFIDF.keySet())
-						{
-							centroidTFIDF.put(term,currTFIDF.get(term));
-						}
-
-						Point centroid = new Point(-1,centroidTFIDF);
-						cluster.setCentroid(centroid);
-
-						allClusters.add(cluster);
-
-					}
-
-					//remove initial tweet ids from remaining tweet ids
-					usableTweetIds.removeAll(initialTweetIds);
-
-					//	System.out.println("allTweetIds: "+allTweetIds);
-					//	System.out.println("Initial Tweet Ids: "+initialTweetIds);
-					//	System.out.println("usableTweetIds: "+usableTweetIds);
-
-					//Create the initial clusters
-					for (Cluster currCluster: allClusters)
-					{
-						List<Point> points = currCluster.getPoints();
-						//System.out.println(currCluster.getPoints());
-						//	for (Point p : points)
-						//	{
-						//		System.out.println(p.getTweetId());
-						//	}
-						//	System.out.println("currCluster centroid: "+currCluster.getCentroid());
-
-					}
-
-					//for (int i = 0; i < kClusters; i++) {
-				    //		Cluster c = allClusters.get(i);
-				    //		c.plotClusterTweets();
-				    //	}
-
-
-					//Assign remaining points to the closest cluster
-					//assignCluster();
-					double highestCosSim = 0.0; 
-					int cluster = 0;                 
-					double cosSim = 0.0; 
-
-					for(Long currTweetId : usableTweetIds) {
-
-						LinkedHashMap<String,Double> currTFIDF = tweetIdTFIDF.get(currTweetId);
-						Point currPoint = new Point(currTweetId,currTFIDF);
-						Cluster c;
-
-						for(int i = 0; i < kClusters; i++) {
-							c = allClusters.get(i);
-							cosSim = Point.cosSimDistance(currPoint, c.getCentroid());
-							if(cosSim >= highestCosSim){
-								highestCosSim = cosSim;
-								cluster = i;
-							}
-						}
-						currPoint.setCluster(cluster);
-						allClusters.get(cluster).addPoint(currPoint);
-
-						highestCosSim = 0.0;
-					}
-
-
-					//Calculate new centroids.
-					//calculateCentroids();
-					for(Cluster clusterI : allClusters) {
-
-						List<Point> listOfPoints = clusterI.getPoints();
-						int numPoints = listOfPoints.size();
-
-						Point centroid = clusterI.getCentroid();
-						if(numPoints > 0) {
-							LinkedHashMap<String,Double> newCentroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-							for (Point p : listOfPoints)
-							{
-								LinkedHashMap<String,Double> currTFIDF = p.getTfidf();
-								for (String term : currTFIDF.keySet())
-								{
-									double pointTFIDFValue = 0.0;
-									double centroidTFIDFValue = 0.0;
-									pointTFIDFValue = currTFIDF.get(term);
-									centroidTFIDFValue = newCentroidTFIDF.get(term);
-									newCentroidTFIDF.put(term, pointTFIDFValue+centroidTFIDFValue);
-								}
-							}
-
-							double newClusterMag = 0.0;
-							double currTermTFIDF = 0.0;
-
-							for (String term : newCentroidTFIDF.keySet())
-							{
-								currTermTFIDF = 0.0;
-
-								currTermTFIDF = newCentroidTFIDF.get(term);
-								if (currTermTFIDF > 0.0)
-								{
-									currTermTFIDF = currTermTFIDF / numPoints;
-									newClusterMag += currTermTFIDF * currTermTFIDF;
-									newCentroidTFIDF.put(term, currTermTFIDF);
-								}
-
-							}
-
-							//Normalize the new cluster centroid as it might not be normalized
-
-							newClusterMag = Math.sqrt(newClusterMag);
-							for (String term : newCentroidTFIDF.keySet())
-							{
-								currTermTFIDF = newCentroidTFIDF.get(term);
-
-								if (currTermTFIDF > 0.0)
-								{
-									currTermTFIDF = currTermTFIDF / newClusterMag;
-									newCentroidTFIDF.put(term, currTermTFIDF);
-								}
-
-							}
-
-							centroid.setTfidf(newCentroidTFIDF);
-							clusterI.setCentroid(centroid);
-						}
-					}
-
-					System.out.println("~~~~~~~~~~~~~~~~~~~TESTING IF CENTROID UNIT VECTOR~~~~~~~~~~~~~~~~~~~~~~~");
-					Double sumOfMags;
-					Point cent;
-					for(Cluster clusterI : allClusters) {
-						sumOfMags = 0.0;
-						cent = clusterI.getCentroid();
-						LinkedHashMap<String,Double> centtfidf = cent.getTfidf();
-						for (String term : centtfidf.keySet())
-						{
-							sumOfMags += centtfidf.get(term)*centtfidf.get(term);
-						}
-						sumOfMags = Math.sqrt(sumOfMags);
-						System.out.println("cluster #"+clusterI.getId()+" sumOfMags: "+sumOfMags);
-						System.out.println(cent.getTfidf());
-					}
-
-
-					System.out.println("#################");
-					System.out.println("Iteration: " + 0);
-
-
-					for (int i = 0; i < kClusters; i++) {
-						Cluster c = allClusters.get(i);
-						//c.plotClusterTweets();
-						prevListPoints.add(c.getPoints());
-						//System.out.println("prevListPoints: "+prevListPoints.get(i));
-					}
-
-
-
-
-					//Calculate k-means calculate()
-					int iteration = 0;
-
-					//Iterate k-means ********************************************************************************
-					while(!convergence && iteration < maxIterations) {
-
-						//Clear cluster state
-						//clearClusters();
-						for(Cluster clusterK : allClusters) {
-							clusterK.clear();
-							//System.out.println("clusterK: "+clusterK.getPoints());
-						}
-
-
-						//getCentroids()
-						List centroids = new ArrayList(kClusters);
-						for(Cluster clusterH : allClusters) {
-							Point currCentroid = clusterH.getCentroid();
-							Point point = new Point(currCentroid.getTweetId(),currCentroid.getTfidf());
-							centroids.add(point);
-						}
-						List<Point> lastCentroids = centroids;
-
-						//Assign points to the closer cluster
-						//assignCluster();
-						highestCosSim = 0.0; 
-						cluster = 0;                 
-						cosSim = 0.0; 
-
-						for(Long currTweetId : allTweetIds) {
-
-							LinkedHashMap<String,Double> currTFIDF = tweetIdTFIDF.get(currTweetId);
-							Point currPoint = new Point(currTweetId,currTFIDF);
-
-							for(int i = 0; i < kClusters; i++) {
-								Cluster c = allClusters.get(i);
-								cosSim = Point.cosSimDistance(currPoint, c.getCentroid());
-								if(cosSim >= highestCosSim){
-									highestCosSim = cosSim;
-									cluster = i;
-								}
-							}
-							currPoint.setCluster(cluster);
-							allClusters.get(cluster).addPoint(currPoint);
-
-							highestCosSim = 0.0;
-						}
-
-
-						//Get the current list of points
-						List<List<Point>> currListPoints = new ArrayList<List<Point>>();
-
-						//Calculate new centroids.
-						//calculateCentroids();
-
-						for(Cluster clusterI : allClusters) {
-
-							List<Point> listOfPoints = clusterI.getPoints();
-							currListPoints.add(listOfPoints);
-
-							int numPoints = listOfPoints.size();
-
-							Point centroid = clusterI.getCentroid();
-							if(numPoints > 0) {
-								LinkedHashMap<String,Double> newCentroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-								for (Point p : listOfPoints)
-								{
-									LinkedHashMap<String,Double> currTFIDF = p.getTfidf();
-									for (String term : currTFIDF.keySet())
-									{
-										double pointTFIDFValue = 0.0;
-										double centroidTFIDFValue = 0.0;
-										pointTFIDFValue = currTFIDF.get(term);
-										centroidTFIDFValue = newCentroidTFIDF.get(term);
-										newCentroidTFIDF.put(term, pointTFIDFValue+centroidTFIDFValue);
-									}
-								}
-
-								double newClusterMag = 0.0;
-								double currTermTFIDF = 0.0;
-
-								for (String term : newCentroidTFIDF.keySet())
-								{
-									currTermTFIDF = 0.0;
-									currTermTFIDF = newCentroidTFIDF.get(term);
-									if (currTermTFIDF > 0.0)
-									{
-										currTermTFIDF = currTermTFIDF / numPoints;
-										newClusterMag += currTermTFIDF * currTermTFIDF;
-										newCentroidTFIDF.put(term, currTermTFIDF);
-									}
-
-								}
-
-								//Normalize the new cluster centroid as it might not be normalized
-
-								newClusterMag = Math.sqrt(newClusterMag);
-								for (String term : newCentroidTFIDF.keySet())
-								{
-									currTermTFIDF = newCentroidTFIDF.get(term);
-
-									if (currTermTFIDF > 0.0)
-									{
-										currTermTFIDF = currTermTFIDF / newClusterMag;
-										newCentroidTFIDF.put(term, currTermTFIDF);
-									}
-
-								}
-
-								centroid.setTfidf(newCentroidTFIDF);
-								clusterI.setCentroid(centroid);
-							}
-						}
-
-
-						System.out.println("~~~~~~~~~~~~~~~~~~~TESTING IF CENTROID UNIT VECTOR AFTER ITERATION "+iteration+"~~~~~~~~~~~~~~~~~~~~~~~");
-
-						for(Cluster clusterI : allClusters) {
-							sumOfMags = 0.0;
-							cent = clusterI.getCentroid();
-							LinkedHashMap<String,Double> centtfidf = cent.getTfidf();
-							for (String term : centtfidf.keySet())
-							{
-								sumOfMags += centtfidf.get(term)*centtfidf.get(term);
-							}
-							sumOfMags = Math.sqrt(sumOfMags);
-							System.out.println("cluster #"+clusterI.getId()+" sumOfMags: "+sumOfMags);
-							System.out.println(cent.getTfidf());
-						}
-
-						iteration++;
-
-
-						//Check if convergence
-						convergence = true;
-
-						for (int i = 0; i < kClusters; i++) {
-							List<Point> prevList = prevListPoints.get(i);
-							List<Point> currList = currListPoints.get(i);
-							//System.out.println("prevList "+prevList);
-							//System.out.println("currList "+currList);
-							for (Point p : prevList)
-							{
-
-								if (!currList.contains(p))
-								{
-									convergence = false;
-									break;
-								}
-							}
-							if (convergence == false)
-								break;
-
-						}
-
-						if (convergence == false)
-							prevListPoints = currListPoints;
-
-						System.out.println("#################");
-						System.out.println("Iteration: " + iteration);
-
-
-						//	for (int i = 0; i < kClusters; i++) {
-					    //		Cluster c = allClusters.get(i);
-					    //		c.plotClusterTweets();
-					    //	}
-
-					}
-
-					//Output the clusters and the tweets
-					System.out.println("THE CLUSTERS");
-					for (Cluster c : allClusters)
-					{
-						c.plotClusterTweets(tweetIdUser);
-					}
-
-
-
-
-					String[] users = new String[allUserDocumentsTFIDF.keySet().size()];
-					allUserDocumentsTFIDF.keySet().toArray(users);
-						allUserScores = initializeTargetScoreRows(usersRec, users);
-						Map<String,Double> userScore1 = new TreeMap<String,Double>();
-					Map<String,Double> userScore2 = new TreeMap<String,Double>();
-					double dpVectors = 0.0, score = 0.0, prevScore = 0.0;
-
-					System.out.println("Initialized Scores to 0.0");
-					for (int i = 0; i < users.length; i++)
-					{
-						for (int j = 0; j < users.length; j++)
-						{
-							if (!users[i].equals(users[j]))
-							{
-								userScore1.put(users[j], 0.0);
-								allUserScores.put(users[i],(TreeMap<String,Double>) userScore1);
-							}
-						}
-						//userScore1 = new LinkedHashMap<String,Double>();
-						userScore1 = new TreeMap<String,Double>();
-					}
-
-
-					//System.out.println("allUserScores:" +allUserScores);
-
-					for (int i = 0; i < allClusters.size(); i++)
-					{
-						//Not comparing where clusters have a size of 1 or 0
-						List<Point> pointsInCluster = allClusters.get(i).getPoints();
-						if (pointsInCluster.size() > 1)
-						{
-							for (int j = 0; j < pointsInCluster.size()-1; j++)
-							{
-								long tweetId1 = pointsInCluster.get(j).getTweetId();
-								LinkedHashMap<String,Double> tweetId1Tfidf = pointsInCluster.get(j).getTfidf();
-								Set<String> terms1 = tweetId1Tfidf.keySet();
-
-								for (int k = j+1; k < pointsInCluster.size(); k++)
-								{
-									long tweetId2 = pointsInCluster.get(k).getTweetId();
-									LinkedHashMap<String,Double> tweetId2Tfidf = pointsInCluster.get(k).getTfidf();
-									Set<String> terms2 = tweetId2Tfidf.keySet();
-
-									String user1, user2;
-									user1 = tweetIdUser.get(tweetId1);
-									user2 = tweetIdUser.get(tweetId2);
-
-									if (!user1.equals(user2))
-									{
-										for (String term1 : terms1)
-										{
-											for (String term2 : terms2)
-											{
-
-												if (term1.equals(term2))
-												{
-													dpVectors+=tweetId1Tfidf.get(term1)*tweetId2Tfidf.get(term2);
-												}
-											}
-										}
-
-										//System.out.println("user1: "+user1+" user2: "+user2);
-										//Update the scores of the users
-										//System.out.println(allUserScores.get(user1));
-
-										//prevScore = allUserScores.get(user1).get(user2);
-					        			//	score = prevScore + dpVectors;
-					        			//	userScore1 = allUserScores.get(user1);
-					        			//	userScore1.put(user2, score);
-					        			//	allUserScores.put(user1,(TreeMap<String,Double>)userScore1);
-					        			//	userScore2 = allUserScores.get(user2);
-					        			//	userScore2.put(user1, score);
-					        			//	allUserScores.put(user2,(TreeMap<String,Double>)userScore2);
-
-										prevScore = allUserScores.get(user1).get(user2);
-										score = prevScore + dpVectors;
-										allUserScores.get(user1).put(user2, score);
-										allUserScores.get(user2).put(user1, score);
-
-									}
-									dpVectors=0.0;
-									score=0.0;
-								} //end for (int k = j+1; k < pointsInCluster.size(); k++)
-							} //end for (int j = 0; j < pointsInCluster.size()-1; j++)
-						} //end if (pointsInCluster.size() > 1)
-					} //for (int i = 0; i < allClusters.size(); i++)
-
-					//for (String s : allUserScores.keySet())
-					//	{
-					//		System.out.print("user: "+s+"\t");
-					//		System.out.println(allUserScores.get(s));
-					//	}
-					 */
 					//k-means on aggregated tweets as document vectors
 					AlgorithmParameterSettings algorithmSettings = algorithmSettings();
-					int kClusters = algorithmSettings.getKMeansClusters(); //number of k clusters
-					boolean convergence = false; //documents remain in the same clusters
-					int maxIterations = algorithmSettings.getKMeansMaxIterations();
-
-					List<Cluster> allClusters = new ArrayList<Cluster>();
-					ArrayList<String> allUserNames = new ArrayList<String>(allUserDocumentsTFIDF.keySet());
-					ArrayList<String> remainingUserNames = new ArrayList<String>(allUserDocumentsTFIDF.keySet()); //Remaining usernames after initial usernames chosen for seeds
-
-					LinkedHashMap<String,Double> centroidTFIDF = new LinkedHashMap<String,Double>();
-					LinkedHashMap<String,Double> baseCentroidTFIDF = new LinkedHashMap<String,Double>(); //tfidf of 0.0 for all unique doc terms
-					List<List<Point>> prevListPoints = new ArrayList<List<Point>>();
-					
-					LinkedHashMap<String,Double> centroidTF = new LinkedHashMap<String,Double>();
-					LinkedHashMap<String,Double> baseCentroidTF = new LinkedHashMap<String,Double>(); //tf of 0.0 for all unique doc terms
-
-
-
-//					if (kClusters > allUserDocumentsTF.size())
-//						kClusters = allUserDocumentsTF.size();
-					if (kClusters > allUserDocumentsTFIDF.size())
-						kClusters = allUserDocumentsTFIDF.size();
-					if (kClusters < 2)
-						kClusters = 2;
-
 					startTimeAlgorithm = System.nanoTime();
-
-					System.out.println("Calculating k-means");
-
-					//Choose random initial points for cluster centroid
-					for (int i = 0; i < kClusters; i++)
-					{
-						System.out.println("remainingUserNames: "+remainingUserNames);
-						String initialUserName;
-						Collections.shuffle(remainingUserNames);
-						System.out.println("shuffled remainingUserNames: "+remainingUserNames);
-//						initialUserName = remainingUserNames.get(0);
-//						remainingUserNames.remove(0);
-						// if (remainingUserNames.contains("Simon_Pella"))
-						// {
-							// initialUserName = "Simon_Pella";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("Simon_Pella_generated"))
-						// {
-							// initialUserName = "Simon_Pella_generated";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("styleofthesix"))
-						// {
-							// initialUserName = "styleofthesix";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("styleofthesix_generated"))
-						// {
-							// initialUserName = "styleofthesix_generated";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("AHKru"))
-						// {
-							// initialUserName = "AHKru";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("AHKru_generated"))
-						// {
-							// initialUserName = "AHKru_generated";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("Steve"))
-						// {
-							// initialUserName = "Steve";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("Alice"))
-						// {
-							// initialUserName = "Alice";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else if (remainingUserNames.contains("Fred"))
-						// {
-							// initialUserName = "Fred";
-							// remainingUserNames.remove(initialUserName);
-						// }
-						// else
-						// {
-							// initialUserName = remainingUserNames.get(0);
-							// remainingUserNames.remove(0);
-						// }
-						
-						if (remainingUserNames.contains("RyersonU"))
-						{
-							initialUserName = "RyersonU";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("TheCatTweeting"))
-						{
-							initialUserName = "TheCatTweeting";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("weathernetwork"))
-						{
-							initialUserName = "weathernetwork";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("TorontoStar"))
-						{
-							initialUserName = "TorontoStar";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("Doggos"))
-						{
-							initialUserName = "Doggos";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("MoviesGuy"))
-						{
-							initialUserName = "MoviesGuy";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("SportsGuy"))
-						{
-							initialUserName = "SportsGuy";
-							remainingUserNames.remove(initialUserName);
-						}
-						else
-						{
-							initialUserName = remainingUserNames.get(0);
-							remainingUserNames.remove(0);
-						}
-						
-						
-//						boolean isGenerated = true;
-//						while (isGenerated)
-//						{
-//							String pattern = "_generated";
-//							System.out.println("currentChoice: "+remainingUserNames.get(0));
-//							
-//							if (remainingUserNames.get(0).contains(pattern))
-//							{
-//								remainingUserNames.remove(0);
-//								System.out.println("Removed generated");
-//							}
-//							else
-//							{
-//								isGenerated = false;
-//							}
-//						}
-//						initialUserName = remainingUserNames.get(0);
-//						remainingUserNames.remove(0);
-						System.out.println("initialUserName: "+initialUserName);
-						
-						Cluster cluster = new Cluster(i);
-						LinkedHashMap<String,Double> currTFIDF = allUserDocumentsTFIDF.get(initialUserName);
-//						LinkedHashMap<String,Double> currTF = allUserDocumentsTF.get(initialUserName);
-						Point initialPoint = new Point(initialUserName,currTFIDF);
-//						Point initialPoint = new Point(initialUserName,currTF);
-						initialPoint.setCluster(i);
-						cluster.addPoint(initialPoint);
-
-						centroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-//						centroidTF = new LinkedHashMap<String,Double>(baseCentroidTF);
-
-						for (String term : currTFIDF.keySet())
-//						for (String term : currTF.keySet())
-						{
-							centroidTFIDF.put(term,currTFIDF.get(term));
-//							centroidTF.put(term,currTF.get(term));
-						}
-
-						Point centroid = new Point(-1,centroidTFIDF);
-//						Point centroid = new Point(-1,centroidTF);
-						cluster.setCentroid(centroid);
-
-						allClusters.add(cluster);
-
-					}
-
-
-
-					//Create the initial clusters
-					// for (Cluster currCluster: allClusters)
-					// {
-						// List<Point> points = currCluster.getPoints();
-						//System.out.println(currCluster.getPoints());
-						//	for (Point p : points)
-						//	{
-						//		System.out.println(p.getTweetId());
-						//	}
-						//	System.out.println("currCluster centroid: "+currCluster.getCentroid());
-
-					// }
-
-					//for (int i = 0; i < kClusters; i++) {
-					//		Cluster c = allClusters.get(i);
-					//		c.plotClusterTweets();
-					//	}
-
-
-					//Assign remaining points to the closest cluster
-					//assignCluster();
-					double highestCosSim = 0.0; 
-					int cluster = 0;                 
-					double cosSim = 0.0; 
-
-					for(String currUserName : remainingUserNames) {
-
-						LinkedHashMap<String,Double> currTFIDF = allUserDocumentsTFIDF.get(currUserName);
-//						LinkedHashMap<String,Double> currTF = allUserDocumentsTF.get(currUserName);
-						Point currPoint = new Point(currUserName,currTFIDF);
-//						Point currPoint = new Point(currUserName,currTF);
-						Cluster c;
-
-						for(int i = 0; i < kClusters; i++) {
-							c = allClusters.get(i);
-							cosSim = currPoint.cosSimDistance(c.getCentroid());
-							//if(cosSim >= highestCosSim){
-							if(cosSim > highestCosSim){
-								highestCosSim = cosSim;
-								cluster = i;
-							}
-						}
-						currPoint.setCluster(cluster);
-						allClusters.get(cluster).addPoint(currPoint);
-
-						highestCosSim = 0.0;
-					}
-
-
-					//Calculate new centroids.
-					//calculateCentroids();
-					for(Cluster clusterI : allClusters) {
-
-						List<Point> listOfPoints = clusterI.getPoints();
-						// System.out.println("Sepide points in cluster "+ clusterI + "is" + listOfPoints);
-						int numPoints = listOfPoints.size();
-
-						Point centroid = clusterI.getCentroid();
-						if(numPoints > 0) {
-							LinkedHashMap<String,Double> newCentroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-//							LinkedHashMap<String,Double> newCentroidTF = new LinkedHashMap<String,Double>(baseCentroidTF);
-							for (Point p : listOfPoints)
-							{
-								Map<String,Double> currTFIDF = p.getTfidf_or_Tf();
-//								LinkedHashMap<String,Double> currTF = p.getTfidf_or_Tf();
-								for (String term : currTFIDF.keySet())
-//								for (String term : currTF.keySet())
-								{
-									double pointTFIDFValue = 0.0;
-									double centroidTFIDFValue = 0.0;
-									pointTFIDFValue = currTFIDF.get(term);
-									Double existingCentroidValue = newCentroidTFIDF.get(term);
-									centroidTFIDFValue = existingCentroidValue == null
-											? 0.0 : existingCentroidValue.doubleValue();
-									newCentroidTFIDF.put(term, pointTFIDFValue+centroidTFIDFValue);
-//									double pointTFValue = 0.0;
-//									double centroidTFValue = 0.0;
-//									pointTFValue = currTF.get(term);
-//									centroidTFValue = newCentroidTF.get(term);
-//									newCentroidTF.put(term, pointTFValue+centroidTFValue);
-								}
-							}
-
-							double newClusterMag = 0.0;
-							double currTermTFIDF = 0.0;
-//							double currTermTF = 0.0;
-
-							for (String term : newCentroidTFIDF.keySet())
-//							for (String term : newCentroidTF.keySet())
-							{
-								currTermTFIDF = 0.0;
-//								currTermTF = 0.0;
-
-								currTermTFIDF = newCentroidTFIDF.get(term);
-//								currTermTF = newCentroidTF.get(term);
-								
-								if (currTermTFIDF > 0.0)
-//								if (currTermTF > 0.0)
-								{
-									currTermTFIDF = currTermTFIDF / numPoints;
-									newClusterMag += currTermTFIDF * currTermTFIDF;
-									newCentroidTFIDF.put(term, currTermTFIDF);
-//									currTermTF = currTermTF / numPoints;
-//									newClusterMag += currTermTF * currTermTF;
-//									newCentroidTF.put(term, currTermTF);
-								}
-
-							}
-
-							//Normalize the new cluster centroid as it might not be normalized
-
-							newClusterMag = Math.sqrt(newClusterMag);
-							for (String term : newCentroidTFIDF.keySet())
-//							for (String term : newCentroidTF.keySet())
-							{
-								currTermTFIDF = newCentroidTFIDF.get(term);
-//								currTermTF = newCentroidTF.get(term);
-								
-								if (currTermTFIDF > 0.0)
-//								if (currTermTF > 0.0)
-								{
-									currTermTFIDF = currTermTFIDF / newClusterMag;
-									newCentroidTFIDF.put(term, currTermTFIDF);
-//									currTermTF = currTermTF / newClusterMag;
-//									newCentroidTF.put(term, currTermTF);
-								}
-
-							}
-
-							centroid.setTfidf_or_Tf(newCentroidTFIDF);
-//							centroid.setTfidf_or_Tf(newCentroidTF);
-							clusterI.setCentroid(centroid);
-						}
-					}
-
-//					System.out.println("~~~~~~~~~~~~~~~~~~~TESTING IF CENTROID UNIT VECTOR~~~~~~~~~~~~~~~~~~~~~~~");
-					Double sumOfMags;
-					Point cent;
-					for(Cluster clusterI : allClusters) {
-						sumOfMags = 0.0;
-						cent = clusterI.getCentroid();
-						Map<String,Double> centtfidf = cent.getTfidf_or_Tf();
-//						LinkedHashMap<String,Double> centtf = cent.getTfidf_or_Tf();
-						for (String term : centtfidf.keySet())
-//						for (String term : centtf.keySet())
-						{
-							sumOfMags += centtfidf.get(term)*centtfidf.get(term);
-//							sumOfMags += centtf.get(term)*centtf.get(term);
-						}
-						sumOfMags = Math.sqrt(sumOfMags);
-//						System.out.println("cluster #"+clusterI.getId()+" sumOfMags: "+sumOfMags);
-////						System.out.println(cent.getTfidf_or_Tf());
-//						System.out.println(cent.getTfidf_or_Tf());
-					}
-
-
-					System.out.println("#################");
-					System.out.println("Iteration: " + 0);
-
-
-					for (int i = 0; i < kClusters; i++) {
-						Cluster c = allClusters.get(i);
-						//c.plotClusterTweets();
-						prevListPoints.add(c.getPoints());
-						//System.out.println("prevListPoints: "+prevListPoints.get(i));
-					}
-
-
-
-
-					//Calculate k-means calculate()
-					int iteration = 0;
-
-					//Iterate k-means ********************************************************************************
-					while(!convergence && iteration < maxIterations) {
-
-						//Clear cluster state
-						//clearClusters();
-						for(Cluster clusterK : allClusters) {
-							clusterK.clear();
-							//System.out.println("clusterK: "+clusterK.getPoints());
-						}
-
-
-						//getCentroids()
-						List centroids = new ArrayList(kClusters);
-						for(Cluster clusterH : allClusters) {
-							Point currCentroid = clusterH.getCentroid();
-							Point point = new Point(currCentroid.getTweetId(),currCentroid.getTfidf_or_Tf());
-							centroids.add(point);
-						}
-						List<Point> lastCentroids = centroids;
-
-						//Assign points to the closer cluster
-						//assignCluster();
-						highestCosSim = 0.0; 
-						cluster = 0;                 
-						cosSim = 0.0; 
-
-						for(String currUserName : allUserNames) {
-
-							LinkedHashMap<String,Double> currTFIDF = allUserDocumentsTFIDF.get(currUserName);
-//							LinkedHashMap<String,Double> currTF = allUserDocumentsTF.get(currUserName);
-							Point currPoint = new Point(currUserName,currTFIDF);
-//							Point currPoint = new Point(currUserName,currTF);
-
-							for(int i = 0; i < kClusters; i++) {
-								Cluster c = allClusters.get(i);
-								cosSim = currPoint.cosSimDistance(c.getCentroid());
-								if(cosSim >= highestCosSim){
-									highestCosSim = cosSim;
-									cluster = i;
-								}
-							}
-							currPoint.setCluster(cluster);
-							allClusters.get(cluster).addPoint(currPoint);
-
-							highestCosSim = 0.0;
-						}
-
-
-						//Get the current list of points
-						List<List<Point>> currListPoints = new ArrayList<List<Point>>();
-
-						//Calculate new centroids.
-						//calculateCentroids();
-
-						for(Cluster clusterI : allClusters) {
-
-							List<Point> listOfPoints = clusterI.getPoints();
-							currListPoints.add(listOfPoints);
-
-							int numPoints = listOfPoints.size();
-							// System.out.println("Sepide Number of points: " + numPoints);
-
-							Point centroid = clusterI.getCentroid();
-							if(numPoints > 0) {
-								LinkedHashMap<String,Double> newCentroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-//								LinkedHashMap<String,Double> newCentroidTF = new LinkedHashMap<String,Double>(baseCentroidTF);
-								for (Point p : listOfPoints)
-								{
-									Map<String,Double> currTFIDF = p.getTfidf_or_Tf();
-//									LinkedHashMap<String,Double> currTF = p.getTfidf_or_Tf();
-									for (String term : currTFIDF.keySet())
-//									for (String term : currTF.keySet())
-									{
-										double pointTFIDFValue = 0.0;
-										double centroidTFIDFValue = 0.0;
-										pointTFIDFValue = currTFIDF.get(term);
-										Double existingCentroidValue = newCentroidTFIDF.get(term);
-										centroidTFIDFValue = existingCentroidValue == null
-												? 0.0 : existingCentroidValue.doubleValue();
-										newCentroidTFIDF.put(term, pointTFIDFValue+centroidTFIDFValue);
-//										double pointTFValue = 0.0;
-//										double centroidTFValue = 0.0;
-//										pointTFValue = currTF.get(term);
-//										centroidTFValue = newCentroidTF.get(term);
-//										newCentroidTF.put(term, pointTFValue+centroidTFValue);
-									}
-								}
-
-								double newClusterMag = 0.0;
-								double currTermTFIDF = 0.0;
-//								double currTermTF = 0.0;
-
-								for (String term : newCentroidTFIDF.keySet())
-//								for (String term : newCentroidTF.keySet())
-								{
-									currTermTFIDF = 0.0;
-									currTermTFIDF = newCentroidTFIDF.get(term);
-									if (currTermTFIDF > 0.0)
-//									currTermTF = 0.0;
-//									currTermTF = newCentroidTF.get(term);
-//									if (currTermTF > 0.0)
-									{
-										currTermTFIDF = currTermTFIDF / numPoints;
-										newClusterMag += currTermTFIDF * currTermTFIDF;
-										newCentroidTFIDF.put(term, currTermTFIDF);
-//										currTermTF = currTermTF / numPoints;
-//										newClusterMag += currTermTF * currTermTF;
-//										newCentroidTF.put(term, currTermTF);
-									}
-
-								}
-
-								//Normalize the new cluster centroid as it might not be normalized
-
-								newClusterMag = Math.sqrt(newClusterMag);
-								for (String term : newCentroidTFIDF.keySet())
-//								for (String term : newCentroidTF.keySet())
-								{
-									currTermTFIDF = newCentroidTFIDF.get(term);
-//									currTermTF = newCentroidTF.get(term);
-
-									if (currTermTFIDF > 0.0)
-//									if (currTermTF > 0.0)
-									{
-										currTermTFIDF = currTermTFIDF / newClusterMag;
-										newCentroidTFIDF.put(term, currTermTFIDF);
-//										currTermTF = currTermTF / newClusterMag;
-//										newCentroidTF.put(term, currTermTF);
-									}
-
-								}
-
-								centroid.setTfidf_or_Tf(newCentroidTFIDF);
-//								centroid.setTfidf_or_Tf(newCentroidTF);
-								clusterI.setCentroid(centroid);
-							}
-						}
-
-
-						System.out.println("~~~~~~~~~~~~~~~~~~~TESTING IF CENTROID UNIT VECTOR AFTER ITERATION "+iteration+"~~~~~~~~~~~~~~~~~~~~~~~");
-
-						for(Cluster clusterI : allClusters) {
-							sumOfMags = 0.0;
-							cent = clusterI.getCentroid();
-							Map<String,Double> centtfidf = cent.getTfidf_or_Tf();
-//							LinkedHashMap<String,Double> centtf = cent.getTfidf_or_Tf();
-							for (String term : centtfidf.keySet())
-//							for (String term : centtf.keySet())
-							{
-								sumOfMags += centtfidf.get(term)*centtfidf.get(term);
-//								sumOfMags += centtf.get(term)*centtf.get(term);
-							}
-							sumOfMags = Math.sqrt(sumOfMags);
-//							System.out.println("cluster #"+clusterI.getId()+" sumOfMags: "+sumOfMags);
-//							System.out.println(cent.getTfidf_or_Tf());
-						}
-
-						iteration++;
-
-
-						//Check if convergence
-						convergence = true;
-
-						for (int i = 0; i < kClusters; i++) {
-							List<Point> prevList = prevListPoints.get(i);
-							List<Point> currList = currListPoints.get(i);
-							// System.out.println("sepide list of points in each cluster" + currList);
-							//System.out.println("prevList "+prevList);
-							//System.out.println("currList "+currList);
-							for (Point p : prevList)
-							{
-
-								if (!currList.contains(p))
-								{
-									convergence = false;
-									break;
-								}
-							}
-							if (convergence == false)
-								break;
-
-						}
-
-						if (convergence == false)
-							prevListPoints = currListPoints;
-
-//						System.out.println("#################");
-//						System.out.println("Iteration: " + iteration);
-
-
-						//	for (int i = 0; i < kClusters; i++) {
-						//		Cluster c = allClusters.get(i);
-						//		c.plotClusterTweets();
-						//	}
-
-					}
-
-					//Output the clusters and the tweets
-					System.out.println("THE FINAL CLUSTERS "+ getLocalName());
-					  for (Cluster c : allClusters)
-					    {
-						   c.plotCluster();
-					    }
-
-					String[] users = new String[allUserDocumentsTFIDF.keySet().size()];
-					users = allUserDocumentsTFIDF.keySet().toArray(users);
-						allUserScores = initializeTargetScoreRows(usersRec, users);
-					Map<String,Double> userScore1 = new TreeMap<String,Double>();
-					Map<String,Double> userScore2 = new TreeMap<String,Double>();
-					double dpVectors = 0.0, score = 0.0, prevScore = 0.0;
-
-						System.out.println("kmeans clustering completed Initialized target Scores to 0.0");
-
-					System.out.println(getLocalName() + " All scores initialized to 0");
-					//System.out.println("allUserScores:" +allUserScores);
-					
-					int scoreTimes = 0;
-					int expectedTotalScores = 0;
-					int clusterSize = 0;
-					
-					for (int i = 0; i < allClusters.size(); i++)
-					{
-						clusterSize = allClusters.get(i).getPoints().size();
-						if (clusterSize > 1)
-						{
-							expectedTotalScores += ((clusterSize-1)*clusterSize)/2;
-						}
-					}
-					
-					System.out.println(getLocalName()+ " expectedTotalScores: "+expectedTotalScores);
-					System.out.println(getLocalName() + " Calculating Scores");
-					
-					for (int i = 0; i < allClusters.size(); i++)
-					{
-						//Not comparing where clusters have a size of 1 or 0
-						List<Point> pointsInCluster = allClusters.get(i).getPoints();
-						// System.out.println("pointsInCluster.size(): "+pointsInCluster.size());
-						if (pointsInCluster.size() > 1)
-						{
-							for (int j = 0; j < pointsInCluster.size()-1; j++)
-							{
-								String userName1 = pointsInCluster.get(j).getUserName();
-								Map<String,Double> userName1Tfidf = pointsInCluster.get(j).getTfidf_or_Tf();
-									Set<String> terms1 = userName1Tfidf.keySet();
-//								LinkedHashMap<String,Double> userName1Tf = pointsInCluster.get(j).getTfidf_or_Tf();
-//								Set<String> terms1 = userName1Tf.keySet();
-
-								for (int k = j+1; k < pointsInCluster.size(); k++)
-								{
-									String userName2 = pointsInCluster.get(k).getUserName();
-									Map<String,Double> userName2Tfidf = pointsInCluster.get(k).getTfidf_or_Tf();
-									Set<String> terms2 = userName2Tfidf.keySet();
-//									LinkedHashMap<String,Double> userName2Tf = pointsInCluster.get(k).getTfidf_or_Tf();
-//									Set<String> terms2 = userName2Tf.keySet();
-
-									dpVectors = calculateSparseCosineScore(
-											userName1Tfidf, userName2Tfidf);
-
-									//System.out.println("user1: "+user1+" user2: "+user2);
-									//Update the scores of the users
-									//System.out.println(allUserScores.get(user1));
-
-									//prevScore = allUserScores.get(user1).get(user2);
-									//	score = prevScore + dpVectors;
-									//	userScore1 = allUserScores.get(user1);
-									//	userScore1.put(user2, score);
-									//	allUserScores.put(user1,(TreeMap<String,Double>)userScore1);
-									//	userScore2 = allUserScores.get(user2);
-									//	userScore2.put(user1, score);
-									//	allUserScores.put(user2,(TreeMap<String,Double>)userScore2);
-
-										score = dpVectors;
-										putScoreForTrackedTargets(
-												allUserScores, userName1, userName2, score);
-
-									scoreTimes++;
-									
-									if (scoreTimes % 1000 == 0 || scoreTimes == expectedTotalScores)
-										System.out.println(getLocalName()+" scoreTimes: "+scoreTimes);
-									
-									dpVectors=0.0;
-									score=0.0;
-
-								} //end for (int k = j+1; k < pointsInCluster.size(); k++)
-							} //end for (int j = 0; j < pointsInCluster.size()-1; j++)
-						} //end if (pointsInCluster.size() > 1)
-					} //for (int i = 0; i < allClusters.size(); i++)
-
-					//for (String s : allUserScores.keySet())
-					//	{
-					//		System.out.print("user: "+s+"\t");
-					//		System.out.println(allUserScores.get(s));
-					//	}
-
-					System.out.println(getLocalName() + " Completed the scores Total Score Times: "+scoreTimes);
+					System.out.println(getLocalName()
+							+ " Calculating exact distributed K-Means: farthest-first seeding, clusterSeed="
+							+ algorithmSettings.getKMeansSeed());
+					SchedulingRunContext kMeansContext = schedulingContext();
+					DistributedKMeans.Result kMeansResult = DistributedKMeans.cosine(
+							kMeansContext.collectives(),
+							"kmeans",
+							currentNodeIndex(),
+							ownedDocuments(),
+							new ArrayList<String>(allUserDocumentsTFIDF.keySet()),
+							distinctTargets(),
+							allUserDocumentsTFIDF,
+							algorithmSettings.getKMeansClusters(),
+							algorithmSettings.getKMeansMaxIterations(),
+							algorithmSettings.getKMeansSeed());
+					allUserScores = kMeansResult.getScores();
+					System.out.println(getLocalName() + " K-Means clusters="
+							+ kMeansResult.getClusters()
+							+ " iterations=" + kMeansResult.getIterations()
+							+ " converged=" + kMeansResult.isConverged()
+							+ " sizes=" + java.util.Arrays.toString(kMeansResult.getClusterSizes()));
 
 					
 					
@@ -3860,11 +2498,11 @@ public class RecommenderAgent extends Agent
 					completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;						
 
 					//Output for K-means	   					
-					textprocessing_wb_or_tfidf_Data.add("K-means=TP+TFIDF+K-means" + "\t" + agentName + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
-//					System.out.println(agentName+"- Total Tweets Processed: " + tweetCount + " TP:" + convertMs(completionTimeTextProcessing) + "ms TFIDF:" + convertMs(completionTimeTFIDF) + "ms K-means:" + convertMs(completionTimeAlgorithm) + "ms Total:" + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+"ms");
-					System.out.println("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " K-means: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-//					myGui.appendResult(agentName+"\nTotal Tweets Processed: " + tweetCount + " TP:" + round(completionTimeTextProcessing/1000000.00,2) + "ms TFIDF:" + round(completionTimeTFIDF/1000000.00,2) + "ms K-means:" + round(completionTimeAlgorithm/1000000.00,2) + "ms Total:" + round((completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)/1000000.00,2)+"ms");
-					myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " K-means: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
+					textprocessing_wb_or_tfidf_Data.add("K-means=TP+TFIDF+K-means" + "\t" + agentName + "\t" + usableTweetCount + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
+//					System.out.println(agentName+"- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP:" + convertMs(completionTimeTextProcessing) + "ms TFIDF:" + convertMs(completionTimeTFIDF) + "ms K-means:" + convertMs(completionTimeAlgorithm) + "ms Total:" + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+"ms");
+					System.out.println("Mapper"+nodeNumber+"- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " K-means: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
+//					myGui.appendResult(agentName+"\nTweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP:" + round(completionTimeTextProcessing/1000000.00,2) + "ms TFIDF:" + round(completionTimeTFIDF/1000000.00,2) + "ms K-means:" + round(completionTimeAlgorithm/1000000.00,2) + "ms Total:" + round((completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)/1000000.00,2)+"ms");
+					myGui.appendResult("Mapper"+nodeNumber+"- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " K-means: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
 
 				}
 				
@@ -3874,29 +2512,25 @@ public class RecommenderAgent extends Agent
 				{
 					AlgorithmParameterSettings algorithmSettings = algorithmSettings();
 					startTimeAlgorithm = System.nanoTime();
-					System.out.println("Calculating deterministic Euclidean K-means");
-
-					EuclideanKMeansRecommender.Result result =
-							EuclideanKMeansRecommender.score(
-									allUserDocumentsTFIDF,
-									usersRec,
-									algorithmSettings.getKMeansClusters(),
-									algorithmSettings.getKMeansMaxIterations());
-					allUserScores = result.scores;
-
+					System.out.println("Calculating exact distributed Euclidean K-means");
+					SchedulingRunContext kMeansContext = schedulingContext();
+					DistributedKMeans.Result result = DistributedKMeans.euclidean(
+							kMeansContext.collectives(),
+							"kmeans-euclidean",
+							currentNodeIndex(),
+							ownedDocuments(),
+							new ArrayList<String>(allUserDocumentsTFIDF.keySet()),
+							distinctTargets(),
+							algorithmSettings.getKMeansClusters(),
+							algorithmSettings.getKMeansMaxIterations());
+					allUserScores = result.getScores();
 					System.out.println(getLocalName()
 							+ " Euclidean K-means requestedClusters="
-							+ result.requestedClusters
-							+ " effectiveClusters=" + result.effectiveClusters
-							+ " iterations=" + result.iterations
-							+ " converged=" + result.converged);
-					for (Cluster clusterResult : result.clusters)
-					{
-						System.out.println(getLocalName()
-								+ " Euclidean K-means cluster "
-								+ clusterResult.getId()
-								+ " size=" + clusterResult.getPoints().size());
-					}
+							+ algorithmSettings.getKMeansClusters()
+							+ " effectiveClusters=" + result.getClusters()
+							+ " iterations=" + result.getIterations()
+							+ " converged=" + result.isConverged()
+							+ " sizes=" + java.util.Arrays.toString(result.getClusterSizes()));
 
 					endTimeAlgorithm = System.nanoTime();
 					completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
@@ -3904,13 +2538,13 @@ public class RecommenderAgent extends Agent
 					textprocessing_wb_or_tfidf_Data.add(
 							"K-meansEuclidean=TP+TFIDF+K-meansEuclidean"
 									+ "\t" + agentName
-									+ "\t" + tweetCount
+									+ "\t" + usableTweetCount + "\t" + tweetCount
 									+ "\t" + completionTimeTextProcessing
 									+ "\t" + completionTimeTFIDF
 									+ "\t" + completionTimeAlgorithm
 									+ "\t" + System.getProperty("line.separator"));
 					System.out.println("Mapper" + nodeNumber
-							+ "- Total Tweets Processed: " + tweetCount
+							+ "- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount
 							+ " TP: " + convertMs(completionTimeTextProcessing)
 							+ " ms TFIDF: " + convertMs(completionTimeTFIDF)
 							+ " ms Reducer" + nodeNumber
@@ -3922,7 +2556,7 @@ public class RecommenderAgent extends Agent
 									+ completionTimeAlgorithm)
 							+ " ms");
 					myGui.appendResult("Mapper" + nodeNumber
-							+ "- Total Tweets Processed: " + tweetCount
+							+ "- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount
 							+ " TP: " + convertMs(completionTimeTextProcessing)
 							+ " ms TFIDF: " + convertMs(completionTimeTFIDF)
 							+ " ms Reducer" + nodeNumber
@@ -3934,582 +2568,7 @@ public class RecommenderAgent extends Agent
 									+ completionTimeAlgorithm)
 							+ " ms");
 				}
-				else if (false && algorithmRec == K_MEANSEUCLIDEAN)
-				{
-					//k-means on aggregated tweets as document vectors
-					AlgorithmParameterSettings algorithmSettings = algorithmSettings();
-					int kClusters = algorithmSettings.getKMeansClusters(); //number of k clusters
-					boolean convergence = false; //documents remain in the same clusters
-					int maxIterations = algorithmSettings.getKMeansMaxIterations();
-
-					List<Cluster> allClusters = new ArrayList<Cluster>();
-					ArrayList<String> allUserNames = new ArrayList<String>(allUserDocumentsTFIDF.keySet());
-					ArrayList<String> remainingUserNames = new ArrayList<String>(allUserDocumentsTFIDF.keySet()); //Remaining usernames after initial usernames chosen for seeds
-
-					LinkedHashMap<String,Double> centroidTFIDF = new LinkedHashMap<String,Double>();
-					LinkedHashMap<String,Double> baseCentroidTFIDF = new LinkedHashMap<String,Double>(); //tfidf of 0.0 for all unique doc terms
-					List<List<Point>> prevListPoints = new ArrayList<List<Point>>();
 					
-					LinkedHashMap<String,Double> centroidTF = new LinkedHashMap<String,Double>();
-					LinkedHashMap<String,Double> baseCentroidTF = new LinkedHashMap<String,Double>(); //tf of 0.0 for all unique doc terms
-
-
-
-//					if (kClusters > allUserDocumentsTF.size())
-//						kClusters = allUserDocumentsTF.size();
-					if (kClusters > allUserDocumentsTFIDF.size())
-						kClusters = allUserDocumentsTFIDF.size();
-					if (kClusters < 2)
-						kClusters = 2;
-
-					startTimeAlgorithm = System.nanoTime();
-
-					System.out.println("Calculating k-means Euclidean");
-
-					//Choose random initial points for cluster centroid
-					for (int i = 0; i < kClusters; i++)
-					{
-						System.out.println("remainingUserNames: "+remainingUserNames);
-						String initialUserName;
-						Collections.shuffle(remainingUserNames);
-						System.out.println("shuffled remainingUserNames: "+remainingUserNames);
-						
-						if (remainingUserNames.contains("RyersonU"))
-						{
-							initialUserName = "RyersonU";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("TheCatTweeting"))
-						{
-							initialUserName = "TheCatTweeting";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("weathernetwork"))
-						{
-							initialUserName = "weathernetwork";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("TorontoStar"))
-						{
-							initialUserName = "TorontoStar";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("Doggos"))
-						{
-							initialUserName = "Doggos";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("MoviesGuy"))
-						{
-							initialUserName = "MoviesGuy";
-							remainingUserNames.remove(initialUserName);
-						}
-						else if (remainingUserNames.contains("SportsGuy"))
-						{
-							initialUserName = "SportsGuy";
-							remainingUserNames.remove(initialUserName);
-						}
-						else
-						{
-							initialUserName = remainingUserNames.get(0);
-							remainingUserNames.remove(0);
-						}
-						
-//						initialUserName = remainingUserNames.get(0);
-//						remainingUserNames.remove(0);
-						System.out.println("initialUserName: "+initialUserName);
-						
-						Cluster cluster = new Cluster(i);
-						LinkedHashMap<String,Double> currTFIDF = allUserDocumentsTFIDF.get(initialUserName);
-//						LinkedHashMap<String,Double> currTF = allUserDocumentsTF.get(initialUserName);
-						Point initialPoint = new Point(initialUserName,currTFIDF);
-//						Point initialPoint = new Point(initialUserName,currTF);
-						initialPoint.setCluster(i);
-						cluster.addPoint(initialPoint);
-
-						centroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-//						centroidTF = new LinkedHashMap<String,Double>(baseCentroidTF);
-
-						for (String term : currTFIDF.keySet())
-//						for (String term : currTF.keySet())
-						{
-							centroidTFIDF.put(term,currTFIDF.get(term));
-//							centroidTF.put(term,currTF.get(term));
-						}
-
-						Point centroid = new Point(-1,centroidTFIDF);
-//						Point centroid = new Point(-1,centroidTF);
-						cluster.setCentroid(centroid);
-
-						allClusters.add(cluster);
-
-					}
-
-
-					//Assign remaining points to the closest cluster
-					//assignCluster();
-					double lowestEuclidean = Double.POSITIVE_INFINITY; 
-					int cluster = 0;                 
-					double eucliDista = 0.0; 
-
-					for(String currUserName : remainingUserNames) {
-
-						LinkedHashMap<String,Double> currTFIDF = allUserDocumentsTFIDF.get(currUserName);
-//						LinkedHashMap<String,Double> currTF = allUserDocumentsTF.get(currUserName);
-						Point currPoint = new Point(currUserName,currTFIDF);
-//						Point currPoint = new Point(currUserName,currTF);
-						Cluster c;
-
-						for(int i = 0; i < kClusters; i++) {
-							c = allClusters.get(i);
-							eucliDista = currPoint.eucliDistance(c.getCentroid());
-							//if(cosSim >= highestCosSim){
-							if(eucliDista < lowestEuclidean){
-								lowestEuclidean = eucliDista;
-								cluster = i;
-							}
-						}
-						currPoint.setCluster(cluster);
-						allClusters.get(cluster).addPoint(currPoint);
-
-						lowestEuclidean = Double.POSITIVE_INFINITY;
-					}
-					//Calculate new centroids.
-					//calculateCentroids();
-					for(Cluster clusterI : allClusters) {
-
-						List<Point> listOfPoints = clusterI.getPoints();
-						// System.out.println("Sepide points in cluster "+ clusterI + "is" + listOfPoints);
-						int numPoints = listOfPoints.size();
-
-						Point centroid = clusterI.getCentroid();
-						if(numPoints > 0) {
-							LinkedHashMap<String,Double> newCentroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-//							LinkedHashMap<String,Double> newCentroidTF = new LinkedHashMap<String,Double>(baseCentroidTF);
-							for (Point p : listOfPoints)
-							{
-								Map<String,Double> currTFIDF = p.getTfidf_or_Tf();
-//								LinkedHashMap<String,Double> currTF = p.getTfidf_or_Tf();
-								for (String term : currTFIDF.keySet())
-//								for (String term : currTF.keySet())
-								{
-									double pointTFIDFValue = 0.0;
-									double centroidTFIDFValue = 0.0;
-									pointTFIDFValue = currTFIDF.get(term);
-									Double existingCentroidValue = newCentroidTFIDF.get(term);
-									centroidTFIDFValue = existingCentroidValue == null
-											? 0.0 : existingCentroidValue.doubleValue();
-									newCentroidTFIDF.put(term, pointTFIDFValue+centroidTFIDFValue);
-//									double pointTFValue = 0.0;
-//									double centroidTFValue = 0.0;
-//									pointTFValue = currTF.get(term);
-//									centroidTFValue = newCentroidTF.get(term);
-//									newCentroidTF.put(term, pointTFValue+centroidTFValue);
-								}
-							}
-
-							double newClusterMag = 0.0;
-							double currTermTFIDF = 0.0;
-//							double currTermTF = 0.0;
-
-							for (String term : newCentroidTFIDF.keySet())
-//							for (String term : newCentroidTF.keySet())
-							{
-								currTermTFIDF = 0.0;
-//								currTermTF = 0.0;
-
-								currTermTFIDF = newCentroidTFIDF.get(term);
-//								currTermTF = newCentroidTF.get(term);
-								
-								if (currTermTFIDF > 0.0)
-//								if (currTermTF > 0.0)
-								{
-									currTermTFIDF = currTermTFIDF / numPoints;
-									newClusterMag += currTermTFIDF * currTermTFIDF;
-									newCentroidTFIDF.put(term, currTermTFIDF);
-//									currTermTF = currTermTF / numPoints;
-//									newClusterMag += currTermTF * currTermTF;
-//									newCentroidTF.put(term, currTermTF);
-								}
-
-							}
-
-							//Normalize the new cluster centroid as it might not be normalized
-
-							newClusterMag = Math.sqrt(newClusterMag);
-							for (String term : newCentroidTFIDF.keySet())
-//							for (String term : newCentroidTF.keySet())
-							{
-								currTermTFIDF = newCentroidTFIDF.get(term);
-//								currTermTF = newCentroidTF.get(term);
-								
-								if (currTermTFIDF > 0.0)
-//								if (currTermTF > 0.0)
-								{
-									currTermTFIDF = currTermTFIDF / newClusterMag;
-									newCentroidTFIDF.put(term, currTermTFIDF);
-//									currTermTF = currTermTF / newClusterMag;
-//									newCentroidTF.put(term, currTermTF);
-								}
-
-							}
-
-							centroid.setTfidf_or_Tf(newCentroidTFIDF);
-//							centroid.setTfidf_or_Tf(newCentroidTF);
-							clusterI.setCentroid(centroid);
-						}
-					}
-
-//					System.out.println("~~~~~~~~~~~~~~~~~~~TESTING IF CENTROID UNIT VECTOR~~~~~~~~~~~~~~~~~~~~~~~");
-					Double sumOfMags;
-					Point cent;
-					for(Cluster clusterI : allClusters) {
-						sumOfMags = 0.0;
-						cent = clusterI.getCentroid();
-						Map<String,Double> centtfidf = cent.getTfidf_or_Tf();
-//						LinkedHashMap<String,Double> centtf = cent.getTfidf_or_Tf();
-						for (String term : centtfidf.keySet())
-//						for (String term : centtf.keySet())
-						{
-							sumOfMags += centtfidf.get(term)*centtfidf.get(term);
-//							sumOfMags += centtf.get(term)*centtf.get(term);
-						}
-						sumOfMags = Math.sqrt(sumOfMags);
-//						System.out.println("cluster #"+clusterI.getId()+" sumOfMags: "+sumOfMags);
-////						System.out.println(cent.getTfidf_or_Tf());
-//						System.out.println(cent.getTfidf_or_Tf());
-					}
-
-
-					System.out.println("#################");
-					System.out.println("Iteration: " + 0);
-
-
-					for (int i = 0; i < kClusters; i++) {
-						Cluster c = allClusters.get(i);
-						//c.plotClusterTweets();
-						prevListPoints.add(c.getPoints());
-						//System.out.println("prevListPoints: "+prevListPoints.get(i));
-					}
-
-
-
-
-					//Calculate k-means calculate()
-					int iteration = 0;
-
-					//Iterate k-means ********************************************************************************
-					while(!convergence && iteration < maxIterations) {
-
-						//Clear cluster state
-						//clearClusters();
-						for(Cluster clusterK : allClusters) {
-							clusterK.clear();
-							//System.out.println("clusterK: "+clusterK.getPoints());
-						}
-
-
-						//getCentroids()
-						List centroids = new ArrayList(kClusters);
-						for(Cluster clusterH : allClusters) {
-							Point currCentroid = clusterH.getCentroid();
-							Point point = new Point(currCentroid.getTweetId(),currCentroid.getTfidf_or_Tf());
-							centroids.add(point);
-						}
-						List<Point> lastCentroids = centroids;
-
-						//Assign points to the closer cluster
-						//assignCluster();
-						lowestEuclidean = Double.POSITIVE_INFINITY; 
-						cluster = 0;                 
-						eucliDista = 0.0; 
-
-						for(String currUserName : allUserNames) {
-
-							LinkedHashMap<String,Double> currTFIDF = allUserDocumentsTFIDF.get(currUserName);
-//							LinkedHashMap<String,Double> currTF = allUserDocumentsTF.get(currUserName);
-							Point currPoint = new Point(currUserName,currTFIDF);
-//							Point currPoint = new Point(currUserName,currTF);
-
-							for(int i = 0; i < kClusters; i++) {
-								Cluster c = allClusters.get(i);
-								eucliDista = currPoint.eucliDistance(c.getCentroid());
-								if(eucliDista < lowestEuclidean){
-									lowestEuclidean = eucliDista;
-									cluster = i;
-								}
-							}
-							currPoint.setCluster(cluster);
-							allClusters.get(cluster).addPoint(currPoint);
-
-							lowestEuclidean = Double.POSITIVE_INFINITY;
-						}
-
-
-						//Get the current list of points
-						List<List<Point>> currListPoints = new ArrayList<List<Point>>();
-
-						//Calculate new centroids.
-						//calculateCentroids();
-
-						for(Cluster clusterI : allClusters) {
-
-							List<Point> listOfPoints = clusterI.getPoints();
-							currListPoints.add(listOfPoints);
-
-							int numPoints = listOfPoints.size();
-							// System.out.println("Sepide Number of points: " + numPoints);
-
-							Point centroid = clusterI.getCentroid();
-							if(numPoints > 0) {
-								LinkedHashMap<String,Double> newCentroidTFIDF = new LinkedHashMap<String,Double>(baseCentroidTFIDF);
-//								LinkedHashMap<String,Double> newCentroidTF = new LinkedHashMap<String,Double>(baseCentroidTF);
-								for (Point p : listOfPoints)
-								{
-									Map<String,Double> currTFIDF = p.getTfidf_or_Tf();
-//									LinkedHashMap<String,Double> currTF = p.getTfidf_or_Tf();
-									for (String term : currTFIDF.keySet())
-//									for (String term : currTF.keySet())
-									{
-										double pointTFIDFValue = 0.0;
-										double centroidTFIDFValue = 0.0;
-										pointTFIDFValue = currTFIDF.get(term);
-										Double existingCentroidValue = newCentroidTFIDF.get(term);
-										centroidTFIDFValue = existingCentroidValue == null
-												? 0.0 : existingCentroidValue.doubleValue();
-										newCentroidTFIDF.put(term, pointTFIDFValue+centroidTFIDFValue);
-//										double pointTFValue = 0.0;
-//										double centroidTFValue = 0.0;
-//										pointTFValue = currTF.get(term);
-//										centroidTFValue = newCentroidTF.get(term);
-//										newCentroidTF.put(term, pointTFValue+centroidTFValue);
-									}
-								}
-
-								double newClusterMag = 0.0;
-								double currTermTFIDF = 0.0;
-//								double currTermTF = 0.0;
-
-								for (String term : newCentroidTFIDF.keySet())
-//								for (String term : newCentroidTF.keySet())
-								{
-									currTermTFIDF = 0.0;
-									currTermTFIDF = newCentroidTFIDF.get(term);
-									if (currTermTFIDF > 0.0)
-//									currTermTF = 0.0;
-//									currTermTF = newCentroidTF.get(term);
-//									if (currTermTF > 0.0)
-									{
-										currTermTFIDF = currTermTFIDF / numPoints;
-										newClusterMag += currTermTFIDF * currTermTFIDF;
-										newCentroidTFIDF.put(term, currTermTFIDF);
-//										currTermTF = currTermTF / numPoints;
-//										newClusterMag += currTermTF * currTermTF;
-//										newCentroidTF.put(term, currTermTF);
-									}
-
-								}
-
-								//Normalize the new cluster centroid as it might not be normalized
-
-								newClusterMag = Math.sqrt(newClusterMag);
-								for (String term : newCentroidTFIDF.keySet())
-//								for (String term : newCentroidTF.keySet())
-								{
-									currTermTFIDF = newCentroidTFIDF.get(term);
-//									currTermTF = newCentroidTF.get(term);
-
-									if (currTermTFIDF > 0.0)
-//									if (currTermTF > 0.0)
-									{
-										currTermTFIDF = currTermTFIDF / newClusterMag;
-										newCentroidTFIDF.put(term, currTermTFIDF);
-//										currTermTF = currTermTF / newClusterMag;
-//										newCentroidTF.put(term, currTermTF);
-									}
-
-								}
-
-								centroid.setTfidf_or_Tf(newCentroidTFIDF);
-//								centroid.setTfidf_or_Tf(newCentroidTF);
-								clusterI.setCentroid(centroid);
-							}
-						}
-
-
-						System.out.println("~~~~~~~~~~~~~~~~~~~TESTING IF CENTROID UNIT VECTOR AFTER ITERATION "+iteration+"~~~~~~~~~~~~~~~~~~~~~~~");
-
-						for(Cluster clusterI : allClusters) {
-							sumOfMags = 0.0;
-							cent = clusterI.getCentroid();
-							Map<String,Double> centtfidf = cent.getTfidf_or_Tf();
-//							LinkedHashMap<String,Double> centtf = cent.getTfidf_or_Tf();
-							for (String term : centtfidf.keySet())
-//							for (String term : centtf.keySet())
-							{
-								sumOfMags += centtfidf.get(term)*centtfidf.get(term);
-//								sumOfMags += centtf.get(term)*centtf.get(term);
-							}
-							sumOfMags = Math.sqrt(sumOfMags);
-//							System.out.println("cluster #"+clusterI.getId()+" sumOfMags: "+sumOfMags);
-//							System.out.println(cent.getTfidf_or_Tf());
-						}
-
-						iteration++;
-
-
-						//Check if convergence
-						convergence = true;
-
-						for (int i = 0; i < kClusters; i++) {
-							List<Point> prevList = prevListPoints.get(i);
-							List<Point> currList = currListPoints.get(i);
-							// System.out.println("sepide list of points in each cluster" + currList);
-							//System.out.println("prevList "+prevList);
-							//System.out.println("currList "+currList);
-							for (Point p : prevList)
-							{
-
-								if (!currList.contains(p))
-								{
-									convergence = false;
-									break;
-								}
-							}
-							if (convergence == false)
-								break;
-
-						}
-
-						if (convergence == false)
-							prevListPoints = currListPoints;
-
-//						System.out.println("#################");
-//						System.out.println("Iteration: " + iteration);
-
-
-						//	for (int i = 0; i < kClusters; i++) {
-						//		Cluster c = allClusters.get(i);
-						//		c.plotClusterTweets();
-						//	}
-
-					}
-
-					//Output the clusters and the tweets
-					System.out.println("THE FINAL CLUSTERS "+ getLocalName());
-					  for (Cluster c : allClusters)
-					    {
-						   c.plotCluster();
-					    }
-
-					String[] users = new String[allUserDocumentsTFIDF.keySet().size()];
-					users = allUserDocumentsTFIDF.keySet().toArray(users);
-						allUserScores = initializeTargetScoreRows(usersRec, users);
-						Map<String,Double> userScore1 = new TreeMap<String,Double>();
-					Map<String,Double> userScore2 = new TreeMap<String,Double>();
-					double dpVectors = 0.0, score = 0.0, prevScore = 0.0;
-
-						System.out.println("kmeans clustering completed Initialized target Scores to 0.0");
-
-					System.out.println(getLocalName() + " All scores initialized to 0");
-					//System.out.println("allUserScores:" +allUserScores);
-					
-					int scoreTimes = 0;
-					int expectedTotalScores = 0;
-					int clusterSize = 0;
-					
-					for (int i = 0; i < allClusters.size(); i++)
-					{
-						clusterSize = allClusters.get(i).getPoints().size();
-						if (clusterSize > 1)
-						{
-							expectedTotalScores += ((clusterSize-1)*clusterSize)/2;
-						}
-					}
-					
-					System.out.println(getLocalName()+ " expectedTotalScores: "+expectedTotalScores);
-					System.out.println(getLocalName() + " Calculating Scores");
-					
-					for (int i = 0; i < allClusters.size(); i++)
-					{
-						//Not comparing where clusters have a size of 1 or 0
-						List<Point> pointsInCluster = allClusters.get(i).getPoints();
-						// System.out.println("pointsInCluster.size(): "+pointsInCluster.size());
-						if (pointsInCluster.size() > 1)
-						{
-							for (int j = 0; j < pointsInCluster.size()-1; j++)
-							{
-								String userName1 = pointsInCluster.get(j).getUserName();
-								Map<String,Double> userName1Tfidf = pointsInCluster.get(j).getTfidf_or_Tf();
-								Set<String> terms1 = userName1Tfidf.keySet();
-//								LinkedHashMap<String,Double> userName1Tf = pointsInCluster.get(j).getTfidf_or_Tf();
-//								Set<String> terms1 = userName1Tf.keySet();
-
-								for (int k = j+1; k < pointsInCluster.size(); k++)
-								{
-									String userName2 = pointsInCluster.get(k).getUserName();
-									Map<String,Double> userName2Tfidf = pointsInCluster.get(k).getTfidf_or_Tf();
-									Set<String> terms2 = userName2Tfidf.keySet();
-//									LinkedHashMap<String,Double> userName2Tf = pointsInCluster.get(k).getTfidf_or_Tf();
-//									Set<String> terms2 = userName2Tf.keySet();
-
-									dpVectors = calculateEuclideanSimilarityScore(
-											userName1Tfidf, userName2Tfidf);
-
-									//System.out.println("user1: "+user1+" user2: "+user2);
-									//Update the scores of the users
-									//System.out.println(allUserScores.get(user1));
-
-									//prevScore = allUserScores.get(user1).get(user2);
-									//	score = prevScore + dpVectors;
-									//	userScore1 = allUserScores.get(user1);
-									//	userScore1.put(user2, score);
-									//	allUserScores.put(user1,(TreeMap<String,Double>)userScore1);
-									//	userScore2 = allUserScores.get(user2);
-									//	userScore2.put(user1, score);
-									//	allUserScores.put(user2,(TreeMap<String,Double>)userScore2);
-
-										score = dpVectors;
-										putScoreForTrackedTargets(
-												allUserScores, userName1, userName2, score);
-
-									scoreTimes++;
-									
-									if (scoreTimes % 1000 == 0 || scoreTimes == expectedTotalScores)
-										System.out.println(getLocalName()+" scoreTimes: "+scoreTimes);
-									
-									dpVectors=0.0;
-									score=0.0;
-
-								} //end for (int k = j+1; k < pointsInCluster.size(); k++)
-							} //end for (int j = 0; j < pointsInCluster.size()-1; j++)
-						} //end if (pointsInCluster.size() > 1)
-					} //for (int i = 0; i < allClusters.size(); i++)
-
-					//for (String s : allUserScores.keySet())
-					//	{
-					//		System.out.print("user: "+s+"\t");
-					//		System.out.println(allUserScores.get(s));
-					//	}
-
-					System.out.println(getLocalName() + " Completed the scores Total Score Times: "+scoreTimes);
-
-					
-					
-
-
-					endTimeAlgorithm = System.nanoTime();
-					completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;						
-
-					//Output for K-means	   					
-					textprocessing_wb_or_tfidf_Data.add("K-means=TP+TFIDF+K-means" + "\t" + agentName + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
-//					System.out.println(agentName+"- Total Tweets Processed: " + tweetCount + " TP:" + convertMs(completionTimeTextProcessing) + "ms TFIDF:" + convertMs(completionTimeTFIDF) + "ms K-means:" + convertMs(completionTimeAlgorithm) + "ms Total:" + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+"ms");
-					System.out.println("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " K-means: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-//					myGui.appendResult(agentName+"\nTotal Tweets Processed: " + tweetCount + " TP:" + round(completionTimeTextProcessing/1000000.00,2) + "ms TFIDF:" + round(completionTimeTFIDF/1000000.00,2) + "ms K-means:" + round(completionTimeAlgorithm/1000000.00,2) + "ms Total:" + round((completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)/1000000.00,2)+"ms");
-					myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " K-means: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-	
-					
-				}	
 				
 				//SVM Recommendation?
 				else if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithmRec))
@@ -4559,31 +2618,10 @@ public class RecommenderAgent extends Agent
 						System.out.println(summary);
 						myGui.appendResult(summary);
 					}
-					else if (isSvmBatchMode() || isClassifierGuidedUserMode())
-					{
-						startTimeAlgorithm = System.nanoTime();
-						allUserScores = runIndependentSvmBatchRecommendations();
-						endTimeAlgorithm = System.nanoTime();
-						completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
-							String svmName = RecommendationModeSupport.algorithmName(algorithmRec);
-							textprocessing_wb_or_tfidf_Data.add(svmName+"-Batch=TP+TFIDF+"+svmName + "\t" + agentName + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
-							System.out.println("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " "+svmName+" Batch: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-							myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " "+svmName+" Batch: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-					}
 						else
 						{
 							startTimeAlgorithm = System.nanoTime();
-							allUserScores = runExactSvmWorkerRecommendations(
-									trainSetFilePath,
-									testSetFilePath,
-									recommendSetFilePath,
-									usersRec,
-									preparedModelFeatureCount,
-									trainSetUsers == null ? 0 : trainSetUsers.size(),
-									followeeFollowers.size(),
-									algorithmRec == SCALABLE_SVM
-											? "single-target scalable linear SVM"
-											: "single-target exact SVM");
+							allUserScores = runExactSvm();
 							endTimeAlgorithm = System.nanoTime();
 							completionTimeAlgorithm =
 									endTimeAlgorithm - startTimeAlgorithm;
@@ -4592,13 +2630,13 @@ public class RecommenderAgent extends Agent
 									algorithmRec);
 							textprocessing_wb_or_tfidf_Data.add(
 									svmName + "=TP+TFIDF+" + svmName + "\t" + agentName
-									+ "\t" + tweetCount + "\t"
+									+ "\t" + usableTweetCount + "\t" + tweetCount + "\t"
 									+ completionTimeTextProcessing + "\t"
 									+ completionTimeTFIDF + "\t"
 									+ completionTimeAlgorithm + "\t"
 									+ System.getProperty("line.separator"));
 							String timing = "Mapper" + nodeNumber
-									+ "- Total Tweets Processed: " + tweetCount
+									+ "- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount
 									+ " TP: " + convertMs(completionTimeTextProcessing)
 									+ " ms TFIDF: " + convertMs(completionTimeTFIDF)
 									+ " ms Reducer" + nodeNumber + " " + svmName + ": "
@@ -4618,350 +2656,21 @@ public class RecommenderAgent extends Agent
 					else if (algorithmRec == Doc2Vec)
 				{
 					startTimeAlgorithm = System.nanoTime();
-					int topn = Integer.parseInt(myGui.recommendationField.getText());
+					//The per-run value, identical on every node: the exact global
+					//top-n depends on all nodes cutting at the same n.
+					int topn = Math.max(1, requestedTopRecommendations);
 					if (isUserRankerFolloweeMode())
 					{
 						topn = Math.max(topn, datasetUserFollowee.size());
 					}
-					allUserScores = runDoc2VecBatchRecommendations(
-							topn, !isUserRankerFolloweeMode());
+					allUserScores = runDoc2VecBatchRecommendations(topn);
 					endTimeAlgorithm = System.nanoTime();
 					completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
 
-					System.out.println("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms Reducer"+ nodeNumber+ " Doc2Vec Batch: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeAlgorithm)+" ms");
-					myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms Reducer"+ nodeNumber+ " Doc2Vec Batch: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeAlgorithm)+" ms");
+					System.out.println("Mapper"+nodeNumber+"- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms Reducer"+ nodeNumber+ " Doc2Vec Batch: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeAlgorithm)+" ms");
+					myGui.appendResult("Mapper"+nodeNumber+"- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms Reducer"+ nodeNumber+ " Doc2Vec Batch: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeAlgorithm)+" ms");
 				}
-				else if (false && algorithmRec == Doc2Vec)
-				{
-					startTimeAlgorithm = System.nanoTime();
-					Map<String,Double> predictedFollowerScore = new LinkedHashMap<String,Double>();
-					int topn = Integer.parseInt(myGui.recommendationField.getText());
-					String[] wordsF = null;
-					String[] wordsLine = null;
-					Workbook workbook = null;
-					File myCSV = null;
-					String out_file_pattern = null;
-					int nodeNumInt = 0;
-					String[] usersForRec = new String[usersRec.size()];
-					usersForRec = usersRec.toArray(usersForRec);
-					allUserScores = new TreeMap<String,TreeMap<String,Double>>();
-					Map<String,Double> userScore1 = new TreeMap<String,Double>();
-					double followeeScore = 0.0;
-					
-					try {
-						File fileFromGui = getConfiguredDatasetFile();
-						if (fileFromGui == null)
-						{
-							throw new IOException(
-									"No dataset file is configured for Doc2Vec.");
-						}
-						//System.out.println("File path" + fileFromGui);
-						//System.out.println("File path" + myGui.fileChooser.getSelectedFile());
-						//File txtFile = new File((myGui.fileChooser.getSelectedFile()));
-						//String contents = FileUtils.readFileToString(fileFromGui);
-						String filePath = fileFromGui.getAbsolutePath();
-						System.out.println("File Path for Sepide:" + filePath);
-                        String doc2vecDirName = "Dataset/424k/";
-					    File doc2vecDir = new File(doc2vecDirName);
-						if (!doc2vecDir.exists())
-						{
-								doc2vecDir.mkdirs();
-						}	
-                        
-						//myCSV = myGui.fileChooser.getSelectedFile();
-						//nodeNumInt = Integer.parseInt((myGui.numNodesField.getText()));
-						//out_file_pattern = doc2vecDirName + "data_set_doc2vec_"+nodeNumber+".txt";
-						out_file_pattern = filePath;
-						//out_file_pattern = dataSetFilePath;
-						//out_file_pattern = doc2vecDirName+"data_set_doc2vec_"+getLocalName()+".txt";
-						//System.out.println("File path: "+ txtFile);
-						
-					}
-					
-					catch(Exception e)
-						{
-						  e.printStackTrace();
-						}
-
-                        String doc2vecDirLoc = "TwitterGatherDataFollowers/userRyersonU/";
-					    File doc2vecLocDir = new File(doc2vecDirLoc);
-						if (!doc2vecLocDir.exists())
-						{
-								doc2vecLocDir.mkdirs();
-						}						
-						
-				  try {
-					  
-						
-					//usersRec = myGui.getUsersRec();
-
-					//java.lang.ProcessBuilder pb = new ProcessBuilder("C:/Program Files/Python39/python.exe","D:/Simulator-S-15-May-2020/TwitterGatherDataFollowers/userRyersonU/doc2vec.py",""+usersRec.get(0).toString(),""+topn,""+myCSV).inheritIO();
-					//java.lang.ProcessBuilder pb = new ProcessBuilder("C:/Program Files/Python39/python.exe",doc2vecDirLoc + "doc2vec.py",""+usersRec.get(0).toString(),""+topn,""+out_file_pattern,""+nodeNumber).inheritIO();
-					int doc2vecWorkers = Math.min(Math.max(Runtime.getRuntime().availableProcessors() - 1, 1), 12);
-					java.lang.ProcessBuilder pb = new ProcessBuilder(
-							getPythonCommand(),
-						doc2vecDirLoc + "doc2vec_shared.py",
-						""+usersRec.get(0).toString(),
-						""+topn,
-						""+out_file_pattern,
-						""+nodeNumber,
-						""+numRecAgents,
-						""+doc2vecWorkers
-					);
-					//java.lang.ProcessBuilder pb = new ProcessBuilder("C:/Program Files/Python39/python.exe","D:/Simulator-S-15-May-2020/TwitterGatherDataFollowers/userRyersonU/doc2vec3.py",""+usersRec.get(0).toString(),""+topn,""+myGui.fileChooser.getSelectedFile()).inheritIO();
-                    
-					Process p = pb.start();
-					InputStream errorStream = p.getErrorStream();
-					BufferedReader errorReader = new BufferedReader(new InputStreamReader(errorStream));
-					BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
-					BufferedReader r = new BufferedReader(reader);
-					//System.out.println("I am a line here");
-					String line;
-					int counter = 0;
-					if ((line = r.readLine()) == null) {
-						System.out.println("it is null");
-					}
-				    
-					  while ((line = r.readLine()) != null) {
-						counter = counter+1;
-						//line = r.readLine();
-						if ((line != null) &&  line.contains("OpenBLAS")){
-							System.out.println("I'm coming from OpenBLAS : " + line);
-						}
-						else if ((line != null) &&  line.contains("completionTime")){
-							System.out.println("I'm coming from Time : " + line);
-						}
-						else if ((line != null) &&  line.contains("cores")){
-							System.out.println("I'm coming from cores : " + line);
-						}
-						else if ((line != null) &&  line.contains("model")){
-							System.out.println("I'm coming from model : " + line);
-						}
-						else if ((line != null) &&  line.contains("python")){
-						System.out.println("I'm coming from python : " + line);
-					    line = line.replace("python", "");
-						line = line.replace("(", "");
-						line = line.replace(")", "");
-						line = line.replaceAll("'", "");
-						wordsLine = line.split(",");
-						predictedFollowerScore.put(wordsLine[0],Double.parseDouble(wordsLine[1]));
-					    userScore1.put((wordsLine[0]).trim(),Double.parseDouble(wordsLine[1]));
-						}
-						
-						else if ((line != null) &&  line.contains("Testing accuracy for movie plots MLPClassifier%s")){
-							System.out.println("Testing accuracy for movie plots MLPClassifier%s : " + line);
-						}
-						else if ((line != null) &&  line.contains("Testing F1 score for movie plots MLPClassifier: {}")){
-							System.out.println("Testing F1 score for movie plots MLPClassifier: {} : " + line);
-						}
-						else if ((line != null) &&  line.contains("Similarity after MLP")){
-							System.out.println("Similarity after MLP : " + line);
-						}
-						
-						/*if ((line != null) &&  line.contains("cores:")) {
-							System.out.println("I'm coming from python : " + line);
-						}*/
-					}
-					
-					endTimeAlgorithm = System.nanoTime();
-					completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
-					 
-					System.out.println("counter: " + counter);
-					reader.close();
-					
-					
-					for (int i = 0; i < usersForRec.length; i++) {
-						allUserScores.put(usersForRec[i],(TreeMap<String,Double>) userScore1);
-					}
-					userScore1 = new TreeMap<String,Double>();
-					
-					String line1;
-					while ((line1 = errorReader.readLine()) != null) {
-					System.out.println(line1); // Display the error message
-					// You can also store the error message in a variable or perform any other desired error handling.
-					}
-					
-					int exitCode = p.waitFor();
-					if (exitCode != 0)
-					{
-						throw new IOException(
-								"Doc2Vec subprocess exited with code " + exitCode);
-					}
-					
-					             try 
-									 {
-										  Thread.sleep(400);
-									 } 
-								  catch(InterruptedException e)
-									{
-									  e.printStackTrace();
-									}
-						
-						// loop through the linkedHashMap 
-						
-						Set entrySet = predictedFollowerScore.entrySet();
-						Iterator it = entrySet.iterator();
-						
-						for (int i = 0; i < usersForRec.length; i++) {
-							while (it.hasNext()){
-							System.out.println("test print: " + it.next());
-							
-						  }
-						  
-						}
-						
-						/*for (int i = 0; i < usersForRec.length; i++) {
-							
-							for (Entry<String, Double> entry: predictedFollowerScore.entrySet()){
-								userScore1.put(entry.getKey(),entry.getValue());
-						        //lineF = readerFollowee.readLine();
-					            allUserScores.put(usersForRec[i],(TreeMap<String,Double>) userScore1);
-							}
-							
-							userScore1 = new TreeMap<String,Double>();
-						} */  //comment on Dec. 9
-						
-						// loop over the allUserScores
-						for (Map.Entry<String,TreeMap<String,Double>> entry: allUserScores.entrySet()) {
-							
-							System.out.println("Key in allUserScores " + entry.getKey() + " Value in allUserScores: " + entry.getValue());
-						}  
-						
-						  
-					    System.out.println("Doc2Vec Implementation is finished");
-						Map<String,String> userPredictedFollowee5 = new LinkedHashMap<String,String>();
-						//System.out.println("test 1");
-						String importantStuffDirName = "important-stuff/";
-						File importantStuffDir = new File(importantStuffDirName);
-						if (!importantStuffDir.exists())
-						{
-								importantStuffDir.mkdirs();
-						}
-						// reading from a text file to output it
-						//File myFile = new File(importantStuffDirName + nodeNumber + "_followeeRec.txt");
-						//BufferedReader readerFollowee = new BufferedReader(new FileReader(importantStuffDirName + nodeNumber + "_followeeRec.txt"));
-						
-						//Integer.parseInt(myGui.recommendationField.getText())
-						
-						// end of reading from a file to output it
-						
-						/*for (String name : userPredictedFollowee5.keySet()) {
-							System.out.println("names of Predicted Followees:" + userPredictedFollowee5.get(name));
-						}  */  //commented out on Nov. 17
-						
-					/*for (String recUser : userPredictedFollowee5.keySet())
-					   {
-						 for (String followeeUser: followeeFollowers.keySet())
-						 {
-							  if (userPredictedFollowee5.get(recUser).equals(followeeUser))
-							  {followeeScore = 1.0;}
-							  else
-							  {followeeScore = 0.0;}
-								  //followeeScore = Double.parseDouble(wordsF[1]);
-							
-							  userScore1.put(followeeUser,followeeScore);
-						 }
-						allUserScores.put(recUser,(TreeMap<String,Double>)userScore1);
-						userScore1 = new TreeMap<String,Double>();
-					  }  */ // commented out on Nov. 18
-					  
-					  // Getting the Scores
-					String lineF = null;
-					System.out.println("usersForRec.length: " + usersForRec.length);
-					/* for (int i = 0; i < usersForRec.length; i++) { // comment on Dec. 8 
-					inner:	for (int j = 0; j < myFile.length()-1; j++)  {
-							  lineF = readerFollowee.readLine();
-						      System.out.println("line in the file: " + lineF);
-							  if (lineF == null) {
-								  break inner;
-							  }
-							  lineF = lineF.replace("(", "");
-							  lineF = lineF.replace(")", "");
-							  lineF = lineF.replaceAll("'", "");
-							  wordsF = lineF.split(",");
-							  
-							  userScore1.put(wordsF[0],Double.parseDouble(wordsF[1])); 
-							  //lineF = readerFollowee.readLine();
-							  allUserScores.put(usersForRec[i],(TreeMap<String,Double>) userScore1);
-						}
-						userScore1 = new TreeMap<String,Double>();
-					}
-					readerFollowee.close(); */
-					  
-					  // End of code for getting the scores
-					  
-					  // Code for loop through the allUserScores
-					  
-					   for (Map.Entry<String,TreeMap<String,Double>> entry :allUserScores.entrySet()) {
-						   System.out.println("Sepide looping through this allUserScores second time from file " + entry.getKey() + " , " + entry.getValue());
-					   }  //commented out on Nov. 18 
-					 
-					  // end of code for loop through the allUserScores
-					
-					//endTimeAlgorithm = System.nanoTime();
-					//completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
-					myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms Reducer"+ nodeNumber+ " Doc2Vec: " + convertMs(completionTimeAlgorithm) + " ms Total: " + convertMs(completionTimeTextProcessing+completionTimeAlgorithm)+" ms");
-					try 
-									 {
-										  Thread.sleep(1000);
-									 } 
-								  catch(InterruptedException e)
-									{
-									  e.printStackTrace();
-									}
-						
-						// read from the text file and add it to userPredictedFollowee
-						
-						/*for (int i = 0; i < Integer.parseInt(myGui.recommendationField.getText()); i++) {
-							//userPredictedFollowee.put(usersRec.get(i),predictedClass);
-							
-							// predicted label should be the one predicted by Doc2Vec
-						} */
-						
-						
-					
-						} 	
-						 /* try {
-						    Process p2 = Runtime.getRuntime().exec("C:\\Program Files\\Python39\\python.exe D:\\Simulator-S-15-May-2020\\TwitterGatherDataFollowers\\userRyersonU\\doc2vec.py"+usersRec);
-						
-						        try 
-									 {
-										  Thread.sleep(5000);
-									 } 
-								  catch(InterruptedException e)
-									{
-									  e.printStackTrace();
-									}
-									
-									System.out.println("Sepide is done with Doc2Vec");
-									
-							} */ 
-								
-						catch (IOException e) {
-						      // TODO Auto-generated catch block
-						       e.printStackTrace();
-					        } 
-					    catch(InterruptedException e)
-							{
-								 // this part is executed when an exception (in this example InterruptedException) occurs
-							}
-
-
-					/*ACLMessage toMergeMsg = new ACLMessage(ACLMessage.INFORM);
-					toMergeMsg.addReceiver( new AID("Organizing Agent1", AID.ISLOCALNAME) );
-					toMergeMsg.setPerformative(ACLMessage.INFORM);
-					toMergeMsg.setOntology("Merge Lists");
-					try {
-						toMergeMsg.setContentObject((Serializable) allUserScores);
-						send(toMergeMsg);
-						// System.out.println(getLocalName()+" sent toMergeMsg");
-					} catch (IOException e) {
-						// TODO Auto-generated catch block
-						e.printStackTrace();
-					}  */  
-								
-							
-				}
+				
 				
 				// Code added by Sepide for Multi-Node Doc2Vec
 				
@@ -5025,623 +2734,30 @@ public class RecommenderAgent extends Agent
 				
 				else if (algorithmRec == MLP)
 				{
-					AlgorithmParameterSettings algorithmSettings = algorithmSettings();
-					int mlpHiddenNeurons = algorithmSettings.getMlpHiddenNeurons();
-					int mlpHiddenLayers = algorithmSettings.getMlpHiddenLayers();
-					double mlpLearningRate = algorithmSettings.getMlpLearningRate();
-					double mlpMaxError = algorithmSettings.getMlpMaxError();
-					boolean sparseFederatedMlp =
-							algorithmSettings.isSparseFederatedMlpEnabled();
-
 					startTimeAlgorithm = System.nanoTime();
-
-					// determineTrainingTestSet();
-					determineCentralTrainingTestSet();
-					System.out.println(getLocalName()+" test set "+ testSetUsers.size() +": "+testSetUsers);
-					System.out.println(getLocalName()+" train set "+ trainSetUsers.size() +": "+trainSetUsers);
-					System.out.println(getLocalName()+" data set "+ dataSetUsers.size() +": "+dataSetUsers);
-					
-					//Start of creating the training set 		
-		
-					int uniqueWordCountTrain = 0;
-					// int numFollowees = followeeFollowers.keySet().size();
-					int numFollowees = datasetFollowees.size();
-					int numUniqueDocTerms = allUniqueDocTerms.size();
-					System.out.println(getLocalName()+ " numUniqueDocTerms: " + numUniqueDocTerms);
-					int mlpDenseRows =
-							(trainSetUsers == null ? 0 : trainSetUsers.size())
-							+ (testSetUsers == null ? 0 : testSetUsers.size())
-							+ Math.max(1, usersRec.size());
-					if (!sparseFederatedMlp)
-					{
-						validateLegacyNeurophMlpConfiguration(
-								numUniqueDocTerms,
-								mlpHiddenNeurons,
-								mlpHiddenLayers,
-								numFollowees,
-								trainSetUsers == null ? 0 : trainSetUsers.size(),
-								testSetUsers == null ? 0 : testSetUsers.size(),
-								usersRec == null ? 0 : usersRec.size());
-					}
-					long mlpReservation;
-					if (sparseFederatedMlp)
-					{
-						int sparseRows = mlpDenseRows;
-						long nonZeroFeatureCount =
-								countSparseFeatureEntries(trainSetUsers)
-								+ countSparseFeatureEntries(testSetUsers)
-								+ countSparseFeatureEntries(usersRec);
-						mlpReservation =
-								RecommendationMemoryCoordinator.estimateSparseMlpTrainingBytes(
-										numUniqueDocTerms,
-										mlpHiddenNeurons,
-										mlpHiddenLayers,
-										numFollowees,
-										nonZeroFeatureCount,
-										sparseRows);
-					}
-					else
-					{
-						mlpReservation =
-								RecommendationMemoryCoordinator.estimateMlpTrainingBytes(
-										numUniqueDocTerms,
-										mlpHiddenNeurons,
-										mlpHiddenLayers,
-										numFollowees,
-										mlpDenseRows);
-					}
-					activeMlpLease = RecommendationMemoryCoordinator.acquire(
-							getLocalName(),
-							"MLP dataset construction and training",
-							RecommendationMemoryCoordinator.Workload.MLP_TRAIN,
-							mlpReservation);
-					if (!sparseFederatedMlp)
-					{
-						reportLegacyNeurophMlpConfiguration(
-								numUniqueDocTerms,
-								mlpHiddenNeurons,
-								mlpHiddenLayers,
-								numFollowees,
-								trainSetUsers == null ? 0 : trainSetUsers.size(),
-								testSetUsers == null ? 0 : testSetUsers.size(),
-								usersRec == null ? 0 : usersRec.size(),
-								mlpReservation);
-					}
-
-
-					//Create the class(followee) vectors
-					double[][] followeeClassVectors = new double[numFollowees][numFollowees];
-					followeeNames = new String[numFollowees];
-					// followeeNames = followeeFollowers.keySet().toArray(followeeNames);
-					followeeNames = datasetFollowees.toArray(followeeNames);
-					followeeIndex = new LinkedHashMap<String,Integer>();
-					
-					for (int i = 0; i < followeeNames.length; i++)
-					{
-						followeeIndex.put(followeeNames[i],i);
-					} 
-		
-					for (int i = 0; i < followeeClassVectors.length; i++)
-					{
-						for (int j = 0; j < followeeClassVectors[0].length; j++)
-						{
-							if (i == j)
-								followeeClassVectors[i][j] = 1;
-							else
-								followeeClassVectors[i][j] = 0;
-						}
-					}
-					if (sparseFederatedMlp)
-					{
-						runSparseFederatedMlp(
-								algorithmSettings,
-								numUniqueDocTerms,
-								numFollowees);
-					}
-					else
-					{
-					
-					// Create MultiLayerPerceptron for 10-fold Cross-Validation with Weka added by Sepide
-					/* int folds = 10;     //commented out on May-1 2023
-					mlp = new MultilayerPerceptron();
-					mlp.setLearningRate(LEARNING_RATE_MLP);
-					mlp.setMomentum(0.2);
-					mlp.setHiddenLayers("10");  */
-					
-                   /* try {   //commented out on May-1 2023 
-					
-                    
-					//S int runs  = 10;
-					 
-					FileReader datareader = new FileReader(dataSetFilePath); 
-                    Instances data = new Instances(datareader);					
-					data.setClassIndex((data.numAttributes())-1);
-					
-					 //S for (int r = 0; r < runs; r++) {
-						
-						// randomize data
-						//S int seed = r + 1;
-						//S String[] args;
-						//S int seed  = Integer.parseInt(Utils.getOption("s", args));
-						int seed = 1;
-						Random random = new Random(seed);
-					    
-						data.randomize(random);
-						
-						 if (data.classAttribute().isNominal())
-                         data.stratify(folds);
-					 
-					    // Perform Cross-Validation
-						System.out.println();
-						System.out.println("=== Setup ===");
-						System.out.println("Classifier: " + mlp.getClass().getName() + " " + Utils.joinOptions(mlp.getOptions()));
-						System.out.println("Dataset: " + data.relationName());
-						System.out.println("Folds: " + folds);
-						System.out.println("Seed: " + seed);
-                        System.out.println();
-					 
-						Evaluation evalAll = new Evaluation(data);
-					    for (int i = 0; i < folds; i++) { 
-					           
-							   Evaluation eval = new Evaluation(data);
-							   Instances train = data.trainCV(folds, i, random);
-							   //S eval.setPriors(train);
-							   
-							   Instances test = data.testCV(folds, i);
-							   Classifier mlpCopy = AbstractClassifier.makeCopy(mlp);
-							   mlpCopy.buildClassifier(train);
-                               mlp.buildClassifier(data);							   
-							   eval.evaluateModel(mlpCopy, test);
-							   evalAll.evaluateModel(mlpCopy, test);
-							   
-							   // output evaluation
-							   System.out.println();
-							   System.out.println(eval.toMatrixString("=== Confusion matrix for fold " + (i+1) + "/" + folds + " ===\n"));
-							   
-						}
-							   //S System.out.println("Test for Weka Cross Validation for fold " + (i+1));
-							   /* System.out.println();
-							   System.out.println("=== Setup run " + (r+1) + " ===");
-							   System.out.println("Classifier: " + Utils.toCommandLine(mlp));
-							   System.out.println("Dataset: " + data.relationName());
-							   System.out.println("Folds: " + folds);
-							   System.out.println("Seed: " + seed);  */
-							   /* System.out.println();  // commented out on May-1 2023 
-							   evalAll.crossValidateModel(mlp, data, folds, new Random(seed));
-                               System.out.println(evalAll.toSummaryString("=== " + folds + "-fold Cross-validation ===", false));
-							   System.out.println("Mean Root Squared Error: "+evalAll.errorRate());   //Printing Training Mean root squared Error
-							   System.out.println("Estimated Accuracy: "+Double.toString(evalAll.pctCorrect()));
-							   System.out.println("Estimated Incorrectly classified: "+Double.toString(evalAll.pctIncorrect()));
-							   System.out.println("===================================================");
-					           System.out.println(evalAll.toMatrixString());  */
-							   //S System.out.println(evalAll.toSummaryString());
-                               //S System.out.println(evalAll.toMatrixString("=== Confusion matrix for fold " + (r+1) + "/" + folds + " ===\n"));
-							    
-                        //S }
-																					
-					
-					//int cls = Instances.classIndex();
-					
-					//Apply K-fold cross validation
-					/* System.out.println("test for line 3690");
-                    //S System.out.println(evalAll.toSummaryString("=== " + folds + "-fold Cross-validation ===", false));
-					Evaluation eval = new Evaluation(data); 
-					eval.crossValidateModel(mlp, data, folds, new Random(1));
-					System.out.println("\n10-fold CV:\n" + eval.toSummaryString());
-					System.out.println("Mean Root Squared Error: "+eval.errorRate()); //Printing Training Mean root squared Error
-					System.out.println("Estimated Accuracy: "+Double.toString(eval.pctCorrect()));
-					System.out.println("Estimated Incorrectly classified: "+Double.toString(eval.pctIncorrect()))
-					*/
-					
-					//S System.out.println("Precision: "+Double.toString(eval.precision(cls)));
-					
-					/* }  // commented out on May-1 2023 
-					
-					catch(Exception ex){
-                    ex.printStackTrace();
-                    } */	
-					
-					// Comment-out by Sepide - Neuroph NN
-					//Sep 30-2023 MultiLayerPerceptron multiLayer = new MultiLayerPerceptron(TransferFunctionType.TANH, numUniqueDocTerms, HIDDEN_NEURONS, HIDDEN_NEURONS, numFollowees);
-					//Sep 30-2023 SoftMax softMaxAct = new SoftMax(multiLayer.getLayers().get(multiLayer.getLayers().size()-1));
-					//Sep30-2023 int hiddenLayers = multiLayer.getLayersCount() - 2;
-					//Sep30-2023 System.out.println("Number of Hidden Layers in Neuroph: "+ hiddenLayers);
-					//Sep3-2023 List<Layer> mlpLayers = multiLayer.getLayers();
-					//Sep30-2023 List<Neuron> outputNeurons = mlpLayers.get(mlpLayers.size()-1).getNeurons();
-					/* for (Neuron outputNeuron : outputNeurons)
-					{
-						outputNeuron.setTransferFunction(softMaxAct);
-					} */  //Sep30-2023 
-					
-					   //Sep30-2023 BackPropagation nodeLearningRule = (BackPropagation) multiLayer.getLearningRule();
-					   //Sep30-2023 nodeLearningRule.setLearningRate(LEARNING_RATE_MLP);
-					   //Sep30-2023 nodeLearningRule.setMaxError(MAX_ERROR_MLP); 
-					   //CrossValidation crossValidation = new CrossValidation(multiLayer, dataSet, 10);
-					   //crossValidation.addEvaluator(new ClassifierEvaluator.MultiClass(followeeNames));
-					   
-					   
-					  /* try { // commented out on May-1 2023
-	  
-	                         crossValidation.run(); 
-	                    } 
-					   
-					    catch(InterruptedException e) {
-		  
-		                         System.out.println("sleep time finished");
-		  
-	                       }
-			 
-			           catch(ExecutionException ee) {
-		  
-		                    System.out.println("execution time finished");
-		             
-		  
-	                   }
-					   System.out.println("Test of cross Validation implementation");
-					   CrossValidationResult results = crossValidation.getResult();
-					   results.printResult();
-					   System.out.println("End of cross Validation implementation"); */ 
-
-                    //End of Code added by Sepide for Cross-Validation
-					
-										
-					 trainMLP = new DataSet(numUniqueDocTerms,numFollowees);			
-					
-					//Setup the vector data of each user for training
-					for (String currUser : trainSetUsers)
-					{
-						Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
-						double[] currUserTfidfVector = vectorArrayFormat(currDocTfidf,allUniqueDocTerms);
-						int indexFollowee = followeeIndex.get(userFollowee.get(currUser));
-						
-						trainMLP.addRow(new DataSetRow(currUserTfidfVector, followeeClassVectors[indexFollowee]));
-					} 
-										
-					// try {
-						// FileWriter writer = new FileWriter("testVectors.txt", true); //append
-						// BufferedWriter bufferedWriter = new BufferedWriter(writer);
-									
-						// System.out.println("trainSet");
-						// bufferedWriter.write("trainSet");
-						// bufferedWriter.newLine();
-						
-						// List<DataSetRow> setRows = trainMLP.getRows();
-						// for (int i = 0; i < setRows.size(); i++)
-						// {
-							// double[] inputVector = setRows.get(i).getInput();
-							// double[] outputVector = setRows.get(i).getDesiredOutput();
-							// bufferedWriter.write("User: "+trainSetUsers.get(i)+" Followee: "+userFollowee.get(trainSetUsers.get(i)));
-							// bufferedWriter.newLine();
-							// bufferedWriter.write("Input: "+ Arrays.toString(inputVector) + " Output: " + Arrays.toString(outputVector) );
-							// bufferedWriter.newLine();
-						// }
-						// bufferedWriter.newLine();
-						// bufferedWriter.close();
-					// } catch (IOException e) {
-						// e.printStackTrace();
-					// }
-					
-					
-					//Start of creating the test set and recommend set
-					
-					testMLP = new DataSet(numUniqueDocTerms,numFollowees);
-					
-					//Setup the vector data of each user for test
-					for (String currUser : testSetUsers)
-					{
-						Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
-						double[] currUserTfidfVector = vectorArrayFormat(currDocTfidf,allUniqueDocTerms);
-						int indexFollowee = followeeIndex.get(userFollowee.get(currUser));
-						
-						testMLP.addRow(new DataSetRow(currUserTfidfVector, followeeClassVectors[indexFollowee]));
-					  
-					}
-					// try {
-						// FileWriter writer = new FileWriter("testVectors.txt", true); //append
-						// BufferedWriter bufferedWriter = new BufferedWriter(writer);
-						
-						// System.out.println("testSet");
-						// bufferedWriter.write("testSet");
-						// bufferedWriter.newLine();
-						
-						// List<DataSetRow> setRows = testMLP.getRows();
-						// for (int i = 0; i < setRows.size(); i++)
-						// {
-							// double[] inputVector = setRows.get(i).getInput();
-							// double[] outputVector = setRows.get(i).getDesiredOutput();
-							// bufferedWriter.write("User: "+testSetUsers.get(i)+" Followee: "+userFollowee.get(testSetUsers.get(i)));
-							// bufferedWriter.newLine();
-							// bufferedWriter.write("Input: "+ Arrays.toString(inputVector) + " Output: " + Arrays.toString(outputVector) );
-							// bufferedWriter.newLine();
-						// }
-						// bufferedWriter.newLine();
-						// bufferedWriter.close();
-					// } catch (IOException e) {
-						// e.printStackTrace();
-					// }
-					
-					
-					recMLP = new DataSet(numUniqueDocTerms,numFollowees);
-					
-					//Setup the vector data of each user for test
-					for (String currUser : usersRec)
-					{
-						Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
-						double[] currUserTfidfVector = vectorArrayFormat(currDocTfidf,allUniqueDocTerms);
-						int indexFollowee = followeeIndex.get(userFollowee.get(currUser));
-						
-						recMLP.addRow(new DataSetRow(currUserTfidfVector, followeeClassVectors[indexFollowee]));
-					} 
-					
-					// try {
-						// FileWriter writer = new FileWriter("testVectors.txt", true); //append
-						// BufferedWriter bufferedWriter = new BufferedWriter(writer);
-						
-						// System.out.println("recSet");
-						// bufferedWriter.write("recSet");
-						// bufferedWriter.newLine();
-						
-						// List<DataSetRow> setRows = recMLP.getRows();
-						// for (int i = 0; i < setRows.size(); i++)
-						// {
-							// double[] inputVector = setRows.get(i).getInput();
-							// double[] outputVector = setRows.get(i).getDesiredOutput();
-							// bufferedWriter.write("User: "+usersRec.get(i)+" Followee: "+userFollowee.get(usersRec.get(i)));
-							// bufferedWriter.newLine();
-							// bufferedWriter.write("Input: "+ Arrays.toString(inputVector) + " Output: " + Arrays.toString(outputVector) );
-							// bufferedWriter.newLine();
-						// }
-						// bufferedWriter.newLine();
-						// bufferedWriter.close();
-					// } catch (IOException e) {
-						// e.printStackTrace();
-					// }
-					
-					   
-					try
-					{
-					nodeMLP = createLegacyNeurophMlp(
-							numUniqueDocTerms,
-							mlpHiddenNeurons,
-							mlpHiddenLayers,
-							numFollowees);
-					SoftMax softMaxAct = new SoftMax(nodeMLP.getLayers().get(nodeMLP.getLayers().size()-1));
-					int hiddenLayers = nodeMLP.getLayersCount() - 2;
-					System.out.println("Number of Hidden Layers in Neuroph: "+ hiddenLayers);
-					List<Layer> mlpLayers = nodeMLP.getLayers();
-					List<Neuron> outputNeurons = mlpLayers.get(mlpLayers.size()-1).getNeurons();
-					for (Neuron outputNeuron : outputNeurons)
-					{
-						outputNeuron.setTransferFunction(softMaxAct);
-					}
-					
-					BackPropagation nodeLearningRule = (BackPropagation) nodeMLP.getLearningRule();
-					nodeLearningRule.setLearningRate(mlpLearningRate);
-					nodeLearningRule.setMaxError(mlpMaxError);
-					//nodeLearningRule.setMaxIterations(100);
-
-					System.out.println(getLocalName()+" training MLP");
-					
-					startTimeTrain = System.nanoTime();
-					//System.out.println("The line before the training starts");
-					nodeMLP.learn(trainMLP);
-					trainMLP = null;
-					//System.out.println(" This line is taking a lot of time");
-					
-					endTimeTrain = System.nanoTime();
-					
-					completionTimeTrain = endTimeTrain - startTimeTrain;
-					}
-					catch (Throwable failure)
-					{
-						nodeMLP = null;
-						trainMLP = null;
-						releaseActiveMlpLease();
-						throw failure;
-					}
-					
-					// try{
-						// System.in.read();
-					// }
-					// catch (IOException e)
-					// {
-						// e.printStackTrace();
-					// }
-										
-					if (numRecAgents < 2)
-					{
-						startTimeTest = System.nanoTime();
-						testNeuralNetwork(nodeMLP,testMLP);
-						endTimeTest = System.nanoTime();
-						completionTimeTest = endTimeTest - startTimeTest;
-						recNeuralNetwork(nodeMLP,recMLP);
-						
-						
-						// Calculating the accuracy for MLP Neuroph
-						
-						String nnDirName = "Stored_NN/";
-						File nnDir = new File(nnDirName);
-						if (!nnDir.exists())
-						{
-								nnDir.mkdirs();
-						}
-						
-						String nodeMLPFileName = nnDirName+getLocalName()+"_MLP.nnet";
-						nodeMLP.save(nodeMLPFileName);
-						NeuralNetwork neuralNet = nodeMLP;
-						double accuracy = reportLegacyNeurophAccuracy(
-								neuralNet,
-								testMLP,
-								"single-node local model");
-						//S System.out.println("Accuracy: " + String.format("%.2f%%", accuracy));
-
-						
-						// End of code for calculating the accuracyfor MLP Neuroph
-						
-						
-			   
-						
-						// Code for confusion Matrix Neuroph
-						
-						int numClasses = numFollowees;
-						int[][] confusionMatrix = new int[numClasses][numClasses];
-						
-						try {
-							
-						for (DataSetRow row : dataSet.getRows()) {
-							neuralNet.setInput(row.getInput());
-							neuralNet.calculate();
-							double[] networkOutput = neuralNet.getOutput();
-
-							// Determine the actual class (assuming it's a one-hot encoded array)
-							int actualClass = findIndexOfMaxValue(row.getDesiredOutput());
-
-							// Determine the predicted class
-							int predictedClass = findIndexOfMaxValue(networkOutput);
-
-							// Update the confusion matrix
-							confusionMatrix[actualClass][predictedClass]++;
-                          }
-						  
-						  //S printConfusionMatrix(confusionMatrix);
-						  
-						  }
-						  
-						  catch (NullPointerException e) {
-						      e.printStackTrace();
-							  
-						  }
-						  
-						// End of code for confusion Matrix Neuroph
-
-						//FileReader trainreader2 = new FileReader("C:\\Users\\Sepide\\Desktop\\Simulator-S\\Dataset\\424k\\Newfolder\\dataset.csv");
-                        //Instances train2 = new Instances(trainreader2);
-						// recNeuralNetworkS(mlp2, recMLPS); // added by Sepide
-											
-						
-					/* BufferedReader recommendFile = readDataFile(recommendSetFilePath);  // commented out on May-1 2023 
-			        Instances recommendInstances = null;
-			
-			        try{
-						
-						recommendInstances = new Instances(recommendFile);
-					}
-					catch (IOException e)
-					{
-						e.printStackTrace();
-					}  */
-					
-					// Use filter					
-					/* Remove remove = new Remove();
-					remove.setAttributeIndices("last");
-					FilteredClassifier fc = new FilteredClassifier();
-					fc.setFilter(remove);
-					FilteredClassifier mlpFiltered = new FilteredClassifier(); */ 
-					
-					//S NumericToNominal filter = new NumericToNominal();
-					//S NominalToBinary filter = new NominalToBinary();
-					
-					 
-					
-					/* try {
-						filter.setInputFormat(recommendInstances2);
-					}
-					catch(Exception e){
-								e.printStackTrace();            
-						}
-					try {
-						recommendInstances2 = Filter.useFilter(recommendInstances2, filter);
-					}
-					catch(Exception e){
-								e.printStackTrace();            
-						} */ 
-									               
-					
-			   /*  recommendInstances.setClassIndex(recommendInstances.numAttributes() - 1);  // commented out on May-1 2023 
-			     Instances predictedLabelsRec2 = new Instances(recommendInstances);
-			
-				double clsLabel = 0.0;
-				Map<String,String> userPredictedFollowee2 = new LinkedHashMap<String,String>();
-				String predictedClass2;
-				
-			
-				BufferedReader datafile = readDataFile(trainSetFilePath);
-				Instances data = null;
-					try{
-						data = new Instances(datafile);
-					}
-					catch (IOException e)
-					{
-						e.printStackTrace();
-					}
-			
-			         for (int i = 0; i < recommendInstances.numInstances(); i++) {
-						
-						try {
-							clsLabel = mlp.classifyInstance(recommendInstances.instance(i));
-						}
-						catch (Exception e)
-						{
-							e.printStackTrace();
-						} 
-						
-						predictedLabelsRec2.instance(i).setClassValue(clsLabel);
-						
-						if (i == recommendInstances.numInstances()-1)
-						{
-							predictedClass2 = predictedLabelsRec2.instance(i).stringValue(data.numAttributes()-1);
-			//				System.out.println(predictedLabels.instance(i).stringValue(data.numAttributes()-2));
-							System.out.println(getLocalName()+" Recommended Class: "+predictedLabelsRec2.instance(i).stringValue(data.numAttributes()-1));
-							userPredictedFollowee2.put(usersRec.get(i),predictedClass2);
-							System.out.println("User to print for Sepide:" + usersRec.get(i));
-						}
-			              }
-			
-			            allUserScores = new TreeMap<String,TreeMap<String,Double>>();
-			            Map<String,Double> userScore1 = new TreeMap<String,Double>();
-			            double followeeScore = 0.0;
-			
-						for (String recUser : userPredictedFollowee2.keySet())
-								{
-									for (String followeeUser: followeeFollowers.keySet())
-									{
-										if (userPredictedFollowee2.get(recUser).equals(followeeUser))
-											followeeScore = 1.0;
-										else
-											followeeScore = 0.0;
-										
-										userScore1.put(followeeUser,followeeScore);
-									}
-									allUserScores.put(recUser,(TreeMap<String,Double>)userScore1);
-									userScore1 = new TreeMap<String,Double>();
-								}  */   // commented out on May-1 2023 
-						
-						endTimeAlgorithm = System.nanoTime();
-						completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;						
-                        myGui.appendResult("Completion time: " + convertMs(completionTimeAlgorithm));
-						//Output for MLP
-						textprocessing_wb_or_tfidf_Data.add("MLP=TP+TFIDF+MLP" + "\t" + agentName + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
-	//					System.out.println(agentName+"- Total Tweets Processed: " + tweetCount + " TP:" + convertMs(completionTimeTextProcessing) + "ms TFIDF:" + convertMs(completionTimeTFIDF) + "ms K-means:" + convertMs(completionTimeAlgorithm) + "ms Total:" + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+"ms");
-						System.out.println("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " MLP: " + convertMs(completionTimeAlgorithm) + " ms MLP Train: "+ convertMs(completionTimeTrain) + " ms MLP Test: "+ convertMs(completionTimeTest) +" ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-	//					myGui.appendResult(agentName+"\nTotal Tweets Processed: " + tweetCount + " TP:" + round(completionTimeTextProcessing/1000000.00,2) + "ms TFIDF:" + round(completionTimeTFIDF/1000000.00,2) + "ms K-means:" + round(completionTimeAlgorithm/1000000.00,2) + "ms Total:" + round((completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)/1000000.00,2)+"ms");
-					    myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " MLP: " + convertMs(completionTimeAlgorithm) + " ms MLP Train: "+ convertMs(completionTimeTrain) + " ms MLP Test: "+ convertMs(completionTimeTest) +" ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-						//S myGui.appendResult("MLP Accuracy: " + String.format("%.2f%%", accuracy));
-						nodeMLP = null;
-						dataSet = null;
-						testMLP = null;
-						recMLP = null;
-						releaseActiveMlpLease();
-					}
-					
-					//Stop  timing until averaged weights is returned
-					else
-					{
-						endTimeAlgorithm = System.nanoTime();
-						completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
-					}
-					}
-					
-				  }   
+					allUserScores = runExactMlp();
+					endTimeAlgorithm = System.nanoTime();
+					completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
+					myGui.appendResult("Completion time: " + convertMs(completionTimeAlgorithm));
+					textprocessing_wb_or_tfidf_Data.add("MLP=TP+TFIDF+MLP" + "\t" + agentName
+							+ "\t" + usableTweetCount + "\t" + tweetCount
+							+ "\t" + completionTimeTextProcessing
+							+ "\t" + completionTimeTFIDF
+							+ "\t" + completionTimeAlgorithm
+							+ "\t" + System.getProperty("line.separator"));
+					String timing = "Mapper" + nodeNumber
+							+ "- Tweets Received: " + tweetCount + " Processed: " + usableTweetCount
+							+ " TP: " + convertMs(completionTimeTextProcessing)
+							+ " ms TFIDF: " + convertMs(completionTimeTFIDF)
+							+ " ms Reducer" + nodeNumber + " MLP: " + convertMs(completionTimeAlgorithm)
+							+ " ms MLP Train: " + convertMs(completionTimeTrain)
+							+ " ms MLP Test: " + convertMs(completionTimeTest)
+							+ " ms Total: " + convertMs(completionTimeTextProcessing
+									+ completionTimeTFIDF + completionTimeAlgorithm)
+							+ " ms";
+					System.out.println(timing);
+					myGui.appendResult(timing);
+				}
 
 				// try {
 					// FileWriter writer = new FileWriter("scores_Not_Normalized.txt", true); //append
@@ -5669,121 +2785,7 @@ public class RecommenderAgent extends Agent
 					// e.printStackTrace();
 				// }
                    
-                    if (algorithmRec == Doc2Vec && numRecAgents > 1 ) {
-						
-						System.out.println("test if algorithmRec == Doc2Vec && numRecAgents > 1 ");
-						String nnModelName = "Stored_Doc2VecModel/";
-						File nnModelDir = new File(nnModelName);
-						if (!nnModelDir.exists())
-						{
-								nnModelDir.mkdirs();
-						}
-						
-						String doc2vecModel = nnModelName + "md"+ nodeNumber +"_d2v.model";
-						// there is no library to average the weights for Doc2Vec 
-					}				   
-				
-					  if (algorithmRec == MLP && numRecAgents > 1
-							  && sparseFederatedMlpRun)
-					{
-						return;
-					}
-
-					  if (algorithmRec == MLP && numRecAgents > 1
-							  && !sparseFederatedMlpRun)
-					{
-						try
-						{
-					//System.out.println("test if algorithmRec == MLP && numRecAgents > 1 ");
-					
-					
-					String nnDirName = "Stored_NN/";
-					File nnDir = new File(nnDirName);
-					if (!nnDir.exists())
-					{
-							nnDir.mkdirs();
-					}
-					//System.out.println("test for line 5311");
-					// try {
-					String nodeMLPFileName = nnDirName+getLocalName()+"_MLP.nnet";
-					//S String nodeMLPFileName = nnDirName+getLocalName()+"_MLP.txt";
-					//May-1 2023 String nodeMLPFileName = nnDirName+getLocalName()+"_MLP.model";
-					//System.out.println("test for line 5316");
-					nodeMLP.save(nodeMLPFileName);
-					
-					// Calculating the accuracy for MLP Neuroph
-					
-					NeuralNetwork neuralNet = nodeMLP;
-						double accuracy = reportLegacyNeurophAccuracy(
-								neuralNet,
-								testMLP,
-								"local model before averaging");
-						//S System.out.println("Accuracy: " + accuracy + "%");
-						//S myGui.appendResult("MLP Accuracy: " + String.format("%.2f%%", accuracy));
-					
-					// End of code for calculating the accuracy for MLP Neuroph
-                    					
-					//s FileReader datareader = new FileReader(dataSetFilePath);
-                    // S Instances data = new Instances(datareader);
-					//S weka.core.SerializationHelper.write("mlp.model", mlpNode);
-					
-					/* try {   // commented out on May-1 2023 
-						  weka.core.SerializationHelper.write(nodeMLPFileName, mlp);
-					}
-					
-					catch(Exception e) {
-						
-					}  */
-					
-					// code added by Sepide to loop through recommendations
-                     /*  Set s = userPredictedFollowee2.entrySet();
-                      Iterator it = s.ietartor();
-                       while (it.hasNext()) {
-						   System.out.println("The value of userPredictedFollowee2 in MLP: " + it.next());
-					   }					  
-					
-					// end of code added by Sepide */
-												
-					ACLMessage toAverageWeightsMsg = new ACLMessage(ACLMessage.INFORM);
-					toAverageWeightsMsg.addReceiver( new AID("Organizing Agent1", AID.ISLOCALNAME) );
-					toAverageWeightsMsg.setPerformative(ACLMessage.INFORM);
-					toAverageWeightsMsg.setConversationId(runLifecycle.getActiveRunId());
-					toAverageWeightsMsg.setOntology("Average Weights MLP");
-					
-					toAverageWeightsMsg.setContent(nodeMLPFileName);
-					//S toAverageWeightsMsg.setContent("mlp.model");
-					send(toAverageWeightsMsg);
-					System.out.println(getLocalName()+" sent toAverageWeightsMsg");
-					nodeMLP = null;
-					releaseActiveMlpLease();
-					
-					// try {
-						// toAverageWeightsMsg.setContentObject((Serializable) nodeMLP);	
-						// send(toAverageWeightsMsg);
-						// System.out.println(getLocalName()+" sent toAverageWeightsMsg");
-					// } catch (IOException e) {
-						// e.printStackTrace();
-					// }
-					// }
-					/* catch (FileNotFoundException ex){
-                   } */ 
-				   /* catch (IOException e)  {
-                   } */ 
-				   
-				    
-					/* catch(Exception e){
-                     // return null;            // Always must return something
-                         } */ 
-					
-					}
-					finally
-					{
-						nodeMLP = null;
-						releaseActiveMlpLease();
-					}
-				 }
-				  else
-				 { 
+				 {
 					//Added in @Jason display text processing wb/tfidf kmean/cosSIM time in ms
 					for (String s : textprocessing_wb_or_tfidf_Data){
 						System.out.print(s);
@@ -5876,287 +2878,10 @@ public class RecommenderAgent extends Agent
 	
 			// End of code added by Sepide
 
-			  if (msg!=null
-					  && "Averaged MLP Failed".equals(msg.getOntology())
-					  && runLifecycle.isActive(msg.getConversationId()))
-			{
-				System.err.println(getLocalName()+" received MLP averaging failure: "
-						+msg.getContent());
-				handleAlgorithmFailure(new IllegalStateException(
-						"MLP averaging failed: " + msg.getContent()));
-			}
-
-			  if (msg!=null
-					  && "Averaged Sparse MLP Failed".equals(msg.getOntology())
-					  && runLifecycle.isActive(msg.getConversationId()))
-			{
-				System.err.println(getLocalName()
-						+" received sparse MLP averaging failure: "
-						+msg.getContent());
-				handleAlgorithmFailure(new IllegalStateException(
-						"Sparse MLP averaging failed: " + msg.getContent()));
-			}
-
-			  if (msg!=null
-					  && "Averaged Sparse MLP Complete".equals(msg.getOntology())
-					  && runLifecycle.isActive(msg.getConversationId()))
-			{
-				System.out.println(getLocalName()+" received Averaged Sparse MLP Complete");
-				try (RecommendationMemoryCoordinator.Lease ignored =
-						RecommendationMemoryCoordinator.acquire(
-								getLocalName(),
-								"Sparse MLP averaged scoring",
-								RecommendationMemoryCoordinator.Workload.MLP_SCORE,
-								RecommendationMemoryCoordinator.estimateMlpModelBytes(
-										new File(msg.getContent()), 5)))
-				{
-					SparseFederatedMlpModelSupport.SparseMlpModel averagedSparseMlp =
-							SparseFederatedMlpModelSupport.SparseMlpModel.load(
-									new File(msg.getContent()));
-					startTimeAlgorithm = System.nanoTime();
-					startTimeTest = System.nanoTime();
-					testSparseFederatedMlp(averagedSparseMlp, sparseMlpTestExamples);
-					endTimeTest = System.nanoTime();
-					completionTimeTest = endTimeTest - startTimeTest;
-					recSparseFederatedMlp(averagedSparseMlp, sparseMlpRecExamples);
-					endTimeAlgorithm = System.nanoTime();
-					completionTimeAlgorithm += (endTimeAlgorithm - startTimeAlgorithm);
-					finishSparseMlpRecommendationOutput();
-				}
-				catch (Throwable failure)
-				{
-					System.err.println(getLocalName()
-							+" failed while scoring with the averaged sparse MLP.");
-					handleAlgorithmFailure(failure);
-					return;
-				}
-			}
 
 
-			  if (msg!=null
-					  && "Averaged MLP Complete".equals(msg.getOntology())
-					  && runLifecycle.isActive(msg.getConversationId()))
-			{
-				
-				//May-1 2023 MultilayerPerceptron averagedMLP = new MultilayerPerceptron(); 
-				System.out.println(getLocalName()+" received Averaged MLP Complete");
-				
-				// averagedMLP = null;
-				// averagedNN = null;
-				
-				// try
-				// {
-					// averagedMLP = (MultiLayerPerceptron) msg.getContentObject();	
-				// }
-				// catch (UnreadableException e)
-				// {
-					// e.printStackTrace();
-				// }
-				
-				try (RecommendationMemoryCoordinator.Lease ignored =
-						RecommendationMemoryCoordinator.acquire(
-								getLocalName(),
-								"MLP averaged scoring",
-								RecommendationMemoryCoordinator.Workload.MLP_SCORE,
-								RecommendationMemoryCoordinator.estimateMlpModelBytes(
-										new File(msg.getContent()), 5)))
-				{
-				// System.out.println(getLocalName()+" path to averagedNN : "+msg.getContent());
-				averagedMLP = (MultiLayerPerceptron) NeuralNetwork.createFromFile(msg.getContent());
-				
-				// Code added by Sepide
-				
-				
-			/*May-1 2023	try {    
-				        averagedMLP = (MultilayerPerceptron) SerializationHelper.read(msg.getContent());
-			           //S averagedMLP = SerializationHelper.read(msg.getContent());
-				
-				    }
-				
-				catch (Exception e) {
-                        e.printStackTrace();
-                       } */
-					   
-				// End of code added by S	   
-				
-				startTimeAlgorithm = System.nanoTime();
-				
-				startTimeTest = System.nanoTime();
-				testNeuralNetwork(averagedMLP,testMLP);
-				reportLegacyNeurophAccuracy(
-						averagedMLP,
-						testMLP,
-						"averaged federated model");
-				//System.out.println("test message by Sepide1");
-				// testNeuralNetwork(averagedNN,testMLP);
-				endTimeTest = System.nanoTime();
-				completionTimeTest = endTimeTest - startTimeTest;
-				recNeuralNetwork(averagedMLP,recMLP);
-				averagedMLP = null;
-				}
-					catch (Throwable failure)
-					{
-						System.err.println(getLocalName()
-								+" failed while scoring with the averaged MLP.");
-						handleAlgorithmFailure(failure);
-						return;
-					}
-				// recNeuralNetwork(averagedNN,recMLP);
-				
-				
-				/* averagedMLP.setLearningRate(LEARNING_RATE_MLP);
-				averagedMLP.setMomentum(0.2);
-				averagedMLP.setHiddenLayers("10"); */
-				
-				
-				/* String arffDirName = "Dataset/Arff_files/";
-			    File arffDir = new File(arffDirName);
-					 if (!arffDir.exists())
-					{
-							arffDir.mkdirs();
-					} 
-				
-				   String recommendSetFilePath = "";
-				   recommendSetFilePath = arffDirName + "recommend_set_rec"+nodeNumber+".txt";
-				
-				try {
-					
-					FileReader datareader = new FileReader(recommendSetFilePath);
-					Instances data3 = new Instances(datareader);
-					data3.setClassIndex((data3.numAttributes())-1);
-					averagedMLP.buildClassifier(data3);
-				}	
-				catch (FileNotFoundException ex){
-                           ex.printStackTrace();
-                       }				     
-				
-				catch (IOException e) {
-                        e.printStackTrace();
-                       }
-					   				
-			         catch (Exception ee){
-                          ee.printStackTrace();    
-                    }
-					
-				
-				BufferedReader recommendFile = readDataFile(recommendSetFilePath);
-			    Instances recommendInstances = null;
-					
-					try{
-						
-						recommendInstances = new Instances(recommendFile);
-					}
-					catch (IOException e)
-					{
-						e.printStackTrace();
-					}
-					
-				 recommendInstances.setClassIndex(recommendInstances.numAttributes() - 1);
-			     Instances predictedLabelsRec = new Instances(recommendInstances);
-			
-				double clsLabel = 0.0;
-				Map<String,String> userPredictedFollowee = new LinkedHashMap<String,String>();
-				String predictedClass;
-				
-				String trainSetFilePath = "";
-				trainSetFilePath = arffDirName + "train_set_rec"+nodeNumber+".txt";
-				BufferedReader datafile = readDataFile(trainSetFilePath);
-				
-				Instances data = null;
-					try{
-						data = new Instances(datafile);
-					}
-					catch (IOException e)
-					{
-						e.printStackTrace();
-					}
-			
-			         for (int i = 0; i < recommendInstances.numInstances(); i++) {
-						
-						try {
-							
-							clsLabel = averagedMLP.classifyInstance(recommendInstances.instance(i));
-						}
-						catch (Exception e)
-						{
-							e.printStackTrace();
-						} 
-						
-						predictedLabelsRec.instance(i).setClassValue(clsLabel);
-						
-						if (i == recommendInstances.numInstances()-1)
-						{
-							predictedClass = predictedLabelsRec.instance(i).stringValue(data.numAttributes()-1);
-			//				System.out.println(predictedLabels.instance(i).stringValue(data.numAttributes()-2));
-							System.out.println(getLocalName()+" Recommended Class: "+predictedLabelsRec.instance(i).stringValue(data.numAttributes()-1));
-							userPredictedFollowee.put(usersRec.get(i),predictedClass);
-						}
-			              }
-			
-			            allUserScores = new TreeMap<String,TreeMap<String,Double>>();
-			            Map<String,Double> userScore1 = new TreeMap<String,Double>();
-			            double followeeScore = 0.0;
-			
-						for (String recUser : userPredictedFollowee.keySet())
-								{
-									for (String followeeUser: followeeFollowers.keySet())
-									{
-										if (userPredictedFollowee.get(recUser).equals(followeeUser))
-											followeeScore = 1.0;
-										else
-											followeeScore = 0.0;
-										
-										userScore1.put(followeeUser,followeeScore);
-									}
-									allUserScores.put(recUser,(TreeMap<String,Double>)userScore1);
-									userScore1 = new TreeMap<String,Double>();
-								}  */   // commented out on May-1 2023 
-				
-				endTimeAlgorithm = System.nanoTime();
-				completionTimeAlgorithm += (endTimeAlgorithm - startTimeAlgorithm);						
-
-				//Output for MLP
-				textprocessing_wb_or_tfidf_Data.add("MLP=TP+TFIDF+MLP" + "\t" + agentName + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF    + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
-//					System.out.println(agentName+"- Total Tweets Processed: " + tweetCount + " TP:" + convertMs(completionTimeTextProcessing) + "ms TFIDF:" + convertMs(completionTimeTFIDF) + "ms K-means:" + convertMs(completionTimeAlgorithm) + "ms Total:" + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+"ms");
-				System.out.println("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " MLP: " + convertMs(completionTimeAlgorithm) + " ms MLP Train: "+ convertMs(completionTimeTrain) + " ms MLP Test: "+ convertMs(completionTimeTest) +" ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-//					myGui.appendResult(agentName+"\nTotal Tweets Processed: " + tweetCount + " TP:" + round(completionTimeTextProcessing/1000000.00,2) + "ms TFIDF:" + round(completionTimeTFIDF/1000000.00,2) + "ms K-means:" + round(completionTimeAlgorithm/1000000.00,2) + "ms Total:" + round((completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)/1000000.00,2)+"ms");
-				myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " MLP: " + convertMs(completionTimeAlgorithm) + " ms MLP Train: "+ convertMs(completionTimeTrain) + " ms MLP Test: "+ convertMs(completionTimeTest) +" ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
-				//Sep30-2023 myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " MLP: " + convertMs(completionTimeAlgorithm) +" ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");  //Added by Sepide
-                System.out.println("test for sepide to see the avaraged MLP");
-				
-				for (String s : textprocessing_wb_or_tfidf_Data){
-						System.out.print(s);
-				}
-
-				myGui.setTPTime(completionTimeTextProcessing/1000000.00);
-				myGui.setTfidfTime(completionTimeTFIDF/1000000.00);
-				myGui.setAlgorithmTime(completionTimeAlgorithm/1000000.00);
-                System.out.println("test message by Sepide2");
-
-				// System.out.println(getLocalName()+" tweetCount: "+ tweetCount+"\ttweetreceived: "+tweetsToReceive);
 
 
-				//OUTPUT TO TIMING, NEED TO EDIT
-
-				String outputFilename = "Results/Timing/" + referenceUser + "/" + "Distributed_Server_TP_TFIDF_Algorithm" + numRecAgents + ".txt"; 
-				try {
-					saveToFile_array(outputFilename, textprocessing_wb_or_tfidf_Data, "append");
-				} catch (IOException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-				}
-				textprocessing_wb_or_tfidf_Data.clear();
-
-				ACLMessage msg7 = new ACLMessage( ACLMessage.INFORM );
-				msg7.addReceiver( new AID("Starter Agent", AID.ISLOCALNAME) );
-				msg7.setPerformative( ACLMessage.INFORM );
-				msg7.setContent("Tweeting TFIDF Algorithm Calculation Completed");
-				msg7.setConversationId(runLifecycle.getActiveRunId());
-				msg7.setOntology("Tweets TFIDF Algorithm Calculation Done");
-				send(msg7);
-
-				sendScoresToOrganizer();
-			}
 
 		}
 
@@ -6267,6 +2992,7 @@ public class RecommenderAgent extends Agent
 						scoreCandidatesForTelemetry,
 						toMergeMsg.getOntology());
 				toMergeMsg.setContentObject(content);
+				emulateLink(1);
 				send(toMergeMsg);
 				NodeExecutionMonitor.complete(getLocalName());
 			}
@@ -6340,7 +3066,6 @@ public class RecommenderAgent extends Agent
 			}
 			Map<String,TreeMap<String,RecommendationCandidateEvidence>> evidenceByTarget =
 					new TreeMap<String,TreeMap<String,RecommendationCandidateEvidence>>();
-			int currentNode = Integer.parseInt(nodeNumber);
 			for (String target : usersRec)
 			{
 				TreeMap<String,RecommendationCandidateEvidence> targetEvidence =
@@ -6358,8 +3083,7 @@ public class RecommenderAgent extends Agent
 						{
 							continue;
 						}
-						Integer primaryServer = userPrimaryRecServer.get(candidate);
-						if (primaryServer != null && primaryServer.intValue() != currentNode)
+						if (!ownsCandidate(candidate))
 						{
 							continue;
 						}
@@ -6368,7 +3092,7 @@ public class RecommenderAgent extends Agent
 						{
 							continue;
 						}
-						double similarity = calculateSparseCosineScore(
+						double similarity = calculateUnitVectorCosine(
 								targetDocument, candidateEntry.getValue());
 						if (Double.isFinite(similarity) && similarity > 0.0)
 						{
@@ -6455,17 +3179,6 @@ public class RecommenderAgent extends Agent
 
 	    // Method added by Sepide
 		
-		private boolean isCorrectPrediction(double[] networkOutput, double[] expectedOutput) {
-		// Round the network's output to the nearest integer (0 or 1)
-		int predicted = (int) Math.round(networkOutput[0]);
-
-		// Check if the predicted value matches the expected value
-		if(predicted == expectedOutput[0]) {
-			return true;
-				} else {
-					return false;
-				}
-			}
 		
 		// End of method added by Sepide 
 		
@@ -6483,34 +3196,9 @@ public class RecommenderAgent extends Agent
     }
 	
 	// Method added by Sepide
-	    private void printConfusionMatrix(int[][] matrix) {
-        for (int i = 0; i < matrix.length; i++) {
-            for (int j = 0; j < matrix[i].length; j++) {
-                System.out.print(matrix[i][j] + "\t");
-            }
-            System.out.println();
-        }
-    }
 	
 	// End of methods added by Sepide 
 		
-		private void determineCentralTrainingTestSet()
-		{
-			testSetUsers = new ArrayList<String>(); //list of users in test set
-			trainSetUsers = new ArrayList<String>(); //list of users in training set
-			for (String userInstance : allUserDocumentsTFIDF.keySet())
-			{
-				if (centralTrainSetUsers.contains(userInstance))
-					trainSetUsers.add(userInstance);
-				else if (centralTestSetUsers.contains(userInstance))
-					testSetUsers.add(userInstance);
-			}
-			Collections.sort(trainSetUsers);
-			Collections.sort(testSetUsers);
-			dataSetUsers = new ArrayList<String>(trainSetUsers);
-			dataSetUsers.addAll(testSetUsers);
-		}
-
 		private void determineTrainingTestSet()
 		{
 			int numUsers = allUserDocuments.keySet().size();
@@ -6649,6 +3337,29 @@ public class RecommenderAgent extends Agent
 			return megabytes + " MB";
 		}
 
+		/**
+		 * Deterministic Fisher-Yates over a Neuroph {@link DataSet}'s rows.
+		 *
+		 * DataSet.shuffle() uses an unseeded shuffle, which would make every run
+		 * differ; this keeps the presentation random but reproducible.
+		 */
+		private void shuffleTrainingRows(DataSet dataSet, long seed)
+		{
+			if (dataSet == null || dataSet.size() < 2)
+			{
+				return;
+			}
+			List<DataSetRow> rows = dataSet.getRows();
+			java.util.Random random = new java.util.Random(seed);
+			for (int i = rows.size() - 1; i > 0; i--)
+			{
+				int j = random.nextInt(i + 1);
+				DataSetRow swap = rows.get(i);
+				rows.set(i, rows.get(j));
+				rows.set(j, swap);
+			}
+		}
+
 		private double reportLegacyNeurophAccuracy(
 				NeuralNetwork neuralNet,
 				DataSet testSet,
@@ -6719,24 +3430,6 @@ public class RecommenderAgent extends Agent
 			return accuracy;
 		}
 
-		private long countSparseFeatureEntries(Collection<String> users)
-		{
-			if (users == null)
-			{
-				return 0L;
-			}
-			long count = 0L;
-			for (String user : users)
-			{
-				Map<String,Double> document = allUserDocumentsTFIDF.get(user);
-				if (document != null)
-				{
-					count += document.size();
-				}
-			}
-			return count;
-		}
-
 		private Map<String,Integer> buildSparseMlpTermIndex(
 				TreeSet<String> uniqueDocTerms)
 		{
@@ -6750,346 +3443,9 @@ public class RecommenderAgent extends Agent
 			return termIndex;
 		}
 
-		private List<SparseFederatedMlpModelSupport.TrainingExample>
-				createSparseMlpExamples(
-						Collection<String> users,
-						Map<String,Integer> termIndex,
-						boolean requireLabel)
-		{
-			List<SparseFederatedMlpModelSupport.TrainingExample> examples =
-					new ArrayList<SparseFederatedMlpModelSupport.TrainingExample>();
-			if (users == null)
-			{
-				return examples;
-			}
-			for (String user : users)
-			{
-				Integer labelIndex = null;
-				if (requireLabel)
-				{
-					labelIndex = followeeIndex.get(userFollowee.get(user));
-					if (labelIndex == null)
-					{
-						continue;
-					}
-				}
-				Map<Integer,Double> sparseFeatures =
-						new LinkedHashMap<Integer,Double>();
-				Map<String,Double> document = allUserDocumentsTFIDF.get(user);
-				if (document != null)
-				{
-					for (Map.Entry<String,Double> entry : document.entrySet())
-					{
-						Integer featureIndex = termIndex.get(entry.getKey());
-						Double value = entry.getValue();
-						if (featureIndex != null
-								&& value != null
-								&& Double.isFinite(value.doubleValue())
-								&& value.doubleValue() != 0.0)
-						{
-							sparseFeatures.put(featureIndex, value);
-						}
-					}
-				}
-				examples.add(new SparseFederatedMlpModelSupport.TrainingExample(
-						user,
-						sparseFeatures,
-						requireLabel ? labelIndex.intValue() : -1));
-			}
-			return examples;
-		}
-
-		private void runSparseFederatedMlp(
-				AlgorithmParameterSettings settings,
-				int featureCount,
-				int outputCount)
-				throws IOException
-		{
-			sparseFederatedMlpRun = true;
-			Map<String,Integer> termIndex =
-					buildSparseMlpTermIndex(allUniqueDocTerms);
-			List<SparseFederatedMlpModelSupport.TrainingExample> trainExamples =
-					createSparseMlpExamples(trainSetUsers, termIndex, true);
-			sparseMlpTestExamples =
-					createSparseMlpExamples(testSetUsers, termIndex, true);
-			sparseMlpRecExamples =
-					createSparseMlpExamples(usersRec, termIndex, false);
-			if (trainExamples.isEmpty())
-			{
-				throw new IllegalStateException(
-						"Sparse MLP has no labeled training examples on "
-						+ getLocalName() + ".");
-			}
-			if (sparseMlpRecExamples.isEmpty())
-			{
-				throw new IllegalStateException(
-						"Sparse MLP has no recommendation target examples on "
-						+ getLocalName() + ".");
-			}
-
-				SparseFederatedMlpModelSupport.SparseMlpModel model =
-						SparseFederatedMlpModelSupport.SparseMlpModel.create(
-								featureCount,
-								settings.getMlpHiddenLayers(),
-								settings.getMlpHiddenNeurons(),
-								outputCount,
-								0x5A17EEDL);
-			System.out.println(getLocalName()
-					+" training Sparse Federated MLP examples="
-					+trainExamples.size()+" features="+featureCount
-					+" hiddenLayers="+settings.getMlpHiddenLayers()
-					+" hiddenNeurons="+settings.getMlpHiddenNeurons());
-			startTimeTrain = System.nanoTime();
-			model.train(
-					trainExamples,
-						settings.getMlpSparseEpochs(),
-						settings.getMlpLearningRate(),
-						settings.getMlpSparseL2(),
-						settings.getMlpFedProxMu());
-			endTimeTrain = System.nanoTime();
-			completionTimeTrain = endTimeTrain - startTimeTrain;
-			endTimeAlgorithm = System.nanoTime();
-			completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
-			if (numRecAgents < 2)
-			{
-				startTimeTest = System.nanoTime();
-				testSparseFederatedMlp(model, sparseMlpTestExamples);
-				endTimeTest = System.nanoTime();
-				completionTimeTest = endTimeTest - startTimeTest;
-				recSparseFederatedMlp(model, sparseMlpRecExamples);
-				recordSparseMlpTimingLine();
-				releaseActiveMlpLease();
-			}
-			else
-			{
-				sendSparseMlpModelForAveraging(model);
-			}
-		}
-
-		private void sendSparseMlpModelForAveraging(
-				SparseFederatedMlpModelSupport.SparseMlpModel model)
-				throws IOException
-		{
-			String nnDirName = "Stored_NN/";
-			File nnDir = new File(nnDirName);
-			if (!nnDir.exists())
-			{
-				nnDir.mkdirs();
-			}
-			String nodeMlpFileName =
-					nnDirName + getLocalName() + "_SparseFedMLP.ser";
-			model.save(new File(nodeMlpFileName));
-			ACLMessage toAverageWeightsMsg = new ACLMessage(ACLMessage.INFORM);
-			toAverageWeightsMsg.addReceiver(
-					new AID("Organizing Agent1", AID.ISLOCALNAME));
-			toAverageWeightsMsg.setPerformative(ACLMessage.INFORM);
-			toAverageWeightsMsg.setConversationId(runLifecycle.getActiveRunId());
-			toAverageWeightsMsg.setOntology("Average Sparse MLP");
-			toAverageWeightsMsg.setContent(nodeMlpFileName);
-			send(toAverageWeightsMsg);
-			System.out.println(getLocalName()+" sent Sparse MLP model for averaging");
-			releaseActiveMlpLease();
-		}
-
-		private void testSparseFederatedMlp(
-				SparseFederatedMlpModelSupport.SparseMlpModel model,
-				List<SparseFederatedMlpModelSupport.TrainingExample> examples)
-		{
-			if (examples == null || examples.isEmpty())
-			{
-				String message = getLocalName()
-						+" Sparse Federated MLP has no test examples.";
-				System.out.println(message);
-				if (myGui != null)
-				{
-					myGui.appendResult(message);
-				}
-				return;
-			}
-			int correct = 0;
-			for (SparseFederatedMlpModelSupport.TrainingExample example : examples)
-			{
-				double[] output = model.predict(example.getFeatures());
-				if (findIndexOfMaxValue(output) == example.getLabelIndex())
-				{
-					correct++;
-				}
-			}
-			double accuracy = (double)correct / examples.size() * 100.0;
-			String message = getLocalName()
-					+" Sparse Federated MLP accuracy: "
-					+String.format("%.2f%%", accuracy)
-					+" ("+correct+"/"+examples.size()+")";
-			System.out.println(message);
-			if (myGui != null)
-			{
-				myGui.appendResult(message);
-			}
-		}
-
-		private void recSparseFederatedMlp(
-				SparseFederatedMlpModelSupport.SparseMlpModel model,
-				List<SparseFederatedMlpModelSupport.TrainingExample> examples)
-		{
-			allUserScores = new TreeMap<String,TreeMap<String,Double>>();
-			if (examples == null)
-			{
-				return;
-				}
-				for (SparseFederatedMlpModelSupport.TrainingExample example : examples)
-				{
-					double[] output = model.predict(example.getFeatures());
-					TreeMap<String,Double> userScores = new TreeMap<String,Double>();
-					for (int index = 0; index < output.length; index++)
-					{
-						double score = output[index] < 0.0 ? 0.0 : output[index] * 100.0;
-						userScores.put(followeeNames[index], score);
-					}
-					allUserScores.put(example.getUser(), userScores);
-				}
-			}
-
-		private void recordSparseMlpTimingLine()
-		{
-			myGui.appendResult("Completion time: "
-					+ convertMs(completionTimeAlgorithm));
-			textprocessing_wb_or_tfidf_Data.add(
-					"MLP=TP+TFIDF+SparseFedMLP" + "\t"
-					+ agentName + "\t"
-					+ tweetCount + "\t"
-					+ completionTimeTextProcessing + "\t"
-					+ completionTimeTFIDF + "\t"
-					+ completionTimeAlgorithm + "\t"
-					+ System.getProperty("line.separator"));
-			System.out.println("Mapper"+nodeNumber
-					+"- Total Tweets Processed: " + tweetCount
-					+" TP: " + convertMs(completionTimeTextProcessing)
-					+" ms TFIDF: " + convertMs(completionTimeTFIDF)
-					+" ms Reducer"+ nodeNumber
-					+" Sparse Federated MLP: "
-					+ convertMs(completionTimeAlgorithm)
-					+" ms MLP Train: "
-					+ convertMs(completionTimeTrain)
-					+" ms MLP Test: "
-					+ convertMs(completionTimeTest)
-					+" ms Total: "
-					+ convertMs(completionTimeTextProcessing
-							+ completionTimeTFIDF
-							+ completionTimeAlgorithm)
-					+" ms");
-			myGui.appendResult("Mapper"+nodeNumber
-					+"- Total Tweets Processed: " + tweetCount
-					+" TP: " + convertMs(completionTimeTextProcessing)
-					+" ms TFIDF: " + convertMs(completionTimeTFIDF)
-					+" ms Reducer"+ nodeNumber
-					+" Sparse Federated MLP: "
-					+ convertMs(completionTimeAlgorithm)
-					+" ms MLP Train: "
-					+ convertMs(completionTimeTrain)
-					+" ms MLP Test: "
-					+ convertMs(completionTimeTest)
-					+" ms Total: "
-					+ convertMs(completionTimeTextProcessing
-							+ completionTimeTFIDF
-							+ completionTimeAlgorithm)
-					+" ms");
-		}
-
-		private void finishSparseMlpRecommendationOutput()
-		{
-			recordSparseMlpTimingLine();
-			for (String timingLine : textprocessing_wb_or_tfidf_Data)
-			{
-				System.out.print(timingLine);
-			}
-			myGui.setTPTime(completionTimeTextProcessing/1000000.00);
-			myGui.setTfidfTime(completionTimeTFIDF/1000000.00);
-			myGui.setAlgorithmTime(completionTimeAlgorithm/1000000.00);
-			String outputFilename = "Results/Timing/" + referenceUser
-					+ "/" + "Distributed_Server_TP_TFIDF_Algorithm"
-					+ numRecAgents + ".txt";
-			try
-			{
-				saveToFile_array(
-						outputFilename,
-						textprocessing_wb_or_tfidf_Data,
-						"append");
-			}
-			catch (IOException e)
-			{
-				e.printStackTrace();
-			}
-			textprocessing_wb_or_tfidf_Data.clear();
-			ACLMessage msg7 = new ACLMessage(ACLMessage.INFORM);
-			msg7.addReceiver(new AID("Starter Agent", AID.ISLOCALNAME));
-			msg7.setPerformative(ACLMessage.INFORM);
-			msg7.setContent("Tweeting TFIDF Algorithm Calculation Completed");
-			msg7.setConversationId(runLifecycle.getActiveRunId());
-			msg7.setOntology("Tweets TFIDF Algorithm Calculation Done");
-			send(msg7);
-			sendScoresToOrganizer();
-		}
-		
-		private double[] vectorArrayFormat(Map<String,Double> currDocTfidf, TreeSet<String> uniqueDocTerms)
-		{
-			double[] vectorArray = new double[uniqueDocTerms.size()];
-			double currTfidf;
-			
-			int uniqueWordCount = 0;
-				for (String uniqueWord: uniqueDocTerms)
-				{
-					
-					// System.out.println(getLocalName()+" uniqueWordCount: "+uniqueWordCount);
-					Double value = currDocTfidf == null ? null : currDocTfidf.get(uniqueWord);
-					currTfidf = value == null ? 0.0 : value.doubleValue();
-					
-					vectorArray[uniqueWordCount] = currTfidf;
-				
-				uniqueWordCount++;
-			}
-			
-			return vectorArray;
-		}
 		
 		
-			private StringJoiner vectorArffFormat(Map<String,Double> currDocTfidf, TreeSet<String> uniqueDocTerms)
-			{
-				StringJoiner tfidfJoinerTemp = new StringJoiner(",");
-			double currTfidf;
-			
-			// int uniqueWordCount = 0;
-			for (String uniqueWord: uniqueDocTerms)
-			{
-				// uniqueWordCount++;
-				// System.out.println(getLocalName()+" uniqueWordCount: "+uniqueWordCount);
-				if (currDocTfidf.keySet().contains(uniqueWord))
-					currTfidf = currDocTfidf.get(uniqueWord);
-				else
-					currTfidf = 0.0;
-				
-				tfidfJoinerTemp.add(String.valueOf(currTfidf));
-			}
-				return tfidfJoinerTemp;
-			}
-
-			private void configureSvmModel(SMO svmModel)
-			{
-				ExactSvmModelSupport.configure(svmModel, algorithmSettings());
-			}
-
-			private double[] getSvmClassDistribution(SMO svmModel, Instances instances, int instanceIndex)
-			{
-				try
-				{
-					return svmModel.distributionForInstance(instances.instance(instanceIndex));
-				}
-				catch (Exception e)
-				{
-					e.printStackTrace();
-					return null;
-				}
-			}
-
+		
 			private TreeMap<String,Double> buildFolloweeScoreMapFromDistribution(Instances instances, double[] distribution, String fallbackFollowee)
 			{
 				ArrayList<String> classNames = new ArrayList<String>();
@@ -7154,91 +3510,6 @@ public class RecommenderAgent extends Agent
 							: myGui.getAlgorithmParameterSettings();
 				}
 
-				private TreeMap<String,TreeMap<String,Double>>
-						runExactSvmWorkerRecommendations(
-							String trainPath,
-							String testPath,
-							String recommendPath,
-							List<String> targets,
-							int featureCount,
-							int trainingInstanceCount,
-							int trainingClassCount,
-							String stage) throws Exception
-			{
-				ExactSvmWorkerResult result = algorithmRec == SCALABLE_SVM
-						? ScalableSvmWorkerRunner.run(
-								getLocalName(),
-								stage,
-								runLifecycle.getActiveRunId(),
-								new File(trainPath),
-								new File(testPath),
-									new File(recommendPath),
-									featureCount,
-									trainingInstanceCount,
-									trainingClassCount,
-									algorithmSettings())
-							: ExactSvmWorkerRunner.run(
-									getLocalName(),
-									stage,
-								runLifecycle.getActiveRunId(),
-								new File(trainPath),
-								new File(testPath),
-									new File(recommendPath),
-									featureCount,
-									trainingInstanceCount,
-									trainingClassCount,
-									algorithmSettings());
-
-				if (Double.isFinite(result.getTestAccuracyPercent()))
-				{
-					String accuracy = getLocalName()
-							+ " Accuracy of "
-							+ RecommendationModeSupport.algorithmName(algorithmRec)
-							+ ": "
-							+ String.format("%.2f%%", result.getTestAccuracyPercent())
-							+ "\n---------------------------------";
-					System.out.println(accuracy);
-					myGui.appendResult(accuracy);
-				}
-				if (result.getConfusionMatrix() != null
-						&& result.getConfusionMatrix().length() > 0)
-				{
-					System.out.println(result.getConfusionMatrix());
-				}
-
-				TreeMap<String,TreeMap<String,Double>> scores =
-						new TreeMap<String,TreeMap<String,Double>>();
-				List<String> predictedClasses = result.getPredictedClasses();
-				List<double[]> distributions = result.getDistributions();
-				for (int index = 0; index < targets.size(); index++)
-				{
-					if (index >= predictedClasses.size()
-							|| index >= distributions.size())
-					{
-						throw new IllegalStateException(
-								RecommendationModeSupport.algorithmName(algorithmRec)
-								+ " worker returned fewer target predictions than requested.");
-					}
-					String target = targets.get(index);
-					String predictedClass = predictedClasses.get(index);
-					System.out.println(
-							getLocalName() + " Recommended Class: "
-							+ predictedClass);
-					scores.put(
-							target,
-							buildFolloweeScoreMapFromDistribution(
-									result.getClassNames(),
-									distributions.get(index),
-									predictedClass));
-				}
-				return scores;
-			}
-
-			private boolean isDoc2VecBatchMode()
-			{
-				return algorithmRec == Doc2Vec && usersRec != null && usersRec.size() > 1;
-			}
-
 			private boolean isUserRankerFolloweeMode()
 			{
 				return recommendationConfig != null
@@ -7255,437 +3526,1166 @@ public class RecommenderAgent extends Agent
 						&& recommendationConfig.getCandidateType() == RecommendationCandidateType.USER;
 			}
 
-			private TreeMap<String,TreeMap<String,Double>> runDoc2VecBatchRecommendations(
-					int topn, boolean allowLegacyFallback)
+			// ================================================================
+			// Scheduled model stages. Every stage below produces, for any node
+			// count, placement, capacity profile, live control and failure
+			// pattern, the recommendations one node holding the whole corpus
+			// would produce: work is cut into units of a phase of the run's
+			// scheduling context, every unit is committed exactly once, and
+			// what needs the whole corpus is combined through the run's
+			// collectives in a fixed order.
+			// ================================================================
+
+			/** This run's scheduling context; a run without one gets the original DSMP baseline. */
+			private SchedulingRunContext schedulingContext()
 			{
-				TreeMap<String,TreeMap<String,Double>> batchScores = new TreeMap<String,TreeMap<String,Double>>();
-				ArrayList<String> batchUsers = new ArrayList<String>(usersRec);
-				File selectedDataset = getConfiguredDatasetFile();
-				if (selectedDataset == null)
+				SchedulingRunContext context = SchedulingRuntime.getOrCreateBaseline(
+						runLifecycle.getActiveRunId(),
+						Math.max(1, numRecAgents),
+						algorithmRec);
+				if (context.getNodeCount() != Math.max(1, numRecAgents)
+						|| currentNodeIndex() > context.getNodeCount())
 				{
-					reportDoc2VecBatchFailure(
-							"Doc2Vec batch cannot run because this experiment has no dataset file.");
-					return allowLegacyFallback
-							? buildDoc2VecBatchFailureScores(batchUsers, topn)
-							: buildEmptyDoc2VecScores(batchUsers);
+					throw new IllegalStateException("Run " + context.getRunId() + " was planned for "
+							+ context.getNodeCount() + " node(s), but " + getLocalName()
+							+ " belongs to a run of " + numRecAgents + ".");
+				}
+				return context;
+			}
+
+			/** This node's emulator in the active run, or null before the run is registered. */
+			private NodeEmulator activeEmulator()
+			{
+				SchedulingRunContext context = SchedulingRuntime.get(runLifecycle.getActiveRunId());
+				int node = currentNodeIndex();
+				return context == null || node > context.getNodeCount() ? null : context.emulator(node);
+			}
+
+			/** Targets in their configured order, each once. */
+			private List<String> distinctTargets()
+			{
+				return new ArrayList<String>(new LinkedHashSet<String>(
+						usersRec == null ? Collections.<String>emptyList() : usersRec));
+			}
+
+			/** TF-IDF vectors of the users this node owns; every user has exactly one owner. */
+			private LinkedHashMap<String,LinkedHashMap<String,Double>> ownedDocuments()
+			{
+				LinkedHashMap<String,LinkedHashMap<String,Double>> owned =
+						new LinkedHashMap<String,LinkedHashMap<String,Double>>();
+				for (Map.Entry<String,LinkedHashMap<String,Double>> entry : allUserDocumentsTFIDF.entrySet())
+				{
+					if (ownsCandidate(entry.getKey()))
+					{
+						owned.put(entry.getKey(), entry.getValue());
+					}
+				}
+				return owned;
+			}
+
+			/** This node's share of the run's corpus: its owned vectors and their followees. */
+			private GlobalCorpus.Contribution ownedCorpusContribution()
+			{
+				LinkedHashMap<String,LinkedHashMap<String,Double>> owned = ownedDocuments();
+				LinkedHashMap<String,String> labels = new LinkedHashMap<String,String>();
+				for (String user : owned.keySet())
+				{
+					String followee = userFollowee.get(user);
+					if (followee != null && followee.length() > 0)
+					{
+						labels.put(user, followee);
+					}
+				}
+				return new GlobalCorpus.Contribution(owned, labels);
+			}
+
+			private int totalLanes(SchedulingRunContext context)
+			{
+				int lanes = 0;
+				for (int node = 1; node <= context.getNodeCount(); node++)
+				{
+					lanes += Math.max(1, context.lanesOf(node));
+				}
+				return lanes;
+			}
+
+			// ---------------------------------------------------- Similarity, Common Neighbors
+
+			/**
+			 * Similarity or Common-Neighbors scores of every target against every
+			 * candidate of the run. The candidates are cut into shards homed on
+			 * their owners and scheduled as work units; each unit's scores are
+			 * committed once, and the rows each node publishes are its part of the
+			 * exact global top L (every score in followee-projection mode). The
+			 * merged result is therefore the same for every node count, placement
+			 * and schedule.
+			 */
+			private TreeMap<String,TreeMap<String,Double>> runCandidateScoring(
+					final boolean commonNeighbors)
+			{
+				final SchedulingRunContext context = schedulingContext();
+				final int node = currentNodeIndex();
+				final String phaseKey = RecommendationWorkQueueRegistry.CANDIDATES;
+				final List<String> targets = distinctTargets();
+				final int targetCount = Math.max(1, targets.size());
+				final int lanes = totalLanes(context);
+				final CandidateShardPlan plan = context.collectives().allReduce(
+						phaseKey + "/plan",
+						node,
+						ownedDocuments(),
+						new RunCollectives.Reducer<CandidateShardPlan>()
+						{
+							@SuppressWarnings("unchecked")
+							public CandidateShardPlan reduce(List<Object> contributionsByNode)
+							{
+								List<Map<String,? extends Map<String,Double>>> byNode =
+										new ArrayList<Map<String,? extends Map<String,Double>>>();
+								for (Object contribution : contributionsByNode)
+								{
+									byNode.add((Map<String,? extends Map<String,Double>>)contribution);
+								}
+								return new CandidateShardPlan(byNode, targetCount, lanes);
+							}
+						});
+				WorkPhase phase = context.openPhase(
+						phaseKey,
+						(commonNeighbors ? "Common-Neighbors" : "Similarity") + " candidate shards",
+						new SchedulingRunContext.UnitSupplier()
+						{
+							public List<WorkUnitSpec> units()
+							{
+								return plan.units();
+							}
+						});
+				final int limit = isUserRankerFolloweeMode() ? 0 : getCosSimLocalResultLimit();
+				final LinkedHashMap<String,Map<String,Double>> targetDocuments =
+						new LinkedHashMap<String,Map<String,Double>>();
+				final TreeMap<String,TreeMap<String,Double>> rows =
+						new TreeMap<String,TreeMap<String,Double>>();
+				for (String target : targets)
+				{
+					Map<String,Double> document = allUserDocumentsTFIDF.get(target);
+					if (document != null)
+					{
+						targetDocuments.put(target, document);
+						rows.put(target, new TreeMap<String,Double>());
+					}
+				}
+				NodeWorkRunner.Stats stats = NodeWorkRunner.run(
+						context,
+						phase,
+						node,
+						new NodeWorkRunner.UnitExecutor()
+						{
+							public NodeWorkRunner.UnitOutput execute(
+									WorkDispatcher.Assignment assignment, int lane)
+							{
+								TreeMap<String,TreeMap<String,Double>> unitRows =
+										new TreeMap<String,TreeMap<String,Double>>();
+								List<String> candidates = plan.candidatesOf(assignment.getUnitId());
+								for (Map.Entry<String,Map<String,Double>> target : targetDocuments.entrySet())
+								{
+									TreeMap<String,Double> row = new TreeMap<String,Double>();
+									for (String candidate : candidates)
+									{
+										if (candidate.equals(target.getKey()))
+										{
+											continue;
+										}
+										Map<String,Double> candidateDocument = plan.vectorOf(candidate);
+										row.put(candidate, commonNeighbors
+												? calculateCommonNeighborScore(target.getValue(), candidateDocument)
+												: calculateUnitVectorCosine(target.getValue(), candidateDocument));
+									}
+									unitRows.put(target.getKey(), GlobalTopRows.localTop(row, limit));
+								}
+								return NodeWorkRunner.UnitOutput.measured(unitRows);
+							}
+						},
+						new NodeWorkRunner.CommitSink()
+						{
+							@SuppressWarnings("unchecked")
+							public void commit(WorkDispatcher.Assignment assignment, Object value)
+							{
+								for (Map.Entry<String,TreeMap<String,Double>> unitRow
+										: ((TreeMap<String,TreeMap<String,Double>>)value).entrySet())
+								{
+									TreeMap<String,Double> row = rows.get(unitRow.getKey());
+									row.putAll(unitRow.getValue());
+									if (limit > 0 && row.size() > limit)
+									{
+										rows.put(unitRow.getKey(), GlobalTopRows.localTop(row, limit));
+									}
+								}
+							}
+						});
+				System.out.println(getLocalName() + " candidate shards: " + stats + "; the run has "
+						+ plan.candidateCount() + " candidates in " + plan.units().size() + " shard(s).");
+				return GlobalTopRows.keep(context.collectives(), phaseKey + "/top", node, rows, limit);
+			}
+
+			// ---------------------------------------------------- Doc2Vec
+
+			/** A committed Doc2Vec shard: its per-target top n and per-target errors. */
+			private static final class Doc2VecShardOutcome
+			{
+				private final TreeMap<String,TreeMap<String,Double>> rows;
+				private final TreeMap<String,String> errors;
+
+				private Doc2VecShardOutcome(
+						TreeMap<String,TreeMap<String,Double>> rows,
+						TreeMap<String,String> errors)
+				{
+					this.rows = rows;
+					this.errors = errors;
+				}
+			}
+
+			/**
+			 * Doc2Vec scores of every target against every document of the shared
+			 * model. The model's index is cut into contiguous shards scheduled as
+			 * work units (one per node, homed, in the original DSMP baseline);
+			 * each lane scores its units in its own persistent worker process.
+			 * Each shard returns its top n by score and then name, so the union
+			 * of the committed shards holds the global top n, which every node
+			 * then cuts identically.
+			 */
+			private TreeMap<String,TreeMap<String,Double>> runDoc2VecBatchRecommendations(
+					final int topn) throws Exception
+			{
+				final List<String> targets = distinctTargets();
+				final File dataset = getConfiguredDatasetFile();
+				if (dataset == null)
+				{
+					throw new IllegalStateException(
+							"Doc2Vec cannot run because this experiment has no dataset file.");
 				}
 				String datasetValidation = recommendationConfig == null
 						|| recommendationConfig.getDatasetFile() == null
 						? null : recommendationConfig.validateDatasetSnapshot();
 				if (datasetValidation != null)
 				{
-					reportDoc2VecBatchFailure(datasetValidation);
-					return allowLegacyFallback
-							? buildDoc2VecBatchFailureScores(batchUsers, topn)
-							: buildEmptyDoc2VecScores(batchUsers);
+					throw new IllegalStateException(datasetValidation);
 				}
-
-				int doc2vecWorkers = Math.min(Math.max(Runtime.getRuntime().availableProcessors() - 1, 1), 12);
-				File batchScript = new File("TwitterGatherDataFollowers/userRyersonU/doc2vec_batch.py");
-				int doc2vecNodeNumber = Integer.parseInt(nodeNumber);
-				int virtualShardCount =
-						NodeCapacityScheduler.virtualCandidateShardCount(
-								numRecAgents,
-								batchUsers.size());
-				List<Integer> assignedShards =
-						NodeCapacityScheduler.assignedVirtualCandidateShards(
-								doc2vecNodeNumber,
-								numRecAgents,
-								virtualShardCount);
-				boolean dynamicQueueActive =
-						RecommendationSchedulerRegistry.snapshot().isActive()
-						&& virtualShardCount != numRecAgents;
-				boolean allowShardFallback =
-						allowLegacyFallback
-						&& numRecAgents == 1
-						&& virtualShardCount == 1;
-				for (String recUser : batchUsers)
+				final SchedulingRunContext context = schedulingContext();
+				final int node = currentNodeIndex();
+				final boolean baseline = context.getMode() == SchedulingRunContext.Mode.BASELINE;
+				final int shards = baseline
+						? context.getNodeCount()
+						: Math.max(context.getNodeCount(), 4 * totalLanes(context));
+				final double shardCost = Math.max(1, targets.size());
+				WorkPhase phase = context.openPhase(
+						RecommendationWorkQueueRegistry.DOC2VEC,
+						"Doc2Vec candidate shards",
+						new SchedulingRunContext.UnitSupplier()
+						{
+							public List<WorkUnitSpec> units()
+							{
+								ArrayList<WorkUnitSpec> units = new ArrayList<WorkUnitSpec>();
+								for (int shard = 1; shard <= shards; shard++)
+								{
+									units.add(new WorkUnitSpec(
+											shard,
+											String.format("shard-%04d-of-%04d", shard, shards),
+											shardCost,
+											0,
+											0,
+											Double.POSITIVE_INFINITY,
+											baseline ? shard : 0,
+											null));
+								}
+								return units;
+							}
+						});
+				final File script = new File("TwitterGatherDataFollowers/userRyersonU/doc2vec_worker.py");
+				final int trainingWorkers = Math.min(
+						Math.max(Runtime.getRuntime().availableProcessors() - 1, 1), 12);
+				final AlgorithmParameterSettings settings = algorithmSettings();
+				final Doc2VecBatchRunner.ProgressListener progress = new Doc2VecBatchRunner.ProgressListener()
 				{
-					batchScores.put(recUser, new TreeMap<String,Double>());
-				}
-				if (dynamicQueueActive)
+					public void onProgress(String event, String detail)
+					{
+						handleDoc2VecProgress(event, detail);
+					}
+				};
+				final Doc2VecWorker[] workers = new Doc2VecWorker[Math.max(1, context.lanesOf(node))];
+				final TreeMap<String,TreeMap<String,Double>> rows =
+						new TreeMap<String,TreeMap<String,Double>>();
+				final TreeMap<String,String> errors = new TreeMap<String,String>();
+				for (String target : targets)
 				{
-					String queueDetail =
-							NodeCapacityScheduler.virtualCandidateShardDetail(
-									doc2vecNodeNumber,
-									numRecAgents,
-									assignedShards,
-									virtualShardCount);
-					System.out.println(
-							getLocalName()
-							+ " Dynamic Doc2Vec candidate queue: "
-							+ queueDetail
-							+ " | pull queue enabled");
-					NodeExecutionMonitor.modelRunning(
-							getLocalName(),
-							"Dynamic Doc2Vec pull queue: " + queueDetail);
-				}
-				if (!dynamicQueueActive && assignedShards.isEmpty())
-				{
-					System.out.println(
-							getLocalName()
-							+ " Dynamic Doc2Vec candidate queue assigned no shards; "
-							+ "publishing empty score rows for organizer merge.");
-					NodeExecutionMonitor.modelRunning(
-							getLocalName(),
-							"No Doc2Vec candidate shards assigned to this node.");
-					NodeExecutionMonitor.publishing(getLocalName());
-					return batchScores;
+					rows.put(target, new TreeMap<String,Double>());
 				}
 				try
 				{
-					if (dynamicQueueActive)
+					//Prepare every lane's worker before claiming work, so the one-time
+					//model preparation is not charged to any unit.
+					for (int lane = 0; lane < workers.length; lane++)
 					{
-						int claimedCount = 0;
-						int deferredPolls = 0;
-						while (true)
-						{
-							RecommendationWorkQueueRegistry.ShardClaim claim =
-									RecommendationWorkQueueRegistry
-											.claimDoc2VecCandidateShard(
-													runLifecycle.getActiveRunId(),
-													doc2vecNodeNumber,
-													numRecAgents,
-													virtualShardCount);
-							if (!claim.hasShard())
+						workers[lane] = new Doc2VecWorker(
+								getPythonCommand(), script, dataset, trainingWorkers, settings, progress);
+					}
+					NodeWorkRunner.Stats stats = NodeWorkRunner.run(
+							context,
+							phase,
+							node,
+							new NodeWorkRunner.UnitExecutor()
 							{
-								if (claim.isDeferred())
+								public NodeWorkRunner.UnitOutput execute(
+										WorkDispatcher.Assignment assignment, int lane) throws Exception
 								{
-									deferredPolls++;
-									if (deferredPolls == 1
-											|| deferredPolls % 20 == 0)
+									if (workers[lane] == null)
 									{
-										NodeExecutionMonitor.modelRunning(
-												getLocalName(),
-												"Waiting for Doc2Vec scheduler turn: "
-												+ claim.getReason());
+										workers[lane] = new Doc2VecWorker(
+												getPythonCommand(), script, dataset, trainingWorkers,
+												settings, progress);
 									}
-									Thread.sleep(Math.min(
-											500L,
-											50L + deferredPolls * 10L));
-									continue;
+									Doc2VecWorker.Scored scored;
+									try
+									{
+										scored = workers[lane].score(
+												assignment.getUnitId(), shards, topn, targets);
+									}
+									catch (IOException failure)
+									{
+										//A dead worker is replaced on the lane's next unit.
+										workers[lane].close();
+										workers[lane] = null;
+										throw failure;
+									}
+									Doc2VecBatchRunner.Result result = scored.getResult();
+									if (result.hasUnsafeNumericalDiagnostic())
+									{
+										throw new IllegalStateException(
+												"Doc2Vec stopped because Gensim reported an unsafe "
+												+ "numerical-kernel exception." + result.getDiagnosticSummary());
+									}
+									TreeMap<String,TreeMap<String,Double>> unitRows =
+											new TreeMap<String,TreeMap<String,Double>>();
+									TreeMap<String,String> unitErrors = new TreeMap<String,String>();
+									for (String target : targets)
+									{
+										if (!result.isCompleted(target))
+										{
+											throw new IOException("Doc2Vec shard " + assignment.getUnitId()
+													+ " did not complete for " + target + "."
+													+ result.getDiagnosticSummary());
+										}
+										if (result.hasError(target))
+										{
+											unitErrors.put(target, result.getErrors().get(target));
+											continue;
+										}
+										TreeMap<String,Double> scores = result.getScores(target);
+										unitRows.put(target, scores == null
+												? new TreeMap<String,Double>() : scores);
+									}
+									return NodeWorkRunner.UnitOutput.external(
+											new Doc2VecShardOutcome(unitRows, unitErrors),
+											scored.getCpuNanos());
 								}
-								break;
-							}
-							deferredPolls = 0;
-							claimedCount++;
-							int claimedShard = claim.getShardNumber();
-							NodeExecutionMonitor.modelRunning(
-									getLocalName(),
-									"Claimed Doc2Vec candidate shard "
-									+ claimedShard
-									+ "/" + virtualShardCount
-									+ " from the live scheduler queue; "
-									+ claim.getRemaining()
-									+ " shard(s) remain.");
-							boolean shardScored;
-							try
+							},
+							new NodeWorkRunner.CommitSink()
 							{
-								LiveWorkloadAdjustmentRegistry
-										.applyClaimPacingDelay(
-												runLifecycle.getActiveRunId());
-								if (!RecommendationWorkQueueRegistry
-										.isActiveDoc2VecCandidateShard(
-												runLifecycle.getActiveRunId(),
-												doc2vecNodeNumber,
-												numRecAgents,
-												virtualShardCount,
-												claimedShard))
+								public void commit(WorkDispatcher.Assignment assignment, Object value)
 								{
-									NodeExecutionMonitor.modelRunning(
-											getLocalName(),
-											"Doc2Vec shard " + claimedShard
-											+ " was drained before scoring; "
-											+ "skipping stale claim.");
-									continue;
+									Doc2VecShardOutcome outcome = (Doc2VecShardOutcome)value;
+									for (Map.Entry<String,TreeMap<String,Double>> unitRow : outcome.rows.entrySet())
+									{
+										rows.get(unitRow.getKey()).putAll(unitRow.getValue());
+									}
+									errors.putAll(outcome.errors);
 								}
-								shardScored = scoreDoc2VecVirtualShard(
-										batchScript,
-										topn,
-										selectedDataset,
-										claimedShard,
-										virtualShardCount,
-										doc2vecWorkers,
-										batchUsers,
-										batchScores,
-										true);
-							}
-							catch (IOException exception)
+							});
+					System.out.println(getLocalName() + " Doc2Vec shards (" + shards + "): " + stats);
+				}
+				finally
+				{
+					for (int lane = 0; lane < workers.length; lane++)
+					{
+						if (workers[lane] != null)
+						{
+							workers[lane].close();
+						}
+					}
+				}
+				for (Map.Entry<String,String> error : errors.entrySet())
+				{
+					System.out.println(getLocalName() + " Doc2Vec warning for "
+							+ error.getKey() + ": " + error.getValue());
+				}
+				return GlobalTopRows.keep(context.collectives(),
+						RecommendationWorkQueueRegistry.DOC2VEC + "/top", node, rows, topn);
+			}
+
+			// ---------------------------------------------------- Temporal Graph Foundation
+
+			/**
+			 * The temporal graph model over the whole run: profiles, the dataset's
+			 * temporal scan and the graph context are prepared once from every
+			 * node's owned users; each target is then a work unit scored against
+			 * every candidate. The node that commits a target publishes its row,
+			 * and every node assembles the same full result for reports.
+			 */
+			private TemporalGraphFoundationModelSupport.Result runTemporalGraphFoundation()
+			{
+				final SchedulingRunContext context = schedulingContext();
+				final int node = currentNodeIndex();
+				final String phaseKey = "tgf-targets";
+				final List<String> targets = distinctTargets();
+				final int limit = getCosSimLocalResultLimit();
+				final File dataset = getConfiguredDatasetFile();
+				final LinkedHashMap<String,String> datasetFollowees =
+						new LinkedHashMap<String,String>(datasetUserFollowee);
+				final String runId = runLifecycle.getActiveRunId();
+				final TemporalGraphFoundationModelSupport.Prepared prepared = context.collectives().allReduce(
+						phaseKey + "/prepare",
+						node,
+						ownedCorpusContribution(),
+						new RunCollectives.Reducer<TemporalGraphFoundationModelSupport.Prepared>()
+						{
+							public TemporalGraphFoundationModelSupport.Prepared reduce(
+									List<Object> contributionsByNode)
 							{
-								RecommendationWorkQueueRegistry
-										.failDoc2VecCandidateShard(
-												runLifecycle.getActiveRunId(),
-												doc2vecNodeNumber,
-												numRecAgents,
-												virtualShardCount,
-												claimedShard);
-								throw exception;
+								GlobalCorpus corpus = GlobalCorpus.combine(contributionsByNode);
+								return TemporalGraphFoundationModelSupport.prepare(
+										new TemporalGraphFoundationModelSupport.Input(
+												runId,
+												dataset,
+												corpus.vectors(),
+												corpus.labels(),
+												datasetFollowees,
+												targets,
+												Collections.<String,Integer>emptyMap(),
+												1,
+												1,
+												limit));
 							}
-							catch (InterruptedException exception)
+						});
+				final List<String> scorable = new ArrayList<String>();
+				for (String target : targets)
+				{
+					if (prepared.hasProfile(target))
+					{
+						scorable.add(target);
+					}
+				}
+				final double unitCost = Math.max(1.0, 0.01 * prepared.profileCount());
+				WorkPhase phase = context.openPhase(
+						phaseKey,
+						"Temporal Graph Foundation targets",
+						new SchedulingRunContext.UnitSupplier()
+						{
+							public List<WorkUnitSpec> units()
 							{
-								RecommendationWorkQueueRegistry
-										.failDoc2VecCandidateShard(
-												runLifecycle.getActiveRunId(),
-												doc2vecNodeNumber,
-												numRecAgents,
-												virtualShardCount,
-												claimedShard);
-								throw exception;
+								ArrayList<WorkUnitSpec> units = new ArrayList<WorkUnitSpec>();
+								for (int index = 0; index < scorable.size(); index++)
+								{
+									units.add(new WorkUnitSpec(index + 1,
+											String.format("t%05d", index + 1), unitCost));
+								}
+								return units;
 							}
-							if (!shardScored)
+						});
+				final TreeMap<String,TemporalGraphFoundationModelSupport.TargetOutcome> committed =
+						new TreeMap<String,TemporalGraphFoundationModelSupport.TargetOutcome>();
+				NodeWorkRunner.run(
+						context,
+						phase,
+						node,
+						new NodeWorkRunner.UnitExecutor()
+						{
+							public NodeWorkRunner.UnitOutput execute(
+									WorkDispatcher.Assignment assignment, int lane)
 							{
-								RecommendationWorkQueueRegistry
-										.failDoc2VecCandidateShard(
-												runLifecycle.getActiveRunId(),
-												doc2vecNodeNumber,
-												numRecAgents,
-												virtualShardCount,
-												claimedShard);
-								return allowShardFallback
-										? buildDoc2VecBatchFailureScores(batchUsers, topn)
-										: buildEmptyDoc2VecScores(batchUsers);
+								return NodeWorkRunner.UnitOutput.measured(
+										TemporalGraphFoundationModelSupport.scoreTarget(
+												prepared, scorable.get(assignment.getUnitId() - 1)));
 							}
-							if (!RecommendationWorkQueueRegistry
-									.isActiveDoc2VecCandidateShard(
-											runLifecycle.getActiveRunId(),
-											doc2vecNodeNumber,
-											numRecAgents,
-											virtualShardCount,
-											claimedShard))
+						},
+						new NodeWorkRunner.CommitSink()
+						{
+							public void commit(WorkDispatcher.Assignment assignment, Object value)
 							{
-								NodeExecutionMonitor.modelRunning(
-										getLocalName(),
-										"Doc2Vec shard " + claimedShard
-										+ " completed after drain/requeue; "
-										+ "discarded stale completion.");
+								TemporalGraphFoundationModelSupport.TargetOutcome outcome =
+										(TemporalGraphFoundationModelSupport.TargetOutcome)value;
+								committed.put(outcome.getTarget(), outcome);
+							}
+						});
+				List<TreeMap<String,TemporalGraphFoundationModelSupport.TargetOutcome>> byNode =
+						context.collectives().allGather(phaseKey + "/outcomes", node, committed);
+				ArrayList<TemporalGraphFoundationModelSupport.TargetOutcome> ordered =
+						new ArrayList<TemporalGraphFoundationModelSupport.TargetOutcome>();
+				for (String target : scorable)
+				{
+					for (TreeMap<String,TemporalGraphFoundationModelSupport.TargetOutcome> outcomes : byNode)
+					{
+						if (outcomes.containsKey(target))
+						{
+							ordered.add(outcomes.get(target));
+						}
+					}
+				}
+				TemporalGraphFoundationModelSupport.Result result =
+						TemporalGraphFoundationModelSupport.assemble(prepared, ordered);
+				if (node == 1)
+				{
+					TemporalGraphFoundationRegistry.record(result);
+				}
+				TreeMap<String,TreeMap<String,Double>> scores = result.getScores();
+				Map<String,TreeMap<String,String>> details = result.getDetails();
+				allUserScores = new TreeMap<String,TreeMap<String,Double>>();
+				temporalGraphCandidateDetails.clear();
+				for (String target : committed.keySet())
+				{
+					allUserScores.put(target, scores.get(target));
+					if (details.get(target) != null)
+					{
+						temporalGraphCandidateDetails.put(target, details.get(target));
+					}
+				}
+				return result;
+			}
+
+			// ---------------------------------------------------- exact SVM
+
+			/** A committed exact-SVM target: its followee scores and test accuracy. */
+			private static final class SvmTargetOutcome
+			{
+				private final String target;
+				private final TreeMap<String,Double> scores;
+				private final double accuracyPercent;
+
+				private SvmTargetOutcome(String target, TreeMap<String,Double> scores, double accuracyPercent)
+				{
+					this.target = target;
+					this.scores = scores;
+					this.accuracyPercent = accuracyPercent;
+				}
+			}
+
+			/**
+			 * Exact SVM in every mode: one Weka SMO model per target, trained on
+			 * the stratified split of every other labelled user of the run (the
+			 * target is held out of its own model, so its label is never learned
+			 * from), with corpus-wide TF-IDF, the corpus-wide vocabulary as
+			 * attributes and every followee of the corpus as a class. Each target
+			 * is a work unit; the node that commits it publishes its scores.
+			 */
+			private TreeMap<String,TreeMap<String,Double>> runExactSvm() throws Exception
+			{
+				final SchedulingRunContext context = schedulingContext();
+				final int node = currentNodeIndex();
+				final String phaseKey = RecommendationWorkQueueRegistry.SVM_TARGETS;
+				final String name = RecommendationModeSupport.algorithmName(algorithmRec);
+				final GlobalCorpus corpus = GlobalCorpus.gather(
+						context.collectives(), phaseKey + "/corpus", node, ownedCorpusContribution());
+				final List<String> targets = distinctTargets();
+				for (String target : targets)
+				{
+					if (!corpus.contains(target))
+					{
+						throw new IllegalArgumentException(
+								name + " target has no prepared document: " + target);
+					}
+				}
+				if (corpus.classes().size() < 2)
+				{
+					throw new IllegalStateException(name + " needs at least two followee classes; the corpus has "
+							+ corpus.classes().size() + ".");
+				}
+				//Estimated milliseconds: an isolated worker JVM (~400 ms to start and
+				//load) plus SMO work growing with the corpus and the class pairs.
+				final double unitCost = 400.0 + 1.0e-3 * Math.max(1L, corpus.nonZeroCount())
+						* Math.max(1, corpus.classes().size());
+				WorkPhase phase = context.openPhase(
+						phaseKey,
+						name + " target models",
+						new SchedulingRunContext.UnitSupplier()
+						{
+							public List<WorkUnitSpec> units()
+							{
+								ArrayList<WorkUnitSpec> units = new ArrayList<WorkUnitSpec>();
+								for (int index = 0; index < targets.size(); index++)
+								{
+									units.add(new WorkUnitSpec(index + 1,
+											String.format("t%05d", index + 1), unitCost));
+								}
+								return units;
+							}
+						});
+				final AlgorithmParameterSettings settings = algorithmSettings();
+				System.out.println(getLocalName() + " " + name + " corpus: " + corpus.size() + " users, "
+						+ corpus.terms().size() + " terms, " + corpus.classes().size()
+						+ " classes; split seed " + SvmReproducibility.SPLIT_SEED
+						+ ", model seed " + SvmReproducibility.MODEL_SEED + ".");
+				final TreeMap<String,TreeMap<String,Double>> committed =
+						new TreeMap<String,TreeMap<String,Double>>();
+				final ArrayList<Double> accuracies = new ArrayList<Double>();
+				NodeWorkRunner.Stats stats = NodeWorkRunner.run(
+						context,
+						phase,
+						node,
+						new NodeWorkRunner.UnitExecutor()
+						{
+							public NodeWorkRunner.UnitOutput execute(
+									WorkDispatcher.Assignment assignment, int lane) throws Exception
+							{
+								String target = targets.get(assignment.getUnitId() - 1);
+								ExactSvmWorkerResult result = trainExactSvmTarget(corpus, target, settings);
+								List<double[]> distributions = result.getDistributions();
+								List<String> predicted = result.getPredictedClasses();
+								if (distributions.isEmpty() || predicted.isEmpty())
+								{
+									throw new IllegalStateException(
+											name + " worker returned no prediction for " + target + ".");
+								}
+								return NodeWorkRunner.UnitOutput.external(
+										new SvmTargetOutcome(
+												target,
+												followeeScores(corpus.classes(), result.getClassNames(),
+														distributions.get(0), predicted.get(0)),
+												result.getTestAccuracyPercent()),
+										result.getWorkerCpuNanos());
+							}
+						},
+						new NodeWorkRunner.CommitSink()
+						{
+							public void commit(WorkDispatcher.Assignment assignment, Object value)
+							{
+								SvmTargetOutcome outcome = (SvmTargetOutcome)value;
+								committed.put(outcome.target, outcome.scores);
+								if (Double.isFinite(outcome.accuracyPercent))
+								{
+									accuracies.add(Double.valueOf(outcome.accuracyPercent));
+								}
+							}
+						});
+				double accuracySum = 0.0;
+				for (Double accuracy : accuracies)
+				{
+					accuracySum += accuracy.doubleValue();
+				}
+				String summary = getLocalName() + " " + name + " targets: " + stats
+						+ (accuracies.isEmpty() ? "" : String.format(
+								"; mean held-out test accuracy of its models %.2f%%",
+								accuracySum / accuracies.size()));
+				System.out.println(summary);
+				if (myGui != null)
+				{
+					myGui.appendResult(summary);
+				}
+				return committed;
+			}
+
+			/** Trains and applies the model of one target in an isolated Weka worker. */
+			private ExactSvmWorkerResult trainExactSvmTarget(
+					GlobalCorpus corpus,
+					String target,
+					AlgorithmParameterSettings settings) throws Exception
+			{
+				SvmReproducibility.Split split = SvmReproducibility.stratifiedSplit(
+						corpus.usersByClass(Collections.singleton(target)), TEST_SET_PERCENT);
+				File arffDir = new File("Dataset/Arff_files/");
+				if (!arffDir.exists())
+				{
+					arffDir.mkdirs();
+				}
+				String prefix = "svm-" + sanitizeFileName(target) + "-";
+				File train = File.createTempFile(prefix, "-train.arff", arffDir);
+				File test = File.createTempFile(prefix, "-test.arff", arffDir);
+				File recommend = File.createTempFile(prefix, "-recommend.arff", arffDir);
+				try
+				{
+					writeCorpusArff(train, "trainingSet", split.getTrainUsers(), corpus);
+					writeCorpusArff(test, "testSet", split.getTestUsers(), corpus);
+					writeCorpusArff(recommend, "recommendSet", Collections.singletonList(target), corpus);
+					return ExactSvmWorkerRunner.run(
+							getLocalName(),
+							"exact SVM target " + target,
+							runLifecycle.getActiveRunId(),
+							train,
+							test,
+							recommend,
+							corpus.terms().size(),
+							split.getTrainUsers().size() + split.getTestUsers().size(),
+							corpus.classes().size(),
+							settings);
+				}
+				finally
+				{
+					deleteTemporaryFile(train.getPath());
+					deleteTemporaryFile(test.getPath());
+					deleteTemporaryFile(recommend.getPath());
+				}
+			}
+
+			private void writeCorpusArff(
+					File file,
+					String relation,
+					List<String> users,
+					GlobalCorpus corpus) throws IOException
+			{
+				List<String> terms = corpus.terms();
+				Map<String,Integer> termIndex = corpus.termIndex();
+				try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, false)))
+				{
+					SparseArffWriter.writeHeader(writer, relation, terms, corpus.classes());
+					for (String user : users)
+					{
+						SparseArffWriter.writeIndexedRow(writer, corpus.vectorOf(user), termIndex,
+								terms.size(), corpus.labelOf(user));
+					}
+				}
+			}
+
+			/**
+			 * A classifier's class distribution as followee scores over every
+			 * class of the corpus; when nothing is positive the predicted class
+			 * scores 1.
+			 */
+			private TreeMap<String,Double> followeeScores(
+					List<String> classes,
+					List<String> classNames,
+					double[] distribution,
+					String predicted)
+			{
+				TreeMap<String,Double> scores = new TreeMap<String,Double>();
+				for (String followee : classes)
+				{
+					scores.put(followee, 0.0);
+				}
+				if (distribution != null)
+				{
+					for (int index = 0; index < distribution.length && index < classNames.size(); index++)
+					{
+						String className = classNames.get(index);
+						if (scores.containsKey(className))
+						{
+							double score = distribution[index];
+							scores.put(className, Double.isFinite(score) ? score : 0.0);
+						}
+					}
+				}
+				boolean positive = false;
+				for (Double score : scores.values())
+				{
+					if (score.doubleValue() > 0.0)
+					{
+						positive = true;
+						break;
+					}
+				}
+				if (!positive && predicted != null && scores.containsKey(predicted))
+				{
+					scores.put(predicted, 1.0);
+				}
+				return scores;
+			}
+
+			// ---------------------------------------------------- exact MLP
+
+			/** The trained MLP's scores for every target and its report. */
+			private static final class MlpOutcome
+			{
+				private final TreeMap<String,TreeMap<String,Double>> scores;
+				private final List<String> report;
+				private final long trainNanos;
+				private final long testNanos;
+
+				private MlpOutcome(
+						TreeMap<String,TreeMap<String,Double>> scores,
+						List<String> report,
+						long trainNanos,
+						long testNanos)
+				{
+					this.scores = scores;
+					this.report = report;
+					this.trainNanos = trainNanos;
+					this.testNanos = testNanos;
+				}
+			}
+
+			/**
+			 * Exact MLP: one model trained on the controller's central split of the
+			 * whole run's users, with every recommendation target held out of
+			 * training and testing, on the controller's central vocabulary. The
+			 * training is one work unit (on node 1 in the original DSMP baseline,
+			 * where the policy places it otherwise); the committing node scores
+			 * every target and publishes the scores once.
+			 */
+			private TreeMap<String,TreeMap<String,Double>> runExactMlp() throws Exception
+			{
+				final SchedulingRunContext context = schedulingContext();
+				final int node = currentNodeIndex();
+				final String phaseKey = RecommendationWorkQueueRegistry.MLP_TRAINING;
+				final GlobalCorpus corpus = GlobalCorpus.gather(
+						context.collectives(), phaseKey + "/corpus", node, ownedCorpusContribution());
+				final AlgorithmParameterSettings settings = algorithmSettings();
+				//Estimated milliseconds of the worst case: every epoch up to the limit
+				//updates each weight once per training row (~8e-6 ms per update,
+				//measured on the legacy engine).
+				int features = centralUniqueDocTerms != null && !centralUniqueDocTerms.isEmpty()
+						? centralUniqueDocTerms.size() : corpus.terms().size();
+				int classes = Math.max(1, datasetFollowees == null ? 1 : datasetFollowees.size());
+				double weights = (double)features * Math.max(1, settings.getMlpHiddenNeurons())
+						* Math.max(1, settings.getMlpHiddenLayers())
+						+ (double)Math.max(1, settings.getMlpHiddenNeurons()) * classes;
+				int epochs = settings.isSparseFederatedMlpEnabled()
+						? Math.max(1, settings.getMlpSparseEpochs()) : MLP_MAX_EPOCHS;
+				final double unitCost = Math.max(1000.0,
+						8.0e-6 * epochs * Math.max(1, corpus.size()) * weights);
+				WorkPhase phase = context.openPhase(
+						phaseKey,
+						"MLP training",
+						new SchedulingRunContext.UnitSupplier()
+						{
+							public List<WorkUnitSpec> units()
+							{
+								return Collections.singletonList(new WorkUnitSpec(
+										1, "model", unitCost, 0, 0, Double.POSITIVE_INFINITY, 1, null));
+							}
+						});
+				final MlpOutcome[] committed = new MlpOutcome[1];
+				NodeWorkRunner.run(
+						context,
+						phase,
+						node,
+						new NodeWorkRunner.UnitExecutor()
+						{
+							public NodeWorkRunner.UnitOutput execute(
+									WorkDispatcher.Assignment assignment, int lane) throws Exception
+							{
+								return NodeWorkRunner.UnitOutput.measured(
+										trainExactMlp(corpus, settings, context));
+							}
+						},
+						new NodeWorkRunner.CommitSink()
+						{
+							public void commit(WorkDispatcher.Assignment assignment, Object value)
+							{
+								committed[0] = (MlpOutcome)value;
+							}
+						});
+				if (committed[0] == null)
+				{
+					System.out.println(getLocalName() + " MLP was trained on another node; "
+							+ "that node publishes the scores.");
+					return new TreeMap<String,TreeMap<String,Double>>();
+				}
+				completionTimeTrain = committed[0].trainNanos;
+				completionTimeTest = committed[0].testNanos;
+				for (String line : committed[0].report)
+				{
+					String message = getLocalName() + " " + line;
+					System.out.println(message);
+					if (myGui != null)
+					{
+						myGui.appendResult(message);
+					}
+				}
+				return committed[0].scores;
+			}
+
+			private MlpOutcome trainExactMlp(
+					GlobalCorpus corpus,
+					AlgorithmParameterSettings settings,
+					final SchedulingRunContext context) throws Exception
+			{
+				List<String> targets = distinctTargets();
+				HashSet<String> heldOut = new HashSet<String>(targets);
+				HashSet<String> centralTrain = new HashSet<String>(
+						centralTrainSetUsers == null ? Collections.<String>emptyList() : centralTrainSetUsers);
+				HashSet<String> centralTest = new HashSet<String>(
+						centralTestSetUsers == null ? Collections.<String>emptyList() : centralTestSetUsers);
+				ArrayList<String> train = new ArrayList<String>();
+				ArrayList<String> test = new ArrayList<String>();
+				for (String user : corpus.users())
+				{
+					if (heldOut.contains(user) || corpus.labelOf(user) == null)
+					{
+						continue;
+					}
+					if (centralTrain.contains(user))
+					{
+						train.add(user);
+					}
+					else if (centralTest.contains(user))
+					{
+						test.add(user);
+					}
+				}
+				String[] classNames = (datasetFollowees == null
+						? Collections.<String>emptyList() : datasetFollowees).toArray(new String[0]);
+				LinkedHashMap<String,Integer> classIndex = new LinkedHashMap<String,Integer>();
+				for (int index = 0; index < classNames.length; index++)
+				{
+					classIndex.put(classNames[index], Integer.valueOf(index));
+				}
+				TreeSet<String> vocabulary = centralUniqueDocTerms != null && !centralUniqueDocTerms.isEmpty()
+						? centralUniqueDocTerms : new TreeSet<String>(corpus.terms());
+				HashSet<String> trainClasses = new HashSet<String>();
+				for (String user : train)
+				{
+					if (classIndex.containsKey(corpus.labelOf(user)))
+					{
+						trainClasses.add(corpus.labelOf(user));
+					}
+				}
+				if (trainClasses.size() < 2)
+				{
+					throw new IllegalStateException("MLP needs at least two followee classes in the training "
+							+ "set after the recommendation targets are held out; it has "
+							+ trainClasses.size() + ".");
+				}
+				ArrayList<String> report = new ArrayList<String>();
+				report.add("MLP (" + settings.getMlpEngineLabel() + ") on the whole run: "
+						+ train.size() + " training and " + test.size() + " test users, "
+						+ targets.size() + " held-out target(s), " + vocabulary.size()
+						+ " features, " + classNames.length + " classes.");
+				TreeMap<String,TreeMap<String,Double>> scores = new TreeMap<String,TreeMap<String,Double>>();
+				long trainStart;
+				long trainNanos;
+				long testStart;
+				long testNanos;
+				if (settings.isSparseFederatedMlpEnabled())
+				{
+					Map<String,Integer> termIndex = buildSparseMlpTermIndex(vocabulary);
+					List<SparseFederatedMlpModelSupport.TrainingExample> trainExamples =
+							sparseExamples(train, corpus, termIndex, classIndex, true);
+					List<SparseFederatedMlpModelSupport.TrainingExample> testExamples =
+							sparseExamples(test, corpus, termIndex, classIndex, true);
+					SparseFederatedMlpModelSupport.SparseMlpModel model =
+							SparseFederatedMlpModelSupport.SparseMlpModel.create(
+									vocabulary.size(),
+									settings.getMlpHiddenLayers(),
+									settings.getMlpHiddenNeurons(),
+									classNames.length,
+									0x5A17EEDL);
+					try (RecommendationMemoryCoordinator.Lease ignored =
+							RecommendationMemoryCoordinator.acquire(
+									getLocalName(),
+									"Sparse MLP training",
+									RecommendationMemoryCoordinator.Workload.MLP_TRAIN,
+									RecommendationMemoryCoordinator.estimateSparseMlpTrainingBytes(
+											vocabulary.size(),
+											settings.getMlpHiddenNeurons(),
+											settings.getMlpHiddenLayers(),
+											classNames.length,
+											corpus.nonZeroCount(),
+											train.size() + test.size() + targets.size())))
+					{
+						trainStart = System.nanoTime();
+						model.train(
+								trainExamples,
+								settings.getMlpSparseEpochs(),
+								settings.getMlpLearningRate(),
+								settings.getMlpSparseL2(),
+								settings.getMlpFedProxMu());
+						trainNanos = System.nanoTime() - trainStart;
+						testStart = System.nanoTime();
+						int correct = 0;
+						for (SparseFederatedMlpModelSupport.TrainingExample example : testExamples)
+						{
+							if (findIndexOfMaxValue(model.predict(example.getFeatures()))
+									== example.getLabelIndex())
+							{
+								correct++;
+							}
+						}
+						testNanos = System.nanoTime() - testStart;
+						report.add(testExamples.isEmpty()
+								? "Sparse MLP accuracy skipped: no test users."
+								: String.format("Sparse MLP held-out accuracy: %.2f%% (%d/%d)",
+										100.0 * correct / testExamples.size(), correct, testExamples.size()));
+						for (SparseFederatedMlpModelSupport.TrainingExample example
+								: sparseExamples(targets, corpus, termIndex, classIndex, false))
+						{
+							double[] output = model.predict(example.getFeatures());
+							TreeMap<String,Double> row = new TreeMap<String,Double>();
+							for (int index = 0; index < output.length && index < classNames.length; index++)
+							{
+								row.put(classNames[index], output[index] < 0.0 ? 0.0 : output[index] * 100.0);
+							}
+							scores.put(example.getUser(), row);
+						}
+					}
+				}
+				else
+				{
+					validateLegacyNeurophMlpConfiguration(
+							vocabulary.size(),
+							settings.getMlpHiddenNeurons(),
+							settings.getMlpHiddenLayers(),
+							classNames.length,
+							train.size(),
+							test.size(),
+							targets.size());
+					long reservation = RecommendationMemoryCoordinator.estimateMlpTrainingBytes(
+							vocabulary.size(),
+							settings.getMlpHiddenNeurons(),
+							settings.getMlpHiddenLayers(),
+							classNames.length,
+							train.size() + test.size() + Math.max(1, targets.size()));
+					try (RecommendationMemoryCoordinator.Lease ignored =
+							RecommendationMemoryCoordinator.acquire(
+									getLocalName(),
+									"MLP dataset construction and training",
+									RecommendationMemoryCoordinator.Workload.MLP_TRAIN,
+									reservation))
+					{
+						reportLegacyNeurophMlpConfiguration(
+								vocabulary.size(),
+								settings.getMlpHiddenNeurons(),
+								settings.getMlpHiddenLayers(),
+								classNames.length,
+								train.size(),
+								test.size(),
+								targets.size(),
+								reservation);
+						DataSet trainSet = denseDataSet(train, corpus, vocabulary, classIndex, classNames.length);
+						DataSet testSet = denseDataSet(test, corpus, vocabulary, classIndex, classNames.length);
+						MultiLayerPerceptron network = createLegacyNeurophMlp(
+								vocabulary.size(),
+								settings.getMlpHiddenNeurons(),
+								settings.getMlpHiddenLayers(),
+								classNames.length);
+						//Neuroph draws initial weights from an unseeded generator; the
+						//same range from a fixed seed makes training reproducible.
+						network.randomizeWeights(new org.neuroph.util.random.RangeRandomizer(
+								-0.7, 0.7, new java.util.Random(MLP_WEIGHT_SEED)));
+						SoftMax softMax = new SoftMax(network.getLayers().get(network.getLayers().size() - 1));
+						List<Layer> layers = network.getLayers();
+						for (Neuron outputNeuron : layers.get(layers.size() - 1).getNeurons())
+						{
+							outputNeuron.setTransferFunction(softMax);
+						}
+						final BackPropagation rule = (BackPropagation)network.getLearningRule();
+						rule.setLearningRate(settings.getMlpLearningRate());
+						rule.setMaxError(settings.getMlpMaxError());
+						rule.setMaxIterations(MLP_MAX_EPOCHS);
+						rule.addListener(new org.neuroph.core.events.LearningEventListener()
+						{
+							public void handleLearningEvent(org.neuroph.core.events.LearningEvent event)
+							{
+								if (context.isAborted())
+								{
+									rule.stopLearning();
+								}
+							}
+						});
+						shuffleTrainingRows(trainSet, MLP_PRESENTATION_SEED);
+						trainStart = System.nanoTime();
+						network.learn(trainSet);
+						trainNanos = System.nanoTime() - trainStart;
+						context.requireActive();
+						report.add("Legacy Neuroph MLP stopped after " + rule.getCurrentIteration()
+								+ " epoch(s) with total error " + rule.getTotalNetworkError()
+								+ (rule.getCurrentIteration() >= MLP_MAX_EPOCHS
+										? " (epoch limit " + MLP_MAX_EPOCHS + " reached before max error "
+												+ settings.getMlpMaxError() + ")"
+										: ""));
+						testStart = System.nanoTime();
+						double accuracy = reportLegacyNeurophAccuracy(network, testSet,
+								"model trained on the whole run");
+						testNanos = System.nanoTime() - testStart;
+						if (Double.isFinite(accuracy))
+						{
+							report.add(String.format("Legacy Neuroph MLP held-out accuracy: %.2f%%", accuracy));
+						}
+						for (String target : targets)
+						{
+							Map<String,Double> document = corpus.vectorOf(target);
+							if (document == null)
+							{
 								continue;
 							}
-							RecommendationWorkQueueRegistry
-									.completeDoc2VecCandidateShard(
-											runLifecycle.getActiveRunId(),
-											doc2vecNodeNumber,
-											numRecAgents,
-											virtualShardCount,
-											claimedShard);
-							NodeExecutionMonitor.modelRunning(
-									getLocalName(),
-									"Finished Doc2Vec candidate shard "
-									+ claimedShard + "/" + virtualShardCount
-									+ "; claiming another shard if the queue has work.");
-						}
-						if (claimedCount == 0)
-						{
-							System.out.println(
-									getLocalName()
-									+ " found the Doc2Vec scheduler queue empty; "
-									+ "publishing empty score rows for organizer merge.");
-							NodeExecutionMonitor.publishing(getLocalName());
-						}
-					}
-					else
-					{
-						for (int shardIndex = 0;
-								shardIndex < assignedShards.size();
-								shardIndex++)
-						{
-							int virtualShardNumber = assignedShards.get(shardIndex);
-							if (!scoreDoc2VecVirtualShard(
-									batchScript,
-									topn,
-									selectedDataset,
-									virtualShardNumber,
-									virtualShardCount,
-									doc2vecWorkers,
-									batchUsers,
-									batchScores,
-									false))
+							network.setInput(denseVector(document, vocabulary));
+							network.calculate();
+							double[] output = network.getOutput();
+							TreeMap<String,Double> row = new TreeMap<String,Double>();
+							for (int index = 0; index < output.length && index < classNames.length; index++)
 							{
-								return allowShardFallback
-									? buildDoc2VecBatchFailureScores(batchUsers, topn)
-									: buildEmptyDoc2VecScores(batchUsers);
+								row.put(classNames[index], output[index] < 0.0 ? 0.0 : output[index]);
 							}
+							scores.put(target, row);
 						}
 					}
-
-					int completedWithScores = 0;
-					for (String recUser : batchUsers)
-					{
-						TreeMap<String,Double> userScores = batchScores.get(recUser);
-						if (userScores != null && !userScores.isEmpty())
-						{
-							completedWithScores++;
-						}
-					}
-					if (completedWithScores == 0)
-					{
-						reportDoc2VecBatchFailure(
-								"Doc2Vec produced no recommendation candidates for any of "
-								+ batchUsers.size() + " target users using "
-								+ selectedDataset.getAbsolutePath() + ".");
-					}
 				}
-				catch (IOException e)
-				{
-					e.printStackTrace();
-					reportDoc2VecBatchFailure(
-							"Doc2Vec batch could not start for "
-							+ selectedDataset.getAbsolutePath() + ": "
-							+ e.getMessage());
-					return allowShardFallback
-							? buildDoc2VecBatchFailureScores(batchUsers, topn)
-							: buildEmptyDoc2VecScores(batchUsers);
-				}
-				catch (InterruptedException e)
-				{
-					Thread.currentThread().interrupt();
-					e.printStackTrace();
-					reportDoc2VecBatchFailure(
-							"Doc2Vec batch was interrupted for "
-							+ selectedDataset.getAbsolutePath() + ".");
-					return allowShardFallback
-							? buildDoc2VecBatchFailureScores(batchUsers, topn)
-							: buildEmptyDoc2VecScores(batchUsers);
-				}
-
-				return batchScores;
+				return new MlpOutcome(scores, report, trainNanos, testNanos);
 			}
 
-			private boolean scoreDoc2VecVirtualShard(
-					File batchScript,
-					int topn,
-					File selectedDataset,
-					int virtualShardNumber,
-					int virtualShardCount,
-					int doc2vecWorkers,
-					List<String> batchUsers,
-					TreeMap<String,TreeMap<String,Double>> batchScores,
-					boolean dynamicQueueActive)
-					throws IOException, InterruptedException
+			private List<SparseFederatedMlpModelSupport.TrainingExample> sparseExamples(
+					List<String> users,
+					GlobalCorpus corpus,
+					Map<String,Integer> termIndex,
+					Map<String,Integer> classIndex,
+					boolean requireLabel)
 			{
-				if (dynamicQueueActive)
+				ArrayList<SparseFederatedMlpModelSupport.TrainingExample> examples =
+						new ArrayList<SparseFederatedMlpModelSupport.TrainingExample>();
+				for (String user : users)
 				{
-					applyDoc2VecShardCapacityDelay(virtualShardNumber);
-				}
-				Doc2VecBatchRunner.Result result = Doc2VecBatchRunner.run(
-						getPythonCommand(), batchScript, topn, selectedDataset,
-							virtualShardNumber,
-							virtualShardCount,
-							doc2vecWorkers,
-							batchUsers,
-							algorithmSettings(),
-							new Doc2VecBatchRunner.ProgressListener()
-						{
-							public void onProgress(
-									String event, String detail)
-							{
-								handleDoc2VecProgress(event, detail);
-							}
-						});
-				if (result.hasUnsafeNumericalDiagnostic())
-				{
-					reportDoc2VecBatchFailure(
-							"Doc2Vec stopped because Gensim reported an unsafe "
-							+ "numerical-kernel exception."
-							+ result.getDiagnosticSummary());
-					return false;
-				}
-				for (Map.Entry<String,String> error : result.getErrors().entrySet())
-				{
-					System.out.println(getLocalName()+" Doc2Vec batch warning for "+error.getKey()+": "+error.getValue());
-				}
-				if (result.getExitCode() != 0)
-				{
-					reportDoc2VecBatchFailure(
-							"Doc2Vec batch process exited with code "
-							+ result.getExitCode() + " for "
-							+ selectedDataset.getAbsolutePath()
-							+ " while scoring virtual shard "
-							+ virtualShardNumber + "/" + virtualShardCount
-							+ result.getDiagnosticSummary());
-				}
-				if (dynamicQueueActive
-						&& !RecommendationWorkQueueRegistry
-								.isActiveDoc2VecCandidateShard(
-										runLifecycle.getActiveRunId(),
-										Math.max(1, Integer.parseInt(nodeNumber)),
-										numRecAgents,
-										virtualShardCount,
-										virtualShardNumber))
-				{
-					NodeExecutionMonitor.modelRunning(
-							getLocalName(),
-							"Doc2Vec shard " + virtualShardNumber
-							+ " was drained while the subprocess was running; "
-							+ "discarding stale shard output.");
-					return true;
-				}
-				mergeDoc2VecShardScores(result, batchUsers, batchScores);
-				return true;
-			}
-
-			private void applyDoc2VecShardCapacityDelay(
-					int virtualShardNumber) throws InterruptedException
-			{
-				NodeCapacityScheduler.applyPerJobDelayOnly(
-						NodeCapacityRegistry.profileForNode(
-								Integer.parseInt(nodeNumber)),
-						new NodeCapacityScheduler.CancellationCheck()
-						{
-							public void throwIfCancelled()
-									throws InterruptedException
-							{
-								if (Thread.currentThread().isInterrupted())
-								{
-									throw new InterruptedException(
-											"Doc2Vec virtual shard "
-											+ virtualShardNumber
-											+ " was interrupted.");
-								}
-							}
-						});
-			}
-
-			private void mergeDoc2VecShardScores(
-					Doc2VecBatchRunner.Result result,
-					List<String> batchUsers,
-					TreeMap<String,TreeMap<String,Double>> batchScores)
-			{
-				for (String recUser : batchUsers)
-				{
-					TreeMap<String,Double> userScores = result.getScores(recUser);
-					if (result.isCompleted(recUser)
-							&& !result.hasError(recUser)
-							&& userScores != null)
+					Map<String,Double> document = corpus.vectorOf(user);
+					if (document == null)
 					{
-						TreeMap<String,Double> mergedScores =
-								batchScores.get(recUser);
-						if (mergedScores == null)
+						continue;
+					}
+					Integer label = classIndex.get(corpus.labelOf(user));
+					if (requireLabel && label == null)
+					{
+						continue;
+					}
+					LinkedHashMap<Integer,Double> features = new LinkedHashMap<Integer,Double>();
+					for (Map.Entry<String,Double> entry : document.entrySet())
+					{
+						Integer feature = termIndex.get(entry.getKey());
+						Double value = entry.getValue();
+						if (feature != null && value != null && Double.isFinite(value.doubleValue())
+								&& value.doubleValue() != 0.0)
 						{
-							mergedScores = new TreeMap<String,Double>();
-							batchScores.put(recUser, mergedScores);
-						}
-						for (Map.Entry<String,Double> scoreEntry : userScores.entrySet())
-						{
-							Double existing =
-									mergedScores.get(scoreEntry.getKey());
-							if (existing == null
-									|| scoreEntry.getValue().doubleValue()
-											> existing.doubleValue())
-							{
-								mergedScores.put(
-										scoreEntry.getKey(),
-										scoreEntry.getValue());
-							}
+							features.put(feature, value);
 						}
 					}
-					else
-					{
-						System.out.println(
-								getLocalName()
-								+ " Doc2Vec shard did not complete for "
-								+ recUser + ".");
-					}
+					examples.add(new SparseFederatedMlpModelSupport.TrainingExample(
+							user, features, requireLabel ? label.intValue() : -1));
 				}
+				return examples;
+			}
+
+			private DataSet denseDataSet(
+					List<String> users,
+					GlobalCorpus corpus,
+					TreeSet<String> vocabulary,
+					Map<String,Integer> classIndex,
+					int classCount)
+			{
+				DataSet dataSet = new DataSet(vocabulary.size(), classCount);
+				for (String user : users)
+				{
+					Integer label = classIndex.get(corpus.labelOf(user));
+					Map<String,Double> document = corpus.vectorOf(user);
+					if (label == null || document == null)
+					{
+						continue;
+					}
+					double[] desired = new double[classCount];
+					desired[label.intValue()] = 1.0;
+					dataSet.addRow(new DataSetRow(denseVector(document, vocabulary), desired));
+				}
+				return dataSet;
+			}
+
+			private double[] denseVector(Map<String,Double> document, TreeSet<String> vocabulary)
+			{
+				double[] vector = new double[vocabulary.size()];
+				int index = 0;
+				for (String term : vocabulary)
+				{
+					Double value = document.get(term);
+					vector[index++] = value == null ? 0.0 : value.doubleValue();
+				}
+				return vector;
 			}
 
 			private File getConfiguredDatasetFile()
@@ -7708,16 +4708,6 @@ public class RecommenderAgent extends Agent
 						? "python" : configuredCommand.trim();
 			}
 
-			private void reportDoc2VecBatchFailure(String message)
-			{
-				String diagnostic = getLocalName() + " " + message;
-				System.err.println(diagnostic);
-				if (myGui != null)
-				{
-					myGui.appendResult(diagnostic);
-				}
-			}
-
 			private void handleDoc2VecProgress(String event, String detail)
 			{
 				if ("WAITING".equals(event))
@@ -7736,503 +4726,10 @@ public class RecommenderAgent extends Agent
 				}
 			}
 
-			private TreeMap<String,TreeMap<String,Double>> buildDoc2VecBatchFailureScores(List<String> batchUsers, int topn)
-			{
-				TreeMap<String,TreeMap<String,Double>> failureScores = new TreeMap<String,TreeMap<String,Double>>();
-				for (String recUser : batchUsers)
-				{
-					failureScores.put(recUser, buildDoc2VecBatchFailureScoreMap(recUser, topn));
-				}
-				return failureScores;
-			}
-
-			private TreeMap<String,TreeMap<String,Double>> buildEmptyDoc2VecScores(
-					List<String> batchUsers)
-			{
-				TreeMap<String,TreeMap<String,Double>> emptyScores =
-						new TreeMap<String,TreeMap<String,Double>>();
-				for (String recUser : batchUsers)
-				{
-					emptyScores.put(recUser, new TreeMap<String,Double>());
-				}
-				return emptyScores;
-			}
-
-			private TreeMap<String,Double> buildDoc2VecBatchFailureScoreMap(String recUser, int topn)
-			{
-				return new TreeMap<String,Double>();
-			}
-
 			private boolean isSvmBatchMode()
 			{
 				return RecommendationModeSupport.isSvmFamilyAlgorithm(algorithmRec)
 						&& usersRec != null && usersRec.size() > 1;
-			}
-
-			private TreeMap<String,TreeMap<String,Double>> runIndependentSvmBatchRecommendations()
-			{
-				if (isExperimentalTargetSchedulingEnabled())
-				{
-					return runScheduledSvmTargetQueue();
-				}
-				TreeMap<String,TreeMap<String,Double>> batchScores = new TreeMap<String,TreeMap<String,Double>>();
-				ArrayList<String> assignedUsers = getAssignedSvmBatchUsers();
-				System.out.println(getLocalName()+" SVM batch assigned users: "+assignedUsers);
-				System.out.println(getLocalName()+" SVM reproducibility split seed: "
-						+ SvmReproducibility.SPLIT_SEED + " model seed: " + SvmReproducibility.MODEL_SEED);
-				for (String recUser : assignedUsers)
-				{
-					applyExperimentalTargetJobDelay(recUser);
-					TreeMap<String,Double> userScores = runIndependentSvmForUser(recUser);
-					if (userScores == null)
-					{
-						throw new IllegalStateException(
-								RecommendationModeSupport.algorithmName(algorithmRec)
-								+ " did not produce a valid prediction for "
-								+ recUser + ".");
-					}
-					batchScores.put(recUser, userScores);
-				}
-				return batchScores;
-			}
-
-			private TreeMap<String,TreeMap<String,Double>> runScheduledSvmTargetQueue()
-			{
-				TreeMap<String,TreeMap<String,Double>> batchScores =
-						new TreeMap<String,TreeMap<String,Double>>();
-				if (usersRec == null || usersRec.isEmpty())
-				{
-					return batchScores;
-				}
-				ArrayList<String> targetUsers =
-						new ArrayList<String>(usersRec);
-				int currentNode = Math.max(1, Integer.parseInt(nodeNumber));
-				int targetCount = targetUsers.size();
-				String algorithmKey =
-						RecommendationModeSupport.algorithmName(algorithmRec);
-				NodeExecutionMonitor.modelRunning(
-						getLocalName(),
-						"Live " + algorithmKey
-						+ " target-job queue active for "
-						+ targetCount + " target user"
-						+ (targetCount == 1 ? "" : "s") + ".");
-				int claimedCount = 0;
-				int deferredPolls = 0;
-				while (true)
-				{
-					RecommendationWorkQueueRegistry.TargetClaim claim =
-							RecommendationWorkQueueRegistry.claimTargetUserJob(
-									runLifecycle.getActiveRunId(),
-									algorithmKey,
-									currentNode,
-									numRecAgents,
-									targetUsers);
-					if (!claim.hasTarget())
-					{
-						if (claim.isDeferred())
-						{
-							deferredPolls++;
-							if (deferredPolls == 1 || deferredPolls % 20 == 0)
-							{
-								NodeExecutionMonitor.modelRunning(
-										getLocalName(),
-										"Waiting for " + algorithmKey
-										+ " target-job scheduler turn: "
-										+ claim.getReason());
-							}
-							try
-							{
-								Thread.sleep(Math.min(
-										500L,
-										50L + deferredPolls * 10L));
-							}
-							catch (InterruptedException interrupted)
-							{
-								Thread.currentThread().interrupt();
-								throw new IllegalStateException(
-										algorithmKey
-										+ " target scheduler was interrupted.",
-										interrupted);
-							}
-							continue;
-						}
-						break;
-					}
-
-					deferredPolls = 0;
-					claimedCount++;
-					int jobNumber = claim.getJobNumber();
-					String recUser = claim.getTargetUser();
-					try
-					{
-						NodeExecutionMonitor.modelRunning(
-								getLocalName(),
-								"Claimed " + algorithmKey
-								+ " target job " + jobNumber
-								+ "/" + targetCount + " for " + recUser
-								+ "; " + claim.getRemaining()
-								+ " target job(s) remain.");
-						applyExperimentalTargetJobDelay(recUser);
-						LiveWorkloadAdjustmentRegistry.applyClaimPacingDelay(
-								runLifecycle.getActiveRunId());
-						if (!RecommendationWorkQueueRegistry.isActiveTargetUserJob(
-								runLifecycle.getActiveRunId(),
-								algorithmKey,
-								currentNode,
-								numRecAgents,
-								targetCount,
-								jobNumber))
-						{
-							NodeExecutionMonitor.modelRunning(
-									getLocalName(),
-									algorithmKey + " target job " + jobNumber
-									+ " was drained before scoring; "
-									+ "skipping stale claim.");
-							continue;
-						}
-						TreeMap<String,Double> userScores =
-								runIndependentSvmForUser(recUser);
-						if (userScores == null)
-						{
-							throw new IllegalStateException(
-									algorithmKey
-									+ " did not produce a valid prediction for "
-									+ recUser + ".");
-						}
-						if (!RecommendationWorkQueueRegistry.isActiveTargetUserJob(
-								runLifecycle.getActiveRunId(),
-								algorithmKey,
-								currentNode,
-								numRecAgents,
-								targetCount,
-								jobNumber))
-						{
-							NodeExecutionMonitor.modelRunning(
-									getLocalName(),
-									algorithmKey + " target job " + jobNumber
-									+ " completed after drain/requeue; "
-									+ "discarded stale score row.");
-							continue;
-						}
-						batchScores.put(recUser, userScores);
-						RecommendationWorkQueueRegistry.completeTargetUserJob(
-								runLifecycle.getActiveRunId(),
-								algorithmKey,
-								currentNode,
-								numRecAgents,
-								targetCount,
-								jobNumber);
-					}
-					catch (InterruptedException interrupted)
-					{
-						RecommendationWorkQueueRegistry.failTargetUserJob(
-								runLifecycle.getActiveRunId(),
-								algorithmKey,
-								currentNode,
-								numRecAgents,
-								targetCount,
-								jobNumber);
-						Thread.currentThread().interrupt();
-						throw new IllegalStateException(
-								algorithmKey
-								+ " target scheduler was interrupted.",
-								interrupted);
-					}
-					catch (RuntimeException failure)
-					{
-						RecommendationWorkQueueRegistry.failTargetUserJob(
-								runLifecycle.getActiveRunId(),
-								algorithmKey,
-								currentNode,
-								numRecAgents,
-								targetCount,
-								jobNumber);
-						throw failure;
-					}
-				}
-				NodeExecutionMonitor.modelRunning(
-						getLocalName(),
-						"Live " + algorithmKey
-						+ " target scheduler finished "
-						+ claimedCount + " target job"
-						+ (claimedCount == 1 ? "" : "s") + ".");
-				return batchScores;
-			}
-
-			private boolean isExperimentalTargetSchedulingEnabled()
-			{
-				RecommendationSchedulerPlan plan =
-						RecommendationSchedulerRegistry.snapshot();
-				return plan != null
-						&& plan.allowsExperimentalSideEffects()
-						&& numRecAgents > 1
-						&& usersRec != null
-						&& usersRec.size() > 1
-						&& RecommendationModeSupport.isSvmFamilyAlgorithm(
-								algorithmRec);
-			}
-
-			private void applyExperimentalTargetJobDelay(
-					final String recUser)
-			{
-				if (!isExperimentalTargetSchedulingEnabled())
-				{
-					return;
-				}
-				final int currentNode = Math.max(
-						1,
-						Integer.parseInt(nodeNumber));
-				NodeCapacityProfile profile =
-						NodeCapacityRegistry.profileForNode(currentNode);
-				try
-				{
-					NodeCapacityScheduler.applyPerJobDelayOnly(
-							profile,
-							new NodeCapacityScheduler.CancellationCheck()
-							{
-								public void throwIfCancelled()
-										throws InterruptedException
-								{
-									if (Thread.currentThread().isInterrupted())
-									{
-										throw new InterruptedException(
-												"interrupted while scheduling "
-												+ recUser);
-									}
-								}
-							});
-				}
-				catch (InterruptedException interrupted)
-				{
-					Thread.currentThread().interrupt();
-					throw new IllegalStateException(
-							"Experimental target scheduler was interrupted.",
-							interrupted);
-				}
-			}
-
-			private ArrayList<String> getAssignedSvmBatchUsers()
-			{
-				ArrayList<String> assignedUsers = new ArrayList<String>();
-				if (usersRec == null || usersRec.size() == 0)
-				{
-					return assignedUsers;
-				}
-
-				if (isExperimentalTargetSchedulingEnabled())
-				{
-					List<List<String>> assignments =
-							NodeCapacityScheduler.assignTargetJobsDeterministic(
-									usersRec,
-									numRecAgents);
-					int nodeIndex = Math.max(
-							0,
-							Math.min(
-									assignments.size() - 1,
-									Integer.parseInt(nodeNumber) - 1));
-					assignedUsers.addAll(assignments.get(nodeIndex));
-					NodeExecutionMonitor.modelRunning(
-							getLocalName(),
-							"Experimental "
-									+ RecommendationModeSupport.algorithmName(
-											algorithmRec)
-									+ " target scheduler active: "
-									+ NodeCapacityScheduler.assignmentDetail(
-											nodeIndex + 1,
-											assignedUsers.size()));
-					return assignedUsers;
-				}
-
-				assignedUsers.addAll(usersRec);
-				return assignedUsers;
-			}
-
-			private TreeMap<String,Double> runIndependentSvmForUser(String recUser)
-			{
-				if (recUser == null || !allUserDocuments.containsKey(recUser))
-				{
-					throw new IllegalArgumentException(
-							RecommendationModeSupport.algorithmName(algorithmRec)
-							+ " target has no prepared document: " + recUser);
-				}
-
-				LinkedHashMap<String,LinkedHashMap<String,Double>> documentsForTarget = buildSvmDocumentsForTarget(recUser);
-				if (!documentsForTarget.containsKey(recUser))
-				{
-					throw new IllegalArgumentException(
-							RecommendationModeSupport.algorithmName(algorithmRec)
-							+ " target is not present on this node: " + recUser);
-				}
-
-				TreeSet<String> targetTerms = buildUniqueTermsForDocuments(documentsForTarget);
-				LinkedHashMap<String,Integer> targetDocFreq = buildDocumentFrequencyForDocuments(documentsForTarget);
-				LinkedHashMap<String,LinkedHashMap<String,Double>> targetTfidf = calculateTfidfForDocuments(documentsForTarget, targetDocFreq);
-				Map<String,List<String>> targetFolloweeFollowers = buildFolloweeFollowersForDocuments(documentsForTarget);
-				if (isClassifierGuidedUserMode())
-				{
-					for (List<String> followers : targetFolloweeFollowers.values())
-					{
-						followers.remove(recUser);
-					}
-				}
-				SvmDataSplit split = determineSvmDataSplit(targetFolloweeFollowers);
-
-				String arffDirName = "Dataset/Arff_files/";
-				File arffDir = new File(arffDirName);
-				if (!arffDir.exists())
-				{
-					arffDir.mkdirs();
-				}
-
-				String safeUser = sanitizeFileName(recUser);
-				String trainPath = arffDirName + "svm_batch_train_rec" + nodeNumber + "_" + safeUser + ".txt";
-				String testPath = arffDirName + "svm_batch_test_rec" + nodeNumber + "_" + safeUser + ".txt";
-				String recommendPath = arffDirName + "svm_batch_recommend_rec" + nodeNumber + "_" + safeUser + ".txt";
-
-				try
-				{
-					writeSvmBatchArffFiles(trainPath, testPath, recommendPath, targetTfidf, targetTerms, split, recUser);
-					return trainAndPredictSvmForBatchUser(
-							trainPath,
-							testPath,
-							recommendPath,
-							recUser,
-							targetTerms.size(),
-							split.trainUsers.size()
-									+ split.testUsers.size() + 1,
-							followeeFollowers.size());
-				}
-				catch (IOException e)
-				{
-					throw new IllegalStateException(
-							"Could not prepare exact-SVM input for " + recUser + ".", e);
-				}
-				finally
-				{
-					deleteTemporaryFile(trainPath);
-					deleteTemporaryFile(testPath);
-					deleteTemporaryFile(recommendPath);
-				}
-			}
-
-			private LinkedHashMap<String,LinkedHashMap<String,Double>> buildSvmDocumentsForTarget(String targetUser)
-			{
-				LinkedHashMap<String,LinkedHashMap<String,Double>> documentsForTarget = new LinkedHashMap<String,LinkedHashMap<String,Double>>();
-				for (Map.Entry<String,LinkedHashMap<String,Double>> entry : allUserDocuments.entrySet())
-				{
-					String userName = entry.getKey();
-					if (usersRec.contains(userName) && !userName.equals(targetUser))
-					{
-						Integer primaryRecServer = userPrimaryRecServer.get(userName);
-						if (primaryRecServer == null || !String.valueOf(primaryRecServer).equals(nodeNumber))
-						{
-							continue;
-						}
-					}
-					documentsForTarget.put(userName, entry.getValue());
-				}
-				return documentsForTarget;
-			}
-
-			private TreeSet<String> buildUniqueTermsForDocuments(LinkedHashMap<String,LinkedHashMap<String,Double>> documents)
-			{
-				TreeSet<String> uniqueTerms = new TreeSet<String>();
-				for (LinkedHashMap<String,Double> document : documents.values())
-				{
-					uniqueTerms.addAll(document.keySet());
-				}
-				return uniqueTerms;
-			}
-
-			private LinkedHashMap<String,Integer> buildDocumentFrequencyForDocuments(LinkedHashMap<String,LinkedHashMap<String,Double>> documents)
-			{
-				LinkedHashMap<String,Integer> docFreq = new LinkedHashMap<String,Integer>();
-				for (LinkedHashMap<String,Double> document : documents.values())
-				{
-					for (String term : document.keySet())
-					{
-						Integer currentCount = docFreq.get(term);
-						if (currentCount == null)
-						{
-							currentCount = 0;
-						}
-						docFreq.put(term, currentCount + 1);
-					}
-				}
-				return docFreq;
-			}
-
-			private LinkedHashMap<String,LinkedHashMap<String,Double>> calculateTfidfForDocuments(LinkedHashMap<String,LinkedHashMap<String,Double>> documents, LinkedHashMap<String,Integer> docFreq)
-			{
-				LinkedHashMap<String,LinkedHashMap<String,Double>> tfidfDocuments = new LinkedHashMap<String,LinkedHashMap<String,Double>>();
-				int targetTotalDocuments = documents.size();
-				for (Map.Entry<String,LinkedHashMap<String,Double>> entry : documents.entrySet())
-				{
-					String userName = entry.getKey();
-					LinkedHashMap<String,Double> userDoc = entry.getValue();
-					LinkedHashMap<String,Double> userDocumentTFIDF = new LinkedHashMap<String,Double>();
-					double vectorMagnitude = 0.0;
-					for (String docTerm : userDoc.keySet())
-					{
-						double tf = userDoc.get(docTerm);
-						Integer dfValue = docFreq.get(docTerm);
-						double df = dfValue == null ? 0.0 : dfValue.doubleValue();
-						double tfidf = 0.0;
-						if (df > 0.0)
-						{
-							double idf = (double)Math.log10(targetTotalDocuments/df) / Math.log10(2);
-							tfidf = tf * idf;
-						}
-						if (Double.isNaN(tfidf))
-						{
-							tfidf = 0.0;
-						}
-						userDocumentTFIDF.put(docTerm, tfidf);
-						vectorMagnitude += tfidf * tfidf;
-					}
-
-					vectorMagnitude = Math.sqrt(vectorMagnitude);
-					for (String docTerm : userDoc.keySet())
-					{
-						double tfidf = userDocumentTFIDF.get(docTerm);
-						if (vectorMagnitude > 0.0)
-						{
-							tfidf = tfidf / vectorMagnitude;
-						}
-						else
-						{
-							tfidf = 0.0;
-						}
-						if (Double.isNaN(tfidf))
-						{
-							tfidf = 0.0;
-						}
-						userDocumentTFIDF.put(docTerm, tfidf);
-					}
-					tfidfDocuments.put(userName, userDocumentTFIDF);
-				}
-				return tfidfDocuments;
-			}
-
-			private Map<String,List<String>> buildFolloweeFollowersForDocuments(LinkedHashMap<String,LinkedHashMap<String,Double>> documents)
-			{
-				Map<String,List<String>> targetFolloweeFollowers = new LinkedHashMap<String,List<String>>();
-				for (String userName : documents.keySet())
-				{
-					String followeeName = userFollowee.get(userName);
-					if (followeeName == null)
-					{
-						continue;
-					}
-					List<String> followers = targetFolloweeFollowers.get(followeeName);
-					if (followers == null)
-					{
-						followers = new ArrayList<String>();
-						targetFolloweeFollowers.put(followeeName, followers);
-					}
-					followers.add(userName);
-				}
-				return targetFolloweeFollowers;
 			}
 
 			private SvmDataSplit determineSvmDataSplit(Map<String,List<String>> targetFolloweeFollowers)
@@ -8273,91 +4770,6 @@ public class RecommenderAgent extends Agent
 					counts.put(followeeName, count + 1);
 				}
 				return counts;
-			}
-
-			private void writeSvmBatchArffFiles(String trainPath, String testPath, String recommendPath, LinkedHashMap<String,LinkedHashMap<String,Double>> tfidfDocuments, TreeSet<String> uniqueTerms, SvmDataSplit split, String recUser) throws IOException
-			{
-				writeSvmBatchArffFile(trainPath, "trainingSet", split.trainUsers, tfidfDocuments, uniqueTerms);
-				writeSvmBatchArffFile(testPath, "testSet", split.testUsers, tfidfDocuments, uniqueTerms);
-				ArrayList<String> recommendUsers = new ArrayList<String>();
-				recommendUsers.add(recUser);
-				writeSvmBatchArffFile(recommendPath, "recommendSet", recommendUsers, tfidfDocuments, uniqueTerms);
-			}
-
-			private void writeSvmBatchArffFile(String filePath, String relationName, List<String> rowUsers, LinkedHashMap<String,LinkedHashMap<String,Double>> tfidfDocuments, TreeSet<String> uniqueTerms) throws IOException
-			{
-				Collection<String> orderedClasses =
-						SvmReproducibility.sortedNonNullValues(followeeFollowers.keySet());
-				try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath, false)))
-				{
-					SparseArffWriter.writeHeader(
-							writer, relationName, uniqueTerms, orderedClasses);
-					for (String currUser : rowUsers)
-					{
-						Map<String,Double> currDocTfidf = tfidfDocuments.get(currUser);
-						if (currDocTfidf != null)
-						{
-							SparseArffWriter.writeRow(
-									writer, currDocTfidf, uniqueTerms,
-									userFollowee.get(currUser));
-						}
-					}
-				}
-			}
-
-			private TreeMap<String,Double> trainAndPredictSvmForBatchUser(
-					String trainPath,
-					String testPath,
-					String recommendPath,
-					String recUser,
-					int featureCount,
-					int instanceCount,
-					int trainingClassCount)
-			{
-				try
-				{
-					ArrayList<String> target = new ArrayList<String>();
-					target.add(recUser);
-					TreeMap<String,TreeMap<String,Double>> result =
-							runExactSvmWorkerRecommendations(
-									trainPath,
-									testPath,
-									recommendPath,
-									target,
-									featureCount,
-									instanceCount - 1,
-									trainingClassCount,
-									(algorithmRec == SCALABLE_SVM
-											? "scalable linear SVM target "
-											: "exact SVM target ") + recUser);
-					TreeMap<String,Double> userScores = result.get(recUser);
-					System.out.println(getLocalName()+" "
-							+ RecommendationModeSupport.algorithmName(algorithmRec)
-							+ " scores for "
-							+recUser+": "+userScores);
-					return userScores;
-				}
-				catch (Exception e)
-				{
-					throw new IllegalStateException(
-							RecommendationModeSupport.algorithmName(algorithmRec)
-							+ " failed for target " + recUser + ".", e);
-				}
-			}
-
-			private TreeMap<String,Double> buildFolloweeScoreMap(String predictedFollowee)
-			{
-				TreeMap<String,Double> userScore = new TreeMap<String,Double>();
-				for (String followeeUser : followeeFollowers.keySet())
-				{
-					double followeeScore = 0.0;
-					if (predictedFollowee != null && predictedFollowee.equals(followeeUser))
-					{
-						followeeScore = 1.0;
-					}
-					userScore.put(followeeUser, followeeScore);
-				}
-				return userScore;
 			}
 
 			private String sanitizeFileName(String value)
@@ -8416,26 +4828,12 @@ public class RecommenderAgent extends Agent
 				});
 			}
 
-			private Instances loadInstances(String filePath) throws IOException
-			{
-				try (BufferedReader reader = new BufferedReader(new FileReader(filePath)))
-				{
-					return new Instances(reader);
-				}
-			}
-
 			private void handleAlgorithmFailure(Throwable failure)
 			{
 				NodeExecutionMonitor.failed(getLocalName(), failure);
-				releaseActiveMlpLease();
 				releaseActiveKMeansLease();
 				releaseExactSvmPreparationState();
 				releaseActiveSvmLease();
-				nodeMLP = null;
-				averagedMLP = null;
-				trainMLP = null;
-				testMLP = null;
-				recMLP = null;
 				System.err.println(getLocalName()+" recommendation stage failed: "
 						+failure.getClass().getSimpleName()+": "+failure.getMessage());
 				failure.printStackTrace();
@@ -8474,70 +4872,26 @@ public class RecommenderAgent extends Agent
 				}
 			}
 	
+			/**
+			 * Delegates to {@link TweetTextNormalizer} so the controller and every
+			 * recommender node tokenise identically. Divergent copies of this
+			 * pipeline desynchronise the vocabularies used for distributed models.
+			 */
 			private String normalizeProcessedTweet(String tweetText)
 			{
-				String currentText = tweetText == null ? "" : tweetText;
-
-			if (currentText.contains("Photo:"))
-				currentText = currentText.substring(0,currentText.indexOf("Photo:"));
-
-			if (currentText.contains("Photoset:"))
-				currentText = currentText.substring(0,currentText.indexOf("Photoset:"));
-
-			if (currentText.contains("RT @") && retweetedby_temp == RE_TWEETS)
-				currentText="";
-			else
-				currentText = RETWEET_PATTERN.matcher(currentText).replaceAll("RT ");
-
-			currentText = PUNCTUATION_PATTERN.matcher(currentText).replaceAll("");
-			currentText = LINK_PATTERN.matcher(currentText).replaceAll(" ");
-
-			if (hashtags_temp == HASH_TAGS)
-				currentText = SPECIAL_CHARACTER_PATTERN.matcher(currentText).replaceAll(" ");
-
-			currentText = currentText.toLowerCase();
-
-			if (stopWordFlag_temp == STOP_WORDS)
-				currentText = removeStopWords(currentText);
-
-			currentText = currentText.trim();
-			currentText = NON_ALPHA_PATTERN.matcher(currentText).replaceAll("");
-			currentText = MULTI_SPACE_PATTERN.matcher(currentText).replaceAll(" ");
-				currentText = currentText.trim();
-
-				return currentText;
+				return TweetTextNormalizer.normalize(
+						tweetText,
+						retweetedby_temp == RE_TWEETS,
+						hashtags_temp == HASH_TAGS,
+						stopWordFlag_temp == STOP_WORDS,
+						STOP_WORD_SET);
 			}
 
 			private int countNormalizedTokens(String normalizedText)
 			{
-				if (normalizedText == null || normalizedText.length() == 0)
-				{
-					return 0;
-				}
-				int tokenCount = 1;
-				for (int index = 0; index < normalizedText.length(); index++)
-				{
-					if (normalizedText.charAt(index) == ' ')
-					{
-						tokenCount++;
-					}
-				}
-				return tokenCount;
+				return TweetTextNormalizer.countTokens(normalizedText);
 			}
 
-		private String removeStopWords(String currentText)
-		{
-			String paddedText = " " + currentText + " ";
-			for (String stopWord : stopWordsArray)
-			{
-				String stopWordPattern = " " + stopWord + " ";
-				if (paddedText.contains(stopWordPattern))
-				{
-					paddedText = paddedText.replace(stopWordPattern, " ");
-				}
-			}
-			return paddedText;
-		}
 
 		private long countDocumentTerms(
 				Map<String,? extends Map<String,Double>> documents)
@@ -8651,7 +5005,7 @@ public class RecommenderAgent extends Agent
 			acknowledgement.setOntology(TWEET_BATCH_ACK_ONTOLOGY);
 			acknowledgement.setConversationId(batchMessage.getConversationId());
 			acknowledgement.setContent("Tweet batch retained");
-			send(acknowledgement);
+			sendOverLink(acknowledgement);
 		}
 
 		private boolean isProcessedTweetBatch(ACLMessage batchMessage)
@@ -8773,7 +5127,8 @@ public class RecommenderAgent extends Agent
 				{
 						String normalizedText =
 								normalizeProcessedTweet(tweetTextReceived);
-						if (countNormalizedTokens(normalizedText) < 3)
+						if (countNormalizedTokens(normalizedText)
+								< TweetTextNormalizer.MINIMUM_USABLE_TOKENS)
 						{
 							return;
 						}
@@ -8969,89 +5324,6 @@ public class RecommenderAgent extends Agent
 			return tweetReceived.split(" ", 5);
 		}
 	
-		private String buildArffClassAttribute(Set<String> classNames)
-		{
-			StringJoiner classJoiner = new StringJoiner(",","{","}");
-			Collection<String> orderedClassNames = classNames;
-			if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithmRec))
-			{
-				orderedClassNames = SvmReproducibility.sortedNonNullValues(classNames);
-			}
-			for (String className: orderedClassNames)
-			{
-				classJoiner.add(formatArffClassValue(className));
-			}
-			return "@attribute result " + classJoiner.toString();
-		}
-
-		private String formatArffClassValue(String className)
-		{
-			if (className == null)
-			{
-				return "?";
-			}
-			return "'" + className
-					.replace("\\", "\\\\")
-					.replace("'", "\\'")
-					.replace("\r", " ")
-					.replace("\n", " ") + "'";
-		}
-
-		private void testNeuralNetwork(NeuralNetwork nnet, DataSet testSet) {
-
-			if (nnet == null || testSet == null || testSet.size() <= 0)
-			{
-				String message = getLocalName()
-						+ " Legacy Neuroph MLP test skipped: no test rows.";
-				System.out.println(message);
-				if (myGui != null)
-				{
-					myGui.appendResult(message);
-				}
-				return;
-			}
-
-			List<DataSetRow> testSetRows = testSet.getRows();
-			// System.out.println(getLocalName()+" followeeNames: "+Arrays.toString(followeeNames));
-			// System.out.println(getLocalName()+" testSet Size: "+testSetRows.size());
-			
-			
-			int correctlyClassified = 0;
-			for (int i = 0; i < testSetRows.size(); i++)
-			{
-				double[] inputVector = testSetRows.get(i).getInput();
-				nnet.setInput(inputVector);
-				nnet.calculate();
-				double[] networkOutput = nnet.getOutput();
-				// System.out.print("Input: "+ Arrays.toString(inputVector) );
-				// System.out.print(getLocalName()+" User: "+testSetUsers.get(i)+" Followee: "+userFollowee.get(testSetUsers.get(i)));
-				// System.out.println(" Output: "+ Arrays.toString(networkOutput));
-				
-				int maxIndex = 0;
-				maxIndex = findMaxIndex(networkOutput);
-				// System.out.println(getLocalName()+" maxIndex: "+maxIndex);
-				
-				// System.out.println(getLocalName()+" followeeNameOutput: "+followeeNames[maxIndex]+" followeeNameExpected: "+userFollowee.get(testSetUsers.get(i)));
-				String expectedFollowee = testSetUsers != null
-						&& i < testSetUsers.size()
-						? userFollowee.get(testSetUsers.get(i))
-						: followeeNames[findIndexOfMaxValue(
-								testSetRows.get(i).getDesiredOutput())];
-				if (maxIndex >= 0
-						&& maxIndex < followeeNames.length
-						&& followeeNames[maxIndex].equals(expectedFollowee))
-					correctlyClassified++;
-				
-			}
-
-			// System.out.println();
-			// System.out.println(getLocalName()+" Correctly classified: "+correctlyClassified+ " Total instances: "+testSetUsers.size());
-			// System.out.println();
-			if (myGui != null)
-			{
-				myGui.appendResult(getLocalName()+" Correctly classified: "+correctlyClassified+ " Total instances: "+testSetRows.size());
-			}
-		}
 		
 		 // Code added by Sepide 
 		
@@ -9241,54 +5513,16 @@ public class RecommenderAgent extends Agent
 				System.out.println(getLocalName()+" Doc2Vec compatibility split complete rowsWritten="+rowsWritten+" skippedRows="+skippedRows+" files="+numFiles);
 			}
 			
-			private void recNeuralNetwork(NeuralNetwork nnet, DataSet recSet) {
-
-			if (nnet == null || recSet == null)
-			{
-				throw new IllegalStateException(
-						"Legacy Neuroph MLP cannot score recommendations because the model or recommendation set is missing.");
-			}
-			List<DataSetRow> recSetRows = recSet.getRows();
-			if (usersRec == null || usersRec.size() < recSetRows.size())
-			{
-				throw new IllegalStateException(
-						"Legacy Neuroph MLP recommendation rows do not match the selected target users.");
-			}
-			System.out.println(getLocalName()+" followeeNames: "+Arrays.toString(followeeNames));
-			System.out.println(getLocalName()+ " recSet Size: "+recSetRows.size());
-			
-			allUserScores = new TreeMap<String,TreeMap<String,Double>>();
-			Map<String,Double> userScore1 = new TreeMap<String,Double>();
-			double followeeScore = 0.0;
-			
-			for (int i = 0; i < recSetRows.size(); i++)
-			{
-				double[] inputVector = recSetRows.get(i).getInput();
-				nnet.setInput(inputVector);
-				nnet.calculate();
-				double[] networkOutput = nnet.getOutput();
-				// System.out.print("Input: "+ Arrays.toString(inputVector) );
-				System.out.print(getLocalName()+" RecUser: "+usersRec.get(i)+" Followee: "+userFollowee.get(usersRec.get(i)));
-				System.out.println(" Output: "+ Arrays.toString(networkOutput));
-				
-				for (int j = 0; j < networkOutput.length; j++)
-				{
-					if (networkOutput[j] < 0)
-						followeeScore = 0.0;
-					else
-						followeeScore = networkOutput[j];
-					
-					userScore1.put(followeeNames[j],followeeScore);
-				}
-				
-				allUserScores.put(usersRec.get(i),(TreeMap<String,Double>)userScore1);
-				userScore1 = new TreeMap<String,Double>();
-				
-			}
-
-		}
-
-	private double calculateSparseCosineScore(Map<String,Double> doc1, Map<String,Double> doc2)
+	/**
+	 * Cosine similarity of two L2-normalised sparse vectors.
+	 *
+	 * Computes the dot product only. That equals cosine because every caller
+	 * passes TF-IDF vectors that were normalised to unit length when they were
+	 * built, and skipping the norms keeps the inner loop cheap over millions of
+	 * pairs. Passing unnormalised vectors silently returns something that is not
+	 * a cosine, which is why the method is no longer named for the general case.
+	 */
+	private double calculateUnitVectorCosine(Map<String,Double> doc1, Map<String,Double> doc2)
 	{
 		if (doc1 == null || doc2 == null || doc1.isEmpty() || doc2.isEmpty())
 		{
@@ -9336,403 +5570,81 @@ public class RecommenderAgent extends Agent
 		return SparseRecommendationMath.euclideanSimilarityScore(doc1, doc2);
 	}
 
-		private TreeMap<String,Double> keepTopCosSimScores(TreeMap<String,Double> scores, int limit)
-		{
-			if (scores == null || limit <= 0 || scores.size() <= limit)
+			/**
+			 * Snapshot of user -> cluster id across all clusters.
+			 *
+			 * Returned by value: the caller may hold it across iterations that clear and
+			 * refill the underlying {@link Cluster} point lists.
+			 */
+			/**
+			 * True when this node is the one that should score {@code candidate}.
+			 *
+			 * Recommendation targets are replicated to every recommender node so each
+			 * node can build the target's document. Without this check every node also
+			 * scores those replicated users as candidates, and the merge (which sums
+			 * duplicates) inflates them by roughly the node count. Candidates with no
+			 * recorded owner are scored locally, which is the single-node case.
+			 */
+			private boolean ownsCandidate(String candidate)
 			{
-				return scores;
-			}
-
-			ArrayList<Map.Entry<String,Double>> sortedScores = new ArrayList<Map.Entry<String,Double>>(scores.entrySet());
-			Collections.sort(sortedScores, new Comparator<Map.Entry<String,Double>>() {
-				public int compare(Map.Entry<String,Double> first, Map.Entry<String,Double> second)
+				Integer primaryServer = userPrimaryRecServer.get(candidate);
+				if (primaryServer == null)
 				{
-					int scoreCompare = Double.compare(second.getValue(), first.getValue());
-					if (scoreCompare != 0)
+					//Input that carried no owner (per-tweet delivery): the
+					//controller's placement names it, identically on every node.
+					SchedulingRunContext context =
+							SchedulingRuntime.get(runLifecycle.getActiveRunId());
+					int planned = context == null ? 0 : context.plannedOwnerOf(candidate);
+					if (planned > 0)
 					{
-						return scoreCompare;
+						primaryServer = Integer.valueOf(planned);
 					}
-					return first.getKey().compareTo(second.getKey());
 				}
-			});
-
-			TreeMap<String,Double> limitedScores = new TreeMap<String,Double>();
-			for (int i = 0; i < sortedScores.size() && i < limit; i++)
-			{
-				Map.Entry<String,Double> entry = sortedScores.get(i);
-				limitedScores.put(entry.getKey(), entry.getValue());
-			}
-				return limitedScores;
+				return primaryServer == null
+						|| primaryServer.intValue() == thisNodeNumber();
 			}
 
-			private boolean isExperimentalCandidateSchedulingEnabled(
-					int scheduledAlgorithm)
+			/**
+			 * This node's number, parsed once.
+			 *
+			 * Ownership is checked inside the scoring loops, once per candidate per
+			 * target, so re-parsing the string there was needless work on every
+			 * comparison. If the value is somehow unparseable the node claims every
+			 * candidate, which is the single-node behaviour: over-counting is
+			 * recoverable, silently returning no recommendations is not.
+			 */
+			private int thisNodeNumber()
 			{
-				RecommendationSchedulerPlan plan =
-						RecommendationSchedulerRegistry.snapshot();
-				return plan != null
-						&& plan.allowsExperimentalSideEffects()
-						&& numRecAgents > 1
-						&& (scheduledAlgorithm == COS_SIM
-								|| scheduledAlgorithm == CommonNeighbors);
-			}
-
-			private TreeMap<String,TreeMap<String,Double>> runExperimentalCandidateShardScheduling(
-					String[] users,
-					String[] usersForRec,
-					boolean commonNeighbors,
-					int localResultLimit)
-			{
-				TreeMap<String,TreeMap<String,Double>> scheduledScores =
-						initializeTargetScoreRows(usersRec, users);
-				int currentNode = Math.max(1, Integer.parseInt(nodeNumber));
-				int virtualShardCount =
-						NodeCapacityScheduler.virtualCandidateShardCount(
-								numRecAgents,
-								users == null ? 0 : users.length);
-				String algorithmKey = commonNeighbors
-						? "CommonNeighbors" : "Similarity";
-				NodeCapacityProfile profile =
-						NodeCapacityRegistry.profileForNode(currentNode);
-				String queueDetail =
-						NodeCapacityScheduler.virtualCandidateShardDetail(
-								currentNode,
-								numRecAgents,
-								NodeCapacityScheduler.assignedVirtualCandidateShards(
-										currentNode,
-										numRecAgents,
-										virtualShardCount),
-								virtualShardCount);
-				System.out.println(getLocalName()
-						+ " experimental candidate-shard scheduler active: "
-						+ queueDetail);
-				NodeExecutionMonitor.modelRunning(
-						getLocalName(),
-						"Experimental " + algorithmKey
-								+ " pull queue active: " + queueDetail);
-
-				int claimedCount = 0;
-				int scoredCandidates = 0;
-				int deferredPolls = 0;
-				while (true)
+				if (cachedNodeNumber == Integer.MIN_VALUE)
 				{
-					RecommendationWorkQueueRegistry.ShardClaim claim =
-							RecommendationWorkQueueRegistry
-									.claimExperimentalCandidateShard(
-											runLifecycle.getActiveRunId(),
-											algorithmKey,
-											currentNode,
-											numRecAgents,
-											virtualShardCount);
-					if (!claim.hasShard())
-					{
-						if (claim.isDeferred())
-						{
-							deferredPolls++;
-							if (deferredPolls == 1 || deferredPolls % 20 == 0)
-							{
-								NodeExecutionMonitor.modelRunning(
-										getLocalName(),
-										"Waiting for experimental scheduler turn: "
-												+ claim.getReason());
-							}
-							try
-							{
-								Thread.sleep(Math.min(
-										500L,
-										50L + deferredPolls * 10L));
-							}
-							catch (InterruptedException interrupted)
-							{
-								Thread.currentThread().interrupt();
-								throw new IllegalStateException(
-										"Experimental scheduler was interrupted.",
-										interrupted);
-							}
-							continue;
-						}
-						break;
-					}
-
-					deferredPolls = 0;
-					claimedCount++;
-					int shardNumber = claim.getShardNumber();
 					try
 					{
-						NodeCapacityScheduler.applyPerJobDelayOnly(
-								profile,
-								new NodeCapacityScheduler.CancellationCheck()
-								{
-									public void throwIfCancelled()
-											throws InterruptedException
-									{
-										if (Thread.currentThread().isInterrupted())
-										{
-											throw new InterruptedException(
-													"interrupted");
-										}
-									}
-								});
-						LiveWorkloadAdjustmentRegistry.applyClaimPacingDelay(
-								runLifecycle.getActiveRunId());
-						if (!RecommendationWorkQueueRegistry
-								.isActiveExperimentalCandidateShard(
-										runLifecycle.getActiveRunId(),
-										algorithmKey,
-										currentNode,
-										numRecAgents,
-										virtualShardCount,
-										shardNumber))
-						{
-							NodeExecutionMonitor.modelRunning(
-									getLocalName(),
-									"Experimental " + algorithmKey
-									+ " shard " + shardNumber
-									+ " was drained before scoring; "
-									+ "skipping stale claim.");
-							continue;
-						}
-						TreeMap<String,TreeMap<String,Double>>
-								shardScoreRows = initializeTargetScoreRows(
-										usersRec,
-										users);
-						int shardScores = scoreExperimentalCandidateShard(
-								shardScoreRows,
-								users,
-								usersForRec,
-								shardNumber,
-								virtualShardCount,
-								commonNeighbors);
-						if (!RecommendationWorkQueueRegistry
-								.isActiveExperimentalCandidateShard(
-										runLifecycle.getActiveRunId(),
-										algorithmKey,
-										currentNode,
-										numRecAgents,
-										virtualShardCount,
-										shardNumber))
-						{
-							NodeExecutionMonitor.modelRunning(
-									getLocalName(),
-									"Experimental " + algorithmKey
-									+ " shard " + shardNumber
-									+ " completed after drain/requeue; "
-									+ "discarded stale scores.");
-							continue;
-						}
-						mergeExperimentalShardScores(
-								scheduledScores,
-								shardScoreRows);
-						scoredCandidates += shardScores;
-						RecommendationWorkQueueRegistry
-								.completeExperimentalCandidateShard(
-										runLifecycle.getActiveRunId(),
-										algorithmKey,
-										currentNode,
-										numRecAgents,
-										virtualShardCount,
-										shardNumber);
-						NodeExecutionMonitor.modelRunning(
-								getLocalName(),
-								"Finished experimental "
-										+ algorithmKey
-										+ " shard " + shardNumber
-										+ "/" + virtualShardCount
-										+ "; " + scoredCandidates
-										+ " candidate scores so far.");
+						cachedNodeNumber = Integer.parseInt(nodeNumber.trim());
 					}
-					catch (InterruptedException interrupted)
+					catch (RuntimeException unparseable)
 					{
-						RecommendationWorkQueueRegistry
-								.failExperimentalCandidateShard(
-										runLifecycle.getActiveRunId(),
-										algorithmKey,
-										currentNode,
-										numRecAgents,
-										virtualShardCount,
-										shardNumber);
-						Thread.currentThread().interrupt();
-						throw new IllegalStateException(
-								"Experimental scheduler was interrupted.",
-								interrupted);
-					}
-					catch (RuntimeException failure)
-					{
-						RecommendationWorkQueueRegistry
-								.failExperimentalCandidateShard(
-										runLifecycle.getActiveRunId(),
-										algorithmKey,
-										currentNode,
-										numRecAgents,
-										virtualShardCount,
-										shardNumber);
-						throw failure;
+						System.err.println(getLocalName()
+								+ " could not parse its node number '" + nodeNumber
+								+ "'; scoring every local candidate.");
+						cachedNodeNumber = -1;
 					}
 				}
-
-				for (Map.Entry<String,TreeMap<String,Double>> entry
-						: scheduledScores.entrySet())
-				{
-					if (numRecAgents > 1 && !isUserRankerFolloweeMode())
-					{
-						entry.setValue(keepTopCosSimScores(
-								entry.getValue(),
-								localResultLimit));
-					}
-				}
-				NodeExecutionMonitor.modelRunning(
-						getLocalName(),
-						"Experimental " + algorithmKey
-								+ " scheduler finished "
-								+ claimedCount + " shard(s), "
-								+ scoredCandidates + " candidate scores.");
-				return scheduledScores;
+				return cachedNodeNumber;
 			}
 
-			private void mergeExperimentalShardScores(
-					Map<String,TreeMap<String,Double>> destination,
-					Map<String,TreeMap<String,Double>> shardScores)
-			{
-				if (destination == null || shardScores == null)
-				{
-					return;
-				}
-				for (Map.Entry<String,TreeMap<String,Double>> entry
-						: shardScores.entrySet())
-				{
-					TreeMap<String,Double> sourceScores = entry.getValue();
-					if (sourceScores == null || sourceScores.isEmpty())
-					{
-						continue;
-					}
-					TreeMap<String,Double> targetScores =
-							destination.get(entry.getKey());
-					if (targetScores == null)
-					{
-						targetScores = new TreeMap<String,Double>();
-						destination.put(entry.getKey(), targetScores);
-					}
-					targetScores.putAll(sourceScores);
-				}
-			}
 
-			private int scoreExperimentalCandidateShard(
-					Map<String,TreeMap<String,Double>> scoreRows,
-					String[] users,
-					String[] usersForRec,
-					int shardNumber,
-					int virtualShardCount,
-					boolean commonNeighbors)
-			{
-				if (scoreRows == null || users == null || usersForRec == null)
-				{
-					return 0;
-				}
-				int safeShardCount = Math.max(1, virtualShardCount);
-				int startIndex = Math.max(0, shardNumber - 1);
-				int scoresWritten = 0;
-				for (int targetIndex = 0; targetIndex < usersForRec.length;
-						targetIndex++)
-				{
-					String recUser = usersForRec[targetIndex];
-					LinkedHashMap<String, Double> recDoc =
-							allUserDocumentsTFIDF.get(recUser);
-					TreeMap<String,Double> userScores = scoreRows.get(recUser);
-					if (recDoc == null || userScores == null)
-					{
-						continue;
-					}
-					for (int candidateIndex = startIndex;
-							candidateIndex < users.length;
-							candidateIndex += safeShardCount)
-					{
-						String candidateUser = users[candidateIndex];
-						if (candidateUser == null
-								|| recUser.equals(candidateUser))
-						{
-							continue;
-						}
-						LinkedHashMap<String, Double> candidateDoc =
-								allUserDocumentsTFIDF.get(candidateUser);
-						double score = commonNeighbors
-								? calculateCommonNeighborScore(recDoc, candidateDoc)
-								: calculateSparseCosineScore(recDoc, candidateDoc);
-						userScores.put(candidateUser, score);
-						scoresWritten++;
-					}
-				}
-				return scoresWritten;
-			}
-
-			static TreeMap<String,TreeMap<String,Double>> initializeTargetScoreRows(
-					Collection<String> targetUsers, String[] users)
-			{
-				TreeMap<String,TreeMap<String,Double>> targetScores =
-						new TreeMap<String,TreeMap<String,Double>>();
-				if (targetUsers == null || users == null)
-				{
-					return targetScores;
-				}
-				LinkedHashSet<String> availableUsers =
-						new LinkedHashSet<String>(Arrays.asList(users));
-				for (String targetUser : targetUsers)
-				{
-					if (targetUser == null || !availableUsers.contains(targetUser)
-							|| targetScores.containsKey(targetUser))
-					{
-						continue;
-					}
-					TreeMap<String,Double> userScores =
-							new TreeMap<String,Double>();
-					for (String candidateUser : users)
-					{
-						if (candidateUser != null
-								&& !targetUser.equals(candidateUser))
-						{
-							userScores.put(candidateUser, 0.0);
-						}
-					}
-					targetScores.put(targetUser, userScores);
-				}
-				return targetScores;
-			}
-
-			static void putScoreForTrackedTargets(
-					Map<String,TreeMap<String,Double>> scoreRows,
-					String firstUser,
-					String secondUser,
-					double score)
-			{
-				if (scoreRows == null)
-				{
-					return;
-				}
-				TreeMap<String,Double> firstRow = scoreRows.get(firstUser);
-				if (firstRow != null)
-				{
-					firstRow.put(secondUser, score);
-				}
-				TreeMap<String,Double> secondRow = scoreRows.get(secondUser);
-				if (secondRow != null)
-				{
-					secondRow.put(firstUser, score);
-				}
-			}
-
+			/**
+			 * Size of each node's local candidate shortlist.
+			 *
+			 * The requested top-N is captured once per run rather than read live from
+			 * the Swing text field: reading it here happened on a JADE agent thread
+			 * (off the event dispatch thread) and picked up whatever the user had
+			 * typed at that instant, so editing the field mid-run silently changed
+			 * pruning, and different nodes could read different values.
+			 */
 			private int getCosSimLocalResultLimit()
 		{
-			int requestedRecommendations = 0;
-			if (myGui != null && myGui.recommendationField != null)
-			{
-				try
-				{
-					requestedRecommendations = Integer.parseInt(myGui.recommendationField.getText().trim());
-				}
-				catch (Exception e)
-				{
-					requestedRecommendations = 0;
-				}
-			}
+			int requestedRecommendations = Math.max(0, requestedTopRecommendations);
 
 			AlgorithmParameterSettings settings = algorithmSettings();
 			int bufferedLimit = requestedRecommendations
@@ -9744,22 +5656,6 @@ public class RecommenderAgent extends Agent
 			return bufferedLimit;
 		}
 		
-		private int findMaxIndex(double[] array)
-		{
-			int maxIndex = 0;
-			double maxValue = array[0];
-			for (int i = 0; i < array.length; i++)
-			{
-				// System.out.println("array["+i+"+]: "+array[i]+" maxValue: "+maxValue);
-				if (array[i] > maxValue)
-				{
-					maxIndex = i;
-					maxValue = array[i];
-				}
-					
-			}
-			return maxIndex;
-		}
 	}
 
 	
@@ -9830,7 +5726,6 @@ public class RecommenderAgent extends Agent
 
 	protected void takeDown()
 	{
-		releaseActiveMlpLease();
 		releaseActiveKMeansLease();
 		releaseActiveSvmLease();
 		closeExactSvmCorpusSpool();

@@ -42,12 +42,35 @@ public abstract class ClassifierEvaluator implements Evaluator<ConfusionMatrix> 
      */
     public static final class Binary extends ClassifierEvaluator {
 
-        public static final String[] CLASS_LABELS = new String[]{"RyersonU", "TheCatTweeting", "TorontoStar", "weathernetwork"}; 
-		//Sepide public static final String[] CLASS_LABELS = new String[4]; 
-              
+        /**
+         * Labels for the two-class confusion matrix.
+         *
+         * These were previously four dataset-specific Twitter account names, so a
+         * binary problem built a 4x4 matrix whose bottom-right quadrant stayed
+         * empty. ClassificationMetrics.createFromMatrix macro-averages over every
+         * label, so two all-zero classes halved the reported precision, recall and
+         * F-score.
+         */
+        public static final String[] CLASS_LABELS = new String[]{"positive", "negative"};
+
         public Binary(double threshold) {
-            super(CLASS_LABELS);
+            this(threshold, CLASS_LABELS);
+        }
+
+        /**
+         * @param labels exactly two labels: index 0 positive, index 1 negative
+         */
+        public Binary(double threshold, String[] labels) {
+            super(requireTwoLabels(labels));
             setThreshold(threshold);
+        }
+
+        private static String[] requireTwoLabels(String[] labels) {
+            if (labels == null || labels.length != 2) {
+                throw new IllegalArgumentException(
+                        "A binary classifier evaluator needs exactly two class labels.");
+            }
+            return labels;
         }
 
         @Override

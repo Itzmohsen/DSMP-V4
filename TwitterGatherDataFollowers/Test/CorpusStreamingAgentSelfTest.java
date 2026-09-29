@@ -186,41 +186,69 @@ public final class CorpusStreamingAgentSelfTest
 		}
 	}
 
+	/**
+	 * Batches are routed at run time through the run's scheduler: a paused
+	 * owner holds its users, a redirect moves the next users whole, a routed
+	 * user keeps its receiver, and replicated users go to every node (held
+	 * only while a node is paused, never redirected).
+	 */
 	private static void inputDispatchHonorsLiveRedirectForSingleOwnerRoutes()
+			throws Exception
 	{
 		String runId = RecommendationRunLifecycle.createRunId();
 		NodeCapacityRegistry.resetToDefaults(4, 4096);
 		RecommendationSchedulerRegistry.apply(
-				RecommendationSchedulerPlan.Mode.SCHEDULING_EXPERIMENT,
+				RecommendationSchedulerPlan.Mode.SCORING_SAFE,
 				SchedulerLabEngine.SchedulingPolicy.CAPACITY_WEIGHTED,
 				4,
 				4096,
 				"corpus streamer redirect self-test");
-		RecommendationSchedulerRegistry.beginRun(
-				runId,
-				4,
-				4096,
-				ControllerAgent.COS_SIM,
-				1);
-		CorpusStreamRoute singleOwner =
-				new CorpusStreamRoute(Arrays.asList(3), 3);
-		LiveWorkloadAdjustmentRegistry.setPaused(runId, 3, true);
-		require(CorpusStreamingAgent.dispatchReceiversForTest(
-						singleOwner,
-						runId).isEmpty(),
-				"paused single-owner input route should wait without redirect");
-		LiveWorkloadAdjustmentRegistry.redirectPendingToNode(runId, 2, 10);
-		require("[2]".equals(CorpusStreamingAgent.dispatchReceiversForTest(
-						singleOwner,
-						runId).toString()),
-				"single-owner input route did not honor live redirect");
+		RecommendationSchedulerRegistry.beginRun(runId, 4, 4096, ControllerAgent.COS_SIM, 1);
 
-		CorpusStreamRoute replicated =
-				new CorpusStreamRoute(Arrays.asList(3, 4), 3);
-		require(CorpusStreamingAgent.dispatchReceiversForTest(
-						replicated,
-						runId).isEmpty(),
-				"replicated input route was redirected unsafely");
+		ArrayList<Tweet> tweets = new ArrayList<Tweet>();
+		tweets.add(new Tweet("u34 text", 3L, new Date(3L), "u34"));
+		tweets.add(new Tweet("u3b text", 2L, new Date(2L), "u3b"));
+		tweets.add(new Tweet("u3a text", 1L, new Date(1L), "u3a"));
+		Map<String,CorpusStreamRoute> routes = new LinkedHashMap<String,CorpusStreamRoute>();
+		routes.put("u3a", new CorpusStreamRoute(Arrays.asList(3), 3));
+		routes.put("u3b", new CorpusStreamRoute(Arrays.asList(3), 3));
+		routes.put("u34", new CorpusStreamRoute(Arrays.asList(3, 4), 3));
+		ReplayableCorpusStream stream = ReplayableCorpusStream.create(
+				tweets, routes, new LinkedHashMap<String,String>(), Collections.<String>emptySet());
+		ArrayList<CorpusStreamingAgent.RouteDeliveryState> states =
+				CorpusStreamingAgent.createRouteDeliveryStates(stream.getRouteSources());
+		try
+		{
+			CorpusStreamingAgent.RouteDeliveryState single = states.get(0);
+			CorpusStreamingAgent.RouteDeliveryState replicated = states.get(1);
+			require(single.prepareNextBatch("run-1", "Corpus-Stream-UserAgent", 1, 1, null, 0),
+					"single-owner batch was not prepared");
+			require(!single.isAssigned(), "a batch must stay unrouted until it is sent");
+			require(replicated.prepareNextBatch("run-1", "Corpus-Stream-UserAgent", 2, 1, null, 0),
+					"replicated batch was not prepared");
+
+			LiveWorkloadAdjustmentRegistry.setPaused(runId, 3, true);
+			require(CorpusStreamingAgent.dispatchReceiversForTest(single, runId).isEmpty(),
+					"a paused owner's users should be held, not moved");
+			require(CorpusStreamingAgent.dispatchReceiversForTest(replicated, runId).isEmpty(),
+					"replicated input should wait while a receiver is paused");
+			LiveWorkloadAdjustmentRegistry.redirectPendingToNode(runId, 2, 10);
+			require("[2]".equals(CorpusStreamingAgent.dispatchReceiversForTest(single, runId).toString()),
+					"a live redirect did not take the held users");
+			LiveWorkloadAdjustmentRegistry.setPaused(runId, 3, false);
+			require("[2]".equals(CorpusStreamingAgent.dispatchReceiversForTest(single, runId).toString()),
+					"a routed user changed receiver (its rows would split)");
+			LiveWorkloadAdjustmentRegistry.drainNodeTo(runId, 3, 1, 0);
+			require("[3, 4]".equals(CorpusStreamingAgent.dispatchReceiversForTest(replicated, runId).toString()),
+					"replicated input must still reach a drained node, which keeps its data phases");
+		}
+		finally
+		{
+			close(states);
+			stream.close();
+			SchedulingRuntime.close(runId, "test finished");
+			RecommendationSchedulerRegistry.restoreDefault(4, 4096);
+		}
 	}
 
 	private static ReplayableCorpusStream createFourRouteStream()

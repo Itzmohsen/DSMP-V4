@@ -7,14 +7,14 @@ final class RecommendationSchedulerPlan
 	enum Mode
 	{
 		DSMP_DEFAULT(
-				"DSMP default",
-				"Use the simulator's existing assignment and safety behavior."),
+				"Original DSMP",
+				"V3 list-scheduling placement; each node works on its own data; no capacity emulation."),
 		SCORING_SAFE(
-				"Scoring-safe scheduling",
-				"Apply the selected policy only at safe assignment boundaries."),
+				"Scheduled, capacity emulated",
+				"Placement and work dispatch follow the policy, and node speed, lanes, memory, queue and link delay are physically emulated. Recommendations are identical to the original mode."),
 		SCHEDULING_EXPERIMENT(
-				"Scheduling experiment",
-				"Use experimental placement policies; failure and slowdown stay in isolated schedulable experiments unless a complete unit can be retried safely.");
+				"Scheduled, fault injection",
+				"As capacity emulated, plus injected unit failures at each node's failure probability, retried with exactly-once commits. Recommendations are still identical.");
 
 		private final String label;
 		private final String description;
@@ -75,7 +75,7 @@ final class RecommendationSchedulerPlan
 				0L,
 				Math.max(1, NodeCapacityRegistry.configuredNodeCount()),
 				NodeCapacityRegistry.configuredHeapMb(),
-				"Original DSMP assignment behavior is active.");
+				"Original DSMP (V3) placement; no capacity emulation.");
 	}
 
 	static RecommendationSchedulerPlan create(
@@ -130,7 +130,8 @@ final class RecommendationSchedulerPlan
 		return mode != Mode.DSMP_DEFAULT;
 	}
 
-	boolean allowsExperimentalSideEffects()
+	/** True when unit failures are injected (the fault-injection mode). */
+	boolean injectsFailures()
 	{
 		return mode == Mode.SCHEDULING_EXPERIMENT;
 	}
@@ -139,7 +140,7 @@ final class RecommendationSchedulerPlan
 	{
 		if (!isActive())
 		{
-			return "DSMP default scheduling";
+			return "Original DSMP scheduling";
 		}
 		return mode.getLabel() + " | " + policy.getLabel()
 				+ " | " + plannedNodes + " node"

@@ -570,7 +570,7 @@ final class ExperimentObservatoryPanel extends JPanel
 		metrics.setOpaque(false);
 		metrics.add(metric("PLANNED RUNS", plannedRunsValue, "matrix size"));
 		metrics.add(metric("ARTIFACTS", artifactValue, "timing / graph / rec files"));
-		metrics.add(metric("REPRODUCIBILITY", reproducibilityValue, "capsule readiness"));
+		metrics.add(metric("ARTIFACT COVERAGE", reproducibilityValue, "expected files present"));
 		metrics.add(metric("LATEST RUNTIME", runtimeValue, "from resultsTiming.txt"));
 		metrics.add(metric("CAPSULE", capsuleValue, "research fingerprint"));
 		return metrics;
@@ -947,7 +947,7 @@ final class ExperimentObservatoryPanel extends JPanel
 					report = get();
 					appendLog("Artifact scan complete. Capsule "
 							+ report.capsuleId + " | "
-							+ report.comparison.reproducibilityScore + "/100 reproducibility readiness.");
+							+ report.comparison.reproducibilityScore + "/100 artifact completeness.");
 					setStatus("READY", "Artifact scan complete. Export a capsule when you want a paper-ready record.", GREEN);
 				}
 				catch (Exception e)
@@ -3537,7 +3537,7 @@ final class ExperimentObservatoryPanel extends JPanel
 			{
 				paintEmpty(g2, w, h,
 						"Analyze artifacts to build the comparison dashboard.",
-						"This board will summarize runtime, stability, graph evidence, and reproducibility.");
+						"This board will summarize runtime, stability, graph evidence, and artifact completeness.");
 				g2.dispose();
 				return;
 			}
@@ -3548,7 +3548,7 @@ final class ExperimentObservatoryPanel extends JPanel
 					report.comparison.reproducibilityScore >= 80 ? GREEN : AMBER);
 			g2.setColor(TEXT);
 			g2.setFont(NebulaDesign.fontSemiBold(18f));
-			g2.drawString("Reproducibility readiness", 166, 86);
+			g2.drawString("Artifact completeness", 166, 86);
 			g2.setFont(NebulaDesign.fontBody(12.5f));
 			g2.setColor(MUTED);
 			g2.drawString(report.comparison.stabilityRead, 166, 110);

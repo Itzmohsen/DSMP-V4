@@ -274,6 +274,16 @@ final class Doc2VecBatchRunner
 			}
 		}
 
+		void setExitCode(int code)
+		{
+			exitCode = code;
+		}
+
+		void addDiagnosticLine(String diagnostic)
+		{
+			addDiagnostic(diagnostic);
+		}
+
 		private void addDiagnostic(String diagnostic)
 		{
 			if (diagnostic != null && diagnostic.trim().length() > 0)

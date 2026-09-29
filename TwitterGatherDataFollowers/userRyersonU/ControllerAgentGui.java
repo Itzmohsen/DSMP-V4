@@ -210,6 +210,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private JPanel recommendationEmptyState;
 	private JTabbedPane outputTabs;
 	private int recommendationUserCount;
+	//One ranking-quality summary per run.
+	private boolean recommendationQualityReported;
 	private int recommendationItemCount;
 	private int recommendationIssueCount;
 	private int currentRunAccuracyLineCount;
@@ -330,8 +332,17 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		void automationFailed(String runId, String phase, String message);
 	}
 
+	private static volatile ControllerAgentGui latestInstance;
+
+	/** The most recently created simulator window (for automation harnesses). */
+	static ControllerAgentGui latestInstance()
+	{
+		return latestInstance;
+	}
+
 	public ControllerAgentGui(ControllerAgent controller) {
 		super("Multi-Agent System Simulator for Distributed Recommender System");
+		latestInstance = this;
 
 		installModernLookAndFeel();
 
@@ -1123,6 +1134,37 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			return parsedResults;
 		}
 
+		/**
+		 * Appends the ranking-quality summary once every requested target has
+		 * reported, so the run ends with measured recommendation quality rather
+		 * than classifier accuracy alone.
+		 */
+		private void publishRecommendationQuality(RecommendationResult result)
+		{
+			if (!RecommendationQualityEvaluator.hasGroundTruth())
+			{
+				return;
+			}
+			int expectedTargets = usersRec == null || usersRec.isEmpty()
+					? recommendationUserCount : usersRec.size();
+			if (recommendationUserCount < expectedTargets
+					|| recommendationQualityReported)
+			{
+				return;
+			}
+			RecommendationQualityEvaluator.Report report =
+					RecommendationQualityEvaluator.report(
+							result == null ? 1 : result.getRecommendationLimit());
+			if (report == null)
+			{
+				return;
+			}
+			recommendationQualityReported = true;
+			String summary = report.describe();
+			System.out.println(summary);
+			appendResult(summary);
+		}
+
 		private void addRecommendationResult(RecommendationResult result)
 		{
 			if (recommendationCardsPanel == null)
@@ -1144,6 +1186,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			}
 
 			recommendationUserCount++;
+			try
+			{
+				publishRecommendationQuality(result);
+			}
+			catch (RuntimeException reportFailure)
+			{
+				System.err.println("Recommendation quality summary skipped: "
+						+ reportFailure);
+			}
 			recommendationItemCount += result.recommendations.size();
 			if (result.status != RecommendationResultStatus.OK)
 			{
@@ -1189,6 +1240,9 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		{
 			recommendationArea.setText("");
 			recommendationUserCount = 0;
+			recommendationQualityReported = false;
+			//Drop the previous run's ranking scores; the ground truth is kept.
+			RecommendationQualityEvaluator.beginRun();
 			recommendationItemCount = 0;
 			recommendationIssueCount = 0;
 			if (recommendationCardsPanel != null)
@@ -2760,6 +2814,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		private static final class RecommendationResult
 		{
 			private final String targetUser;
+			private int recommendationLimit = 1;
 			private final ArrayList<RecommendationMatch> recommendations = new ArrayList<RecommendationMatch>();
 			private RecommendationCandidateType candidateType;
 			private RecommendationResultStatus status = RecommendationResultStatus.OK;
@@ -2771,8 +2826,14 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				this.targetUser = targetUser;
 			}
 
+			int getRecommendationLimit()
+			{
+				return recommendationLimit;
+			}
+
 			RecommendationResult(RecommendationResultPayload payload, int limit)
 			{
+				this.recommendationLimit = Math.max(1, limit);
 				this.targetUser = payload.getTargetUser();
 				this.candidateType = payload.getCandidateType();
 				this.status = payload.getStatus();
@@ -3230,8 +3291,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			algorithmSelectionBox.setSelectedIndex(K_MEANS);
 			algorithmSelectionBox.addActionListener(new AlgorithmSelectionListener());
 			algorithmSelectionBox.setToolTipText(
-					"SVM preserves the original exact calibrated SMO model. "
-					+ "Scalable Linear SVM and Temporal Graph Foundation are separate experimental models.");
+					"<html>SVM is the exact calibrated Weka SMO model.<br>"
+					+ "Scalable Linear SVM is a multiclass passive-aggressive online "
+					+ "learner: max-margin updates, no SVM batch objective and no C.<br>"
+					+ "Temporal Graph Foundation is a fixed-weight linear score over "
+					+ "text, graph and time signals, not a pretrained model.</html>");
 			styleComboBox(algorithmSelectionBox);
 			algorithmSelectionBox.setRenderer(new AlgorithmChoiceRenderer());
 
@@ -3427,7 +3491,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					description = "Cosine-clustered user similarity";
 					break;
 				case SVM:
-					description = "Exact calibrated SMO followee classification";
+					description = "Exact calibrated Weka SMO followee classification";
 					break;
 				case SCALABLE_SVM:
 					description = "Sparse high-cardinality multiclass max-margin SVM (separate model)";
@@ -5154,6 +5218,16 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		{
 			simulateTweetDelay.setSelected(run.simulateTweetDelay);
 		}
+		if (recommendationTargetModeBox != null && run.targetModeLabel != null)
+		{
+			for (RecommendationTargetMode mode : RecommendationTargetMode.values())
+			{
+				if (mode.toString().equalsIgnoreCase(run.targetModeLabel.trim()))
+				{
+					recommendationTargetModeBox.setSelectedItem(mode);
+				}
+			}
+		}
 		NodeCapacityRegistry.configureForNodeCount(numNodes, currentHeapSetting());
 		applyObservatorySchedulerPolicy(run);
 		updateNodeCapacitySummary();
@@ -5219,6 +5293,18 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			}
 		}
 		return SchedulerLabEngine.SchedulingPolicy.CAPACITY_WEIGHTED;
+	}
+
+	/** Number of users the last Get Users loaded (for automation). */
+	int loadedUserCount()
+	{
+		return agentsList == null ? 0 : agentsList.size();
+	}
+
+	/** True when a run may be initialized (for automation). */
+	boolean isReadyToInitialize()
+	{
+		return initializeButton != null && initializeButton.isEnabled();
 	}
 
 	void beginObservatoryAutomation(
@@ -7625,8 +7711,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		myAgent.postGuiEvent(ge);
 	}
 
-	public void appendResult(String resultText)
+	public void appendResult(final String resultText)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					appendResult(resultText);
+				}
+			});
+			return;
+		}
 		resultArea.append(resultText+"\n");
 		captureRunAccuracyLine(resultText);
 		updateStatusFromLog(resultText);
@@ -7821,8 +7919,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		previousResultArea.append(resultText+"\n");
 	}
 
-	public void appendRecommendation(String recommendationText)
+	public void appendRecommendation(final String recommendationText)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					appendRecommendation(recommendationText);
+				}
+			});
+			return;
+		}
 		final String textToAppend = recommendationText == null ? "" : recommendationText;
 		final ArrayList<RecommendationResult> parsedResults = parseRecommendationResults(textToAppend);
 		Runnable update = new Runnable() {
@@ -7845,13 +7955,35 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 	}
 
-	public void appendRecommendationResult(
-			final RecommendationResultPayload payload,
-			final int recommendationLimit)
+	public void appendRecommendationResult(final RecommendationResultPayload payload, final int recommendationLimit)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					appendRecommendationResult(payload, recommendationLimit);
+				}
+			});
+			return;
+		}
 		if (payload == null)
 		{
 			return;
+		}
+		//Score the delivered list against the dataset's own ground truth. This only
+		//observes, and a fault in measurement must never stop a result reaching the
+		//user, so it cannot throw into the delivery path.
+		try
+		{
+			RecommendationQualityEvaluator.record(payload, recommendationLimit);
+		}
+		catch (RuntimeException measurementFailure)
+		{
+			System.err.println("Recommendation quality measurement skipped: "
+					+ measurementFailure);
 		}
 		Runnable update = new Runnable() {
 			public void run()
@@ -7875,8 +8007,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		grabTwitterResultArea.append(resultText+"\n");
 	}
 	
-	public void appendUserGenTweetsResult(String resultText)
+	public void appendUserGenTweetsResult(final String resultText)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					appendUserGenTweetsResult(resultText);
+				}
+			});
+			return;
+		}
 		final String line = resultText == null ? "" : resultText;
 		Runnable update = new Runnable() {
 			public void run()
@@ -8319,6 +8463,18 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	public void enableAllButtons()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					enableAllButtons();
+				}
+			});
+			return;
+		}
 		startButton.setEnabled(simulatorInitialized
 				&& !simulatorInitializationInProgress);
 		initializeButton.setEnabled(true);
@@ -8329,6 +8485,18 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void disableStartButton()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					disableStartButton();
+				}
+			});
+			return;
+		}
 		if (startButton.isEnabled())
 		{
 			startButton.setEnabled(false);
@@ -8348,6 +8516,18 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	public void enableStartButton()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					enableStartButton();
+				}
+			});
+			return;
+		}
 		if (!simulatorInitialized || simulatorInitializationInProgress)
 		{
 			startButton.setEnabled(false);
@@ -8373,6 +8553,18 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void disableUserGenSimButtons()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					disableUserGenSimButtons();
+				}
+			});
+			return;
+		}
 		changePerformanceButton.setEnabled(false);
 		dataCollectionButton.setEnabled(false);
 		loadCorpusButton.setEnabled(false);
@@ -8391,14 +8583,38 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void changeRecommendUserTitle()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					changeRecommendUserTitle();
+				}
+			});
+			return;
+		}
 		String recommendingUserName = agentsList.get(indexToRecommend);
 		String newRecommendationTitle = "Recommendations for User: " + recommendingUserName;
 		recommendationTitle.setTitle(newRecommendationTitle);
 		this.repaint();
 	}
 	
-	public void changeUserListTitle(int readFrom)
+	public void changeUserListTitle(final int readFrom)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					changeUserListTitle(readFrom);
+				}
+			});
+			return;
+		}
 		if (readFrom == FROM_GENERATION)
 		{
 			agentsListTitle.setTitle("List of Generated Users");
@@ -8421,16 +8637,63 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	public void disableList()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					disableList();
+				}
+			});
+			return;
+		}
 		showAgentsList.setEnabled(false);
 	}
 
 	public void enableList()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					enableList();
+				}
+			});
+			return;
+		}
 		showAgentsList.setEnabled(true);
 	}
 
-	public void updateList(ArrayList<String> listOfAgents)
+	public void updateList(final ArrayList<String> listOfAgents)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Synchronous: the controller chooses targets from this list next.
+			try
+			{
+				SwingUtilities.invokeAndWait(new Runnable()
+				{
+					public void run()
+					{
+						updateList(listOfAgents);
+					}
+				});
+			}
+			catch (InterruptedException interrupted)
+			{
+				Thread.currentThread().interrupt();
+			}
+			catch (java.lang.reflect.InvocationTargetException failure)
+			{
+				throw new IllegalStateException("Could not update the user list.", failure.getCause());
+			}
+			return;
+		}
 		agentsList.clear();
 		System.out.println("listOfAgents.size(): "+listOfAgents.size());
 		for (int i = 0; i < listOfAgents.size(); i++){
@@ -8446,6 +8709,18 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	
 	public void reselectRecommendee()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					reselectRecommendee();
+				}
+			});
+			return;
+		}
 		if (agentsList.get(indexToRecommend).equals(recommendeeName))  // after && was added by Sepide
 		{
 			showAgentsList.setSelectedIndex(indexToRecommend);
@@ -8551,8 +8826,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		return RecommendationModeSupport.algorithmName(algorithm);
 	}
 
-	public void setTPTime(double tpTime)
+	public void setTPTime(final double tpTime)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					setTPTime(tpTime);
+				}
+			});
+			return;
+		}
 		ensureCurrentTiming();
 		countRecServersTP++;
 		if (countRecServersTP <= numNodes)
@@ -8560,8 +8847,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		currentTiming.setTPTime(currentMaxTPTime);
 	}
 
-	public void setTfidfTime(double tfidfTime)
+	public void setTfidfTime(final double tfidfTime)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					setTfidfTime(tfidfTime);
+				}
+			});
+			return;
+		}
 		ensureCurrentTiming();
 		countRecServersTfidf++;
 		if (countRecServersTfidf <= numNodes)
@@ -8569,8 +8868,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		currentTiming.setTFIDFTime(currentMaxTfidfTime);
 	}
 
-	public void setAlgorithmTime(double algorithmTime)
+	public void setAlgorithmTime(final double algorithmTime)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					setAlgorithmTime(algorithmTime);
+				}
+			});
+			return;
+		}
 		ensureCurrentTiming();
 		countRecServersAlgorithm++;
 		if (countRecServersAlgorithm <= numNodes)
@@ -8586,8 +8897,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			return time1;
 	}
 
-	public void addMessagePassingTime(long messagePassingTime)
+	public void addMessagePassingTime(final long messagePassingTime)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					addMessagePassingTime(messagePassingTime);
+				}
+			});
+			return;
+		}
 		String messagePassingResult = "";
 		messagePassingResult = "MAX Message Passing: " + messagePassingTime + " ms";
 		currentMessagePassingTime = messagePassingTime;
@@ -8605,8 +8928,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 	}
 	
-	public void addMessagePassingCost(int messagePassingCost)
+	public void addMessagePassingCost(final int messagePassingCost)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					addMessagePassingCost(messagePassingCost);
+				}
+			});
+			return;
+		}
 		String messagePassingResult = "";
 		messagePassingResult = "TOTAL Messages Cost: " + messagePassingCost + " bytes";
 		currentMessagePassingCost = messagePassingCost;
@@ -8625,8 +8960,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	}
 
 	//Also works for cosine similarity too, just naming needs changing
-	public void addKmeansMergeTime(long kmeansMergeTime)
+	public void addKmeansMergeTime(final long kmeansMergeTime)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					addKmeansMergeTime(kmeansMergeTime);
+				}
+			});
+			return;
+		}
 		long kmeansMergeTimeMs = kmeansMergeTime / 1000000;
 		System.out.println("nanoseconds: " + kmeansMergeTime);
 		System.out.println("merge time: " + kmeansMergeTimeMs+ " ms");
@@ -8636,8 +8983,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	}
 
 	//Also works for cosine similarity too, just naming needs changing
-	public void addKmeansMergeTimeNano(long kmeansMergeTime)
+	public void addKmeansMergeTimeNano(final long kmeansMergeTime)
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					addKmeansMergeTimeNano(kmeansMergeTime);
+				}
+			});
+			return;
+		}
 		String kmeansMergeResult = "Merge Message Time: ";
 		kmeansMergeResult += kmeansMergeTime + " ns";
 		appendResult(kmeansMergeResult);
@@ -8645,6 +9004,18 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	public void addTiming()
 	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			//Agents call this from their own threads; Swing is single-threaded.
+			SwingUtilities.invokeLater(new Runnable()
+			{
+				public void run()
+				{
+					addTiming();
+				}
+			});
+			return;
+		}
 		ensureCurrentTiming();
 		timings.add(currentTiming);
 		if (timings.size() < 2)

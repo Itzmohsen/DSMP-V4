@@ -2182,7 +2182,7 @@ final class SimulatorHelpPanel extends JPanel
 			case RecommendationModeSupport.SVM:
 				return "Weka SMO";
 			case RecommendationModeSupport.SCALABLE_SVM:
-				return "Linear SVM";
+				return "Passive-aggressive linear";
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
 				return "Temporal graph foundation";
 			case RecommendationModeSupport.DOC2VEC:
@@ -2590,13 +2590,13 @@ final class SimulatorHelpPanel extends JPanel
 				case RecommendationModeSupport.SVM:
 					return "Weka SMO class scores";
 			case RecommendationModeSupport.SCALABLE_SVM:
-				return "sparse linear class scores";
+				return "sparse passive-aggressive margins";
 			case RecommendationModeSupport.MLP:
 				return "neural class scores";
 			case RecommendationModeSupport.DOC2VEC:
 				return "document-vector similarity";
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
-				return "text + graph + time foundation score";
+				return "fixed-weight text + graph + time score";
 			default:
 				return "legacy relationship score";
 		}

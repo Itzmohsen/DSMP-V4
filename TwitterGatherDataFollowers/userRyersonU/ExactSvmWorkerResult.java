@@ -18,6 +18,7 @@ final class ExactSvmWorkerResult implements Serializable
 	private final ArrayList<double[]> distributions;
 	private final double testAccuracyPercent;
 	private final String confusionMatrix;
+	private long workerCpuNanos = -1L;
 
 	ExactSvmWorkerResult(
 			List<String> classNames,
@@ -67,5 +68,16 @@ final class ExactSvmWorkerResult implements Serializable
 	String getConfusionMatrix()
 	{
 		return confusionMatrix;
+	}
+
+	/** CPU time the worker process spent training and scoring, or -1 if unknown. */
+	long getWorkerCpuNanos()
+	{
+		return workerCpuNanos;
+	}
+
+	void setWorkerCpuNanos(long nanos)
+	{
+		workerCpuNanos = nanos;
 	}
 }

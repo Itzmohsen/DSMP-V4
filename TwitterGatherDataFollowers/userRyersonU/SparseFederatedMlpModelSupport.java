@@ -69,6 +69,8 @@ final class SparseFederatedMlpModelSupport
 		private final double[][][] weights;
 		private final double[][] biases;
 		private int sampleCount;
+		/** Seed for the per-epoch example shuffle; 0 on models built by averaging. */
+		private long trainingSeed;
 
 		private SparseMlpModel(
 				int inputSize,
@@ -119,13 +121,15 @@ final class SparseFederatedMlpModelSupport
 				}
 				previousSize = currentSize;
 			}
-			return new SparseMlpModel(
+			SparseMlpModel model = new SparseMlpModel(
 					safeInputSize,
 					safeHiddenLayerCount,
 					safeHiddenSize,
 					safeOutputSize,
 					weights,
 					biases);
+			model.trainingSeed = seed;
+			return model;
 		}
 
 		void train(
@@ -146,15 +150,38 @@ final class SparseFederatedMlpModelSupport
 			double safeFedProxMu = Math.max(0.0, fedProxMu);
 			double[][][] referenceWeights = deepCopy(weights);
 			double[][] referenceBiases = copyBiases(biases);
+
+			//Stochastic gradient descent assumes examples arrive in a random order.
+			//The training set is built class by class, so without this the last
+			//class seen dominates the final weights and the first class is never
+			//predicted. The shuffle is seeded, so runs stay reproducible.
+			int[] order = new int[examples.size()];
+			for (int index = 0; index < order.length; index++)
+			{
+				order[index] = index;
+			}
 			for (int epoch = 0; epoch < safeEpochs; epoch++)
 			{
-				for (TrainingExample example : examples)
+				shuffleOrder(order, new Random(trainingSeed + epoch * 0x9E3779B9L));
+				for (int index : order)
 				{
-					trainOne(example, safeLearningRate, safeL2,
+					trainOne(examples.get(index), safeLearningRate, safeL2,
 							safeFedProxMu, referenceWeights, referenceBiases);
 				}
 			}
 			sampleCount = examples.size();
+		}
+
+		/** Fisher-Yates over an index array, so the caller's list is untouched. */
+		private static void shuffleOrder(int[] order, Random random)
+		{
+			for (int i = order.length - 1; i > 0; i--)
+			{
+				int j = random.nextInt(i + 1);
+				int swap = order[i];
+				order[i] = order[j];
+				order[j] = swap;
+			}
 		}
 
 		double[] predict(Map<Integer,Double> sparseFeatures)

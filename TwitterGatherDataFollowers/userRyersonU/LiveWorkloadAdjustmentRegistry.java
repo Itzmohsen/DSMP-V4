@@ -6,6 +6,31 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Operator controls for a running simulation, as seen by the panels.
+ *
+ * Every control is applied through the run's {@link SchedulingRunContext}, so
+ * it takes effect at once on every open work phase and on input routing:
+ *
+ * <ul>
+ * <li>pause: the node stops claiming queue work and holds at its next safe
+ *     boundary; its input is held;</li>
+ * <li>unavailable: the node takes no new queue work or input users, its queued
+ *     units move to other nodes, and its own data phases keep running;</li>
+ * <li>drain: unavailable, plus its running queue units are revoked and
+ *     restarted elsewhere (their late results are discarded), and its future
+ *     input users go to the other nodes;</li>
+ * <li>redirect: up to N not-started units move to one node and it receives the
+ *     next N new input users; nobody else waits;</li>
+ * <li>capacity: the node's speed changes for future work and dilation;</li>
+ * <li>policy: every not-started unit follows another policy;</li>
+ * <li>action window: each claimed unit waits before running so controls can be
+ *     tried interactively; the run's timings are then marked interactive.</li>
+ * </ul>
+ *
+ * Refused controls (for example disabling the last available node) are
+ * recorded in the run's event log with the reason.
+ */
 final class LiveWorkloadAdjustmentRegistry
 {
 	static final class NodeControl
@@ -13,66 +38,24 @@ final class LiveWorkloadAdjustmentRegistry
 		private final int nodeIndex;
 		private final boolean paused;
 		private final boolean unavailable;
+		private final boolean draining;
 		private final double capacityScale;
 		private final int drainTargetNode;
 
-		private NodeControl(
-				int nodeIndex,
-				boolean paused,
-				boolean unavailable,
-				double capacityScale,
-				int drainTargetNode)
+		private NodeControl(int nodeIndex, boolean paused, boolean unavailable,
+				boolean draining, double capacityScale, int drainTargetNode)
 		{
 			this.nodeIndex = Math.max(1, nodeIndex);
 			this.paused = paused;
 			this.unavailable = unavailable;
-			this.capacityScale = clamp(capacityScale, 0.05, 4.0);
+			this.draining = draining;
+			this.capacityScale = capacityScale;
 			this.drainTargetNode = Math.max(0, drainTargetNode);
 		}
 
 		static NodeControl defaults(int nodeIndex)
 		{
-			return new NodeControl(nodeIndex, false, false, 1.0, 0);
-		}
-
-		NodeControl withPaused(boolean value)
-		{
-			return new NodeControl(
-					nodeIndex,
-					value,
-					unavailable,
-					capacityScale,
-					value ? drainTargetNode : 0);
-		}
-
-		NodeControl withUnavailable(boolean value)
-		{
-			return new NodeControl(
-					nodeIndex,
-					paused,
-					value,
-					capacityScale,
-					value ? 0 : drainTargetNode);
-		}
-
-		NodeControl withCapacityScale(double value)
-		{
-			return new NodeControl(
-					nodeIndex,
-					paused,
-					unavailable,
-					value,
-					drainTargetNode);
-		}
-
-		NodeControl withDrainTargetNode(int targetNode)
-		{
-			return new NodeControl(
-					nodeIndex,
-					true,
-					unavailable,
-					capacityScale,
-					Math.max(0, targetNode));
+			return new NodeControl(nodeIndex, false, false, false, 1.0, 0);
 		}
 
 		int getNodeIndex()
@@ -102,32 +85,31 @@ final class LiveWorkloadAdjustmentRegistry
 
 		boolean isDraining()
 		{
-			return paused && drainTargetNode > 0;
+			return draining;
 		}
 
 		boolean isDefault()
 		{
-			return !paused
-					&& !unavailable
-					&& drainTargetNode <= 0
-					&& Math.abs(capacityScale - 1.0) < 0.0000001;
+			return !paused && !unavailable && !draining
+					&& Math.abs(capacityScale - 1.0) < 1e-9;
 		}
 
 		String statusLabel()
 		{
+			if (draining)
+			{
+				return drainTargetNode > 0
+						? "drained (input prefers node " + drainTargetNode + ")" : "drained";
+			}
 			if (unavailable)
 			{
 				return "unavailable";
-			}
-			if (isDraining())
-			{
-				return "draining to Node " + drainTargetNode;
 			}
 			if (paused)
 			{
 				return "paused";
 			}
-			if (Math.abs(capacityScale - 1.0) > 0.0000001)
+			if (Math.abs(capacityScale - 1.0) > 1e-9)
 			{
 				return Math.round(capacityScale * 100.0) + "% capacity";
 			}
@@ -143,7 +125,7 @@ final class LiveWorkloadAdjustmentRegistry
 
 		private ControlEvent(long time, String action, String detail)
 		{
-			this.time = Math.max(0L, time);
+			this.time = time;
 			this.action = action == null ? "" : action;
 			this.detail = detail == null ? "" : detail;
 		}
@@ -174,27 +156,25 @@ final class LiveWorkloadAdjustmentRegistry
 		private final int redirectRemaining;
 		private final int pacingDelayMs;
 		private final List<ControlEvent> events;
+		private final boolean activeControls;
+		private final String modeLabel;
 
-		private Snapshot(
-				String runId,
-				int nodeCount,
-				Map<Integer,NodeControl> controls,
-				SchedulerLabEngine.SchedulingPolicy policyOverride,
-				int redirectTargetNode,
-				int redirectRemaining,
-				int pacingDelayMs,
-				List<ControlEvent> events)
+		private Snapshot(String runId, int nodeCount, Map<Integer,NodeControl> controls,
+				SchedulerLabEngine.SchedulingPolicy policyOverride, int redirectTargetNode,
+				int redirectRemaining, int pacingDelayMs, List<ControlEvent> events,
+				boolean activeControls, String modeLabel)
 		{
-			this.runId = normalizeRunId(runId);
+			this.runId = runId == null ? "" : runId;
 			this.nodeCount = Math.max(1, nodeCount);
 			this.controls = Collections.unmodifiableMap(
 					new LinkedHashMap<Integer,NodeControl>(controls));
 			this.policyOverride = policyOverride;
-			this.redirectTargetNode = Math.max(0, redirectTargetNode);
-			this.redirectRemaining = Math.max(0, redirectRemaining);
-			this.pacingDelayMs = clampDelay(pacingDelayMs);
-			this.events = Collections.unmodifiableList(
-					new ArrayList<ControlEvent>(events));
+			this.redirectTargetNode = redirectTargetNode;
+			this.redirectRemaining = redirectRemaining;
+			this.pacingDelayMs = pacingDelayMs;
+			this.events = Collections.unmodifiableList(new ArrayList<ControlEvent>(events));
+			this.activeControls = activeControls;
+			this.modeLabel = modeLabel == null ? "" : modeLabel;
 		}
 
 		String getRunId()
@@ -232,12 +212,15 @@ final class LiveWorkloadAdjustmentRegistry
 			return events;
 		}
 
+		String getModeLabel()
+		{
+			return modeLabel;
+		}
+
 		NodeControl controlForNode(int nodeIndex)
 		{
 			NodeControl control = controls.get(Integer.valueOf(nodeIndex));
-			return control == null
-					? NodeControl.defaults(nodeIndex)
-					: control;
+			return control == null ? NodeControl.defaults(nodeIndex) : control;
 		}
 
 		boolean isPaused(int nodeIndex)
@@ -263,165 +246,141 @@ final class LiveWorkloadAdjustmentRegistry
 
 		boolean hasActiveControls()
 		{
-			if (policyOverride != null || redirectRemaining > 0
-					|| pacingDelayMs > 0)
-			{
-				return true;
-			}
-			for (NodeControl control : controls.values())
-			{
-				if (control != null && !control.isDefault())
-				{
-					return true;
-				}
-			}
-			return false;
+			return activeControls;
 		}
 
 		String compactSummary()
 		{
+			if (!activeControls)
+			{
+				return "No live workload overrides.";
+			}
+			StringBuilder builder = new StringBuilder();
+			if (policyOverride != null)
+			{
+				builder.append("policy ").append(policyOverride.getLabel());
+			}
 			int paused = 0;
-			int draining = 0;
 			int unavailable = 0;
+			int draining = 0;
 			int throttled = 0;
 			for (NodeControl control : controls.values())
 			{
-				if (control.isUnavailable())
-				{
-					unavailable++;
-				}
-				else if (control.isDraining())
+				if (control.isDraining())
 				{
 					draining++;
+				}
+				else if (control.isUnavailable())
+				{
+					unavailable++;
 				}
 				else if (control.isPaused())
 				{
 					paused++;
 				}
-				if (Math.abs(control.getCapacityScale() - 1.0) > 0.0000001)
+				if (Math.abs(control.getCapacityScale() - 1.0) > 1e-9)
 				{
 					throttled++;
 				}
 			}
-			StringBuilder builder = new StringBuilder();
-			if (!hasActiveControls())
-			{
-				return "No live workload overrides.";
-			}
-			if (policyOverride != null)
-			{
-				builder.append("policy ")
-						.append(policyOverride.getLabel());
-			}
+			append(builder, paused, "paused");
+			append(builder, unavailable, "unavailable");
+			append(builder, draining, "drained");
+			append(builder, throttled, "capacity override");
 			if (redirectRemaining > 0)
 			{
-				appendSeparator(builder);
-				builder.append("next ")
-						.append(redirectRemaining)
-						.append(" pending work item")
-						.append(redirectRemaining == 1 ? "" : "s")
-						.append(" to Node ")
-						.append(redirectTargetNode);
-			}
-			if (paused > 0)
-			{
-				appendSeparator(builder);
-				builder.append(paused).append(" paused");
-			}
-			if (draining > 0)
-			{
-				appendSeparator(builder);
-				builder.append(draining).append(" draining");
-			}
-			if (unavailable > 0)
-			{
-				appendSeparator(builder);
-				builder.append(unavailable).append(" unavailable");
-			}
-			if (throttled > 0)
-			{
-				appendSeparator(builder);
-				builder.append(throttled).append(" capacity override")
-						.append(throttled == 1 ? "" : "s");
+				separate(builder);
+				builder.append("next ").append(redirectRemaining)
+						.append(" input user(s) to node ").append(redirectTargetNode);
 			}
 			if (pacingDelayMs > 0)
 			{
-				appendSeparator(builder);
-				builder.append("action window ")
-						.append(formatDelay(pacingDelayMs));
+				separate(builder);
+				builder.append("action window ").append(pacingDelayMs).append(" ms");
 			}
 			return builder.toString();
+		}
+
+		private static void append(StringBuilder builder, int count, String label)
+		{
+			if (count > 0)
+			{
+				separate(builder);
+				builder.append(count).append(' ').append(label);
+			}
+		}
+
+		private static void separate(StringBuilder builder)
+		{
+			if (builder.length() > 0)
+			{
+				builder.append(" | ");
+			}
 		}
 	}
 
 	private static final Object LOCK = new Object();
-	private static final int MAX_EVENTS = 80;
-	private static final int MAX_PACING_DELAY_MS = 15000;
-	private static String activeRunId = "";
-	private static int activeNodeCount = 1;
 	private static int nextRunPacingDelayMs;
-	private static int pacingDelayMs;
-	private static final LinkedHashMap<Integer,NodeControl> CONTROLS =
-			new LinkedHashMap<Integer,NodeControl>();
-	private static SchedulerLabEngine.SchedulingPolicy policyOverride;
-	private static int redirectTargetNode;
-	private static int redirectRemaining;
-	private static final ArrayList<ControlEvent> EVENTS =
-			new ArrayList<ControlEvent>();
 
 	private LiveWorkloadAdjustmentRegistry()
 	{
 	}
 
-	static void beginRun(String runId, int nodeCount)
-	{
-		synchronized (LOCK)
-		{
-			activeRunId = normalizeRunId(runId);
-			activeNodeCount = Math.max(1, nodeCount);
-			CONTROLS.clear();
-			policyOverride = null;
-			redirectTargetNode = 0;
-			redirectRemaining = 0;
-			pacingDelayMs = nextRunPacingDelayMs;
-			EVENTS.clear();
-			addEventLocked(
-					"run",
-					"Live workload adjustment reset for run "
-							+ activeRunId + ".");
-			if (pacingDelayMs > 0)
-			{
-				addEventLocked(
-						"action window",
-						"Every newly claimed queue work item pauses for "
-								+ formatDelay(pacingDelayMs)
-								+ " before scoring so live controls can be applied.");
-			}
-		}
-	}
-
+	/** Snapshot of the run's controls; an empty id means the latest run. */
 	static Snapshot snapshot(String runId)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context == null)
 		{
-			return snapshotLocked(runId);
+			int nodes = NodeCapacityRegistry.configuredNodeCount();
+			LinkedHashMap<Integer,NodeControl> controls = new LinkedHashMap<Integer,NodeControl>();
+			for (int node = 1; node <= nodes; node++)
+			{
+				controls.put(Integer.valueOf(node), NodeControl.defaults(node));
+			}
+			return new Snapshot(runId, nodes, controls, null, 0, 0,
+					nextRunPacingDelayMs(), Collections.<ControlEvent>emptyList(), false, "");
 		}
+		LinkedHashMap<Integer,NodeControl> controls = new LinkedHashMap<Integer,NodeControl>();
+		for (int node = 1; node <= context.getNodeCount(); node++)
+		{
+			WorkDispatcher.NodeState state = context.nodeState(node);
+			boolean draining = context.isDraining(node);
+			controls.put(Integer.valueOf(node), new NodeControl(
+					node,
+					state == WorkDispatcher.NodeState.PAUSED,
+					state == WorkDispatcher.NodeState.UNAVAILABLE,
+					draining,
+					context.capacityScale(node),
+					draining ? context.getDrainPreferredTarget() : 0));
+		}
+		ArrayList<ControlEvent> events = new ArrayList<ControlEvent>();
+		for (SchedulingRunContext.ControlEvent event : context.events())
+		{
+			events.add(new ControlEvent(event.getTime(), event.getAction(), event.getDetail()));
+		}
+		return new Snapshot(
+				context.getRunId(),
+				context.getNodeCount(),
+				controls,
+				context.getPolicyOverride(),
+				context.getRedirectTarget(),
+				context.getRedirectRemainingUsers(),
+				context.getPacingMs(),
+				events,
+				context.hasActiveControls(),
+				context.getMode().getLabel());
 	}
 
 	static Snapshot snapshot()
 	{
-		synchronized (LOCK)
-		{
-			return snapshotLocked(activeRunId);
-		}
+		return snapshot("");
 	}
 
 	static String activeRunId()
 	{
-		synchronized (LOCK)
-		{
-			return activeRunId;
-		}
+		SchedulingRunContext context = SchedulingRuntime.active();
+		return context == null ? "" : context.getRunId();
 	}
 
 	static int nextRunPacingDelayMs()
@@ -432,464 +391,198 @@ final class LiveWorkloadAdjustmentRegistry
 		}
 	}
 
+	/** Arms an action window for the next initialized run only. */
 	static void setNextRunPacingDelayMs(int delayMs)
 	{
 		synchronized (LOCK)
 		{
-			nextRunPacingDelayMs = clampDelay(delayMs);
+			nextRunPacingDelayMs = Math.max(0, Math.min(15000, delayMs));
+		}
+	}
+
+	/** Reads and disarms the next-run action window (called at run creation). */
+	static int consumeNextRunPacingDelayMs()
+	{
+		synchronized (LOCK)
+		{
+			int value = nextRunPacingDelayMs;
+			nextRunPacingDelayMs = 0;
+			return value;
 		}
 	}
 
 	static void setPacingDelayMs(String runId, int delayMs)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context != null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			pacingDelayMs = clampDelay(delayMs);
-			addEventLocked(
-					pacingDelayMs > 0 ? "action window" : "action window off",
-					pacingDelayMs > 0
-							? "Newly claimed queue work items pause for "
-									+ formatDelay(pacingDelayMs)
-									+ " before scoring."
-							: "Queue claims continue immediately.");
+			context.setPacingMs(delayMs);
 		}
 	}
 
-	static void applyClaimPacingDelay(String runId)
-			throws InterruptedException
+	/** Called by a lane after it claims a unit; sleeps the action window, if any. */
+	static void applyClaimPacingDelay(String runId, int node)
 	{
-		int delay;
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context != null && node >= 1 && node <= context.getNodeCount())
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			delay = pacingDelayMs;
-		}
-		if (delay <= 0)
-		{
-			return;
-		}
-		long deadline = System.currentTimeMillis() + delay;
-		while (true)
-		{
-			long remaining = deadline - System.currentTimeMillis();
-			if (remaining <= 0L)
-			{
-				return;
-			}
-			Thread.sleep(Math.min(100L, remaining));
+			context.emulator(node).pacing(context.getPacingMs());
 		}
 	}
 
-	static void waitUntilNodeEligible(
-			String runId,
-			int nodeIndex,
-			String phaseLabel) throws InterruptedException
+	/** Holds a node at a safe phase boundary while it is paused. */
+	static void waitUntilNodeEligible(String runId, int nodeIndex, String phaseLabel)
 	{
-		boolean loggedWait = false;
-		String safePhase = phaseLabel == null || phaseLabel.trim().length() == 0
-				? "safe phase boundary" : phaseLabel.trim();
-		while (true)
+		SchedulingRunContext context = resolve(runId);
+		if (context != null && nodeIndex >= 1 && nodeIndex <= context.getNodeCount())
 		{
-			synchronized (LOCK)
-			{
-				if (!matchesActiveRunLocked(runId))
-				{
-					return;
-				}
-				int safeNode = safeNode(nodeIndex);
-				NodeControl control = controlLocked(safeNode);
-				if (!control.isPaused() && !control.isUnavailable())
-				{
-					if (loggedWait)
-					{
-						addEventLocked(
-								"phase resumed",
-								"Node " + safeNode
-										+ " resumed from " + safePhase + ".");
-					}
-					return;
-				}
-				if (!loggedWait)
-				{
-					loggedWait = true;
-					addEventLocked(
-							"phase paused",
-							"Node " + safeNode + " is waiting at "
-									+ safePhase + " while "
-									+ control.statusLabel() + ".");
-				}
-			}
-			Thread.sleep(200L);
+			context.awaitNotPaused(nodeIndex, phaseLabel);
 		}
 	}
 
-	static void setPaused(String runId, int nodeIndex, boolean paused)
+	static boolean setPaused(String runId, int nodeIndex, boolean paused)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context == null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			int safeNode = safeNode(nodeIndex);
-			NodeControl control = controlLocked(safeNode).withPaused(paused);
-			CONTROLS.put(Integer.valueOf(safeNode), control);
-			addEventLocked(
-					paused ? "pause" : "resume",
-					"Node " + safeNode + (paused
-							? " will stop claiming new pending work items."
-							: " can claim pending work items again."));
+			return false;
+		}
+		try
+		{
+			context.setPaused(nodeIndex, paused);
+			return true;
+		}
+		catch (RuntimeException refused)
+		{
+			context.recordRejected(paused ? "pause" : "resume", refused.getMessage());
+			return false;
 		}
 	}
 
-	static void setUnavailable(String runId, int nodeIndex, boolean unavailable)
+	static boolean setUnavailable(String runId, int nodeIndex, boolean unavailable)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context == null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			int safeNode = safeNode(nodeIndex);
-			NodeControl control = controlLocked(safeNode)
-					.withUnavailable(unavailable);
-			CONTROLS.put(Integer.valueOf(safeNode), control);
-			if (redirectTargetNode == safeNode && unavailable)
-			{
-				redirectTargetNode = 0;
-				redirectRemaining = 0;
-			}
-			addEventLocked(
-					unavailable ? "unavailable" : "available",
-					"Node " + safeNode + (unavailable
-							? " is marked unavailable for future work claims."
-							: " is available for pending work again."));
+			return false;
+		}
+		try
+		{
+			context.setUnavailable(nodeIndex, unavailable);
+			return true;
+		}
+		catch (RuntimeException refused)
+		{
+			context.recordRejected(unavailable ? "unavailable" : "available", refused.getMessage());
+			return false;
 		}
 	}
 
-	static int drainNodeTo(
-			String runId,
-			int sourceNodeIndex,
-			int targetNodeIndex,
-			int pendingCount)
+	/**
+	 * Drains {@code sourceNodeIndex}; its future input prefers
+	 * {@code targetNodeIndex}. Returns the number of revoked running units, or
+	 * -1 when the drain was refused.
+	 */
+	static int drainNodeTo(String runId, int sourceNodeIndex, int targetNodeIndex, int ignored)
 	{
-		int sourceNode;
-		int targetNode;
-		int redirectCount;
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context == null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return 0;
-			}
-			sourceNode = safeNode(sourceNodeIndex);
-			targetNode = safeNode(targetNodeIndex);
-			if (sourceNode == targetNode)
-			{
-				addEventLocked(
-						"drain blocked",
-						"Node " + sourceNode
-								+ " cannot drain work to itself.");
-				return 0;
-			}
-			NodeControl targetControl = controlLocked(targetNode);
-			if (targetControl.isUnavailable() || targetControl.isPaused())
-			{
-				addEventLocked(
-						"drain blocked",
-						"Node " + targetNode
-								+ " cannot receive drained work while "
-								+ targetControl.statusLabel() + ".");
-				return 0;
-			}
-			CONTROLS.put(
-					Integer.valueOf(sourceNode),
-					controlLocked(sourceNode).withDrainTargetNode(targetNode));
-			redirectTargetNode = targetNode;
-			redirectCount = Math.max(1, Math.min(1000000, pendingCount));
-			redirectRemaining = redirectCount;
-			addEventLocked(
-					"drain started",
-					"Node " + sourceNode
-							+ " is draining to Node " + targetNode
-							+ "; current safe-boundary work will be requeued.");
+			return -1;
 		}
-
-		int moved = RecommendationWorkQueueRegistry.requeueActiveWorkForNode(
-				runId,
-				sourceNode,
-				targetNode);
-		synchronized (LOCK)
+		try
 		{
-			if (matchesActiveRunLocked(runId))
-			{
-				addEventLocked(
-						"drain",
-						"Node " + sourceNode + " drained "
-								+ moved + " active safe-boundary work item"
-								+ (moved == 1 ? "" : "s")
-								+ " to the waiting queue; next "
-								+ redirectCount + " pending work item"
-								+ (redirectCount == 1 ? "" : "s")
-								+ " prefer Node " + targetNode + ".");
-			}
+			return context.drain(sourceNodeIndex, targetNodeIndex);
 		}
-		return moved;
-	}
-
-	static void setCapacityScale(String runId, int nodeIndex, double capacityScale)
-	{
-		synchronized (LOCK)
+		catch (RuntimeException refused)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			int safeNode = safeNode(nodeIndex);
-			double safeScale = clamp(capacityScale, 0.05, 4.0);
-			CONTROLS.put(
-					Integer.valueOf(safeNode),
-					controlLocked(safeNode).withCapacityScale(safeScale));
-			addEventLocked(
-					"capacity",
-					"Node " + safeNode + " future-claim capacity set to "
-							+ Math.round(safeScale * 100.0) + "%.");
+			context.recordRejected("drain", refused.getMessage());
+			return -1;
 		}
 	}
 
-	static void setPolicyOverride(
-			String runId,
-			SchedulerLabEngine.SchedulingPolicy policy)
+	static boolean setCapacityScale(String runId, int nodeIndex, double capacityScale)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context == null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			policyOverride = policy;
-			addEventLocked(
-					"policy",
-					policy == null
-							? "Remaining pending work uses the scheduler plan policy again."
-							: "Remaining pending work now uses "
-									+ policy.getLabel() + ".");
+			return false;
+		}
+		try
+		{
+			context.setCapacityScale(nodeIndex, capacityScale);
+			return true;
+		}
+		catch (RuntimeException refused)
+		{
+			context.recordRejected("capacity", refused.getMessage());
+			return false;
 		}
 	}
 
-	static void redirectPendingToNode(
-			String runId,
-			int nodeIndex,
-			int shardCount)
+	static boolean setPolicyOverride(String runId, SchedulerLabEngine.SchedulingPolicy policy)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context == null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			int safeNode = safeNode(nodeIndex);
-			NodeControl control = controlLocked(safeNode);
-			if (control.isUnavailable() || control.isPaused())
-			{
-				addEventLocked(
-						"redirect blocked",
-						"Node " + safeNode
-								+ " cannot receive redirected pending work while "
-								+ control.statusLabel() + ".");
-				return;
-			}
-			redirectTargetNode = safeNode;
-			redirectRemaining = Math.max(1, Math.min(1000000, shardCount));
-			addEventLocked(
-					"redirect",
-					"Next " + redirectRemaining + " pending work item"
-							+ (redirectRemaining == 1 ? "" : "s")
-							+ " prefer Node " + redirectTargetNode
-							+ " at claim time.");
+			return false;
+		}
+		try
+		{
+			context.setPolicyOverride(policy);
+			return true;
+		}
+		catch (RuntimeException refused)
+		{
+			context.recordRejected("policy", refused.getMessage());
+			return false;
+		}
+	}
+
+	/** Returns the number of queued units moved, or -1 when refused. */
+	static int redirectPendingToNode(String runId, int nodeIndex, int count)
+	{
+		SchedulingRunContext context = resolve(runId);
+		if (context == null)
+		{
+			return -1;
+		}
+		try
+		{
+			return context.redirect(nodeIndex, count);
+		}
+		catch (RuntimeException refused)
+		{
+			context.recordRejected("redirect", refused.getMessage());
+			return -1;
 		}
 	}
 
 	static void clearRedirect(String runId)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context != null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			redirectTargetNode = 0;
-			redirectRemaining = 0;
-			addEventLocked("redirect", "Pending-shard redirect cleared.");
+			context.clearRedirect();
 		}
 	}
 
 	static void resetRunControls(String runId)
 	{
-		synchronized (LOCK)
+		SchedulingRunContext context = resolve(runId);
+		if (context != null)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return;
-			}
-			CONTROLS.clear();
-			policyOverride = null;
-			redirectTargetNode = 0;
-			redirectRemaining = 0;
-			pacingDelayMs = 0;
-			addEventLocked(
-					"reset",
-					"Live workload overrides cleared for the active run.");
+			context.resetControls();
 		}
 	}
 
-	static boolean noteClaimedByNode(String runId, int nodeIndex)
+	private static SchedulingRunContext resolve(String runId)
 	{
-		synchronized (LOCK)
+		if (runId == null || runId.trim().length() == 0)
 		{
-			if (!matchesActiveRunLocked(runId))
-			{
-				return false;
-			}
-			int safeNode = safeNode(nodeIndex);
-			if (redirectRemaining > 0 && redirectTargetNode == safeNode)
-			{
-				redirectRemaining--;
-				if (redirectRemaining <= 0)
-				{
-					redirectRemaining = 0;
-					redirectTargetNode = 0;
-					addEventLocked(
-							"redirect complete",
-							"Requested pending-shard redirect has been consumed.");
-				}
-				return true;
-			}
-			return false;
+			return SchedulingRuntime.latest();
 		}
-	}
-
-	static double adjustedWeight(
-			Snapshot snapshot,
-			int nodeIndex,
-			double baseWeight)
-	{
-		if (snapshot == null)
-		{
-			return Math.max(0.0, baseWeight);
-		}
-		NodeControl control = snapshot.controlForNode(nodeIndex);
-		if (control.isUnavailable() || control.isPaused())
-		{
-			return 0.0;
-		}
-		return Math.max(0.0, baseWeight)
-				* clamp(control.getCapacityScale(), 0.05, 4.0);
-	}
-
-	private static Snapshot snapshotLocked(String runId)
-	{
-		int safeNodes = Math.max(1, activeNodeCount);
-		LinkedHashMap<Integer,NodeControl> copy =
-				new LinkedHashMap<Integer,NodeControl>();
-		for (int node = 1; node <= safeNodes; node++)
-		{
-			copy.put(Integer.valueOf(node), controlLocked(node));
-		}
-		ArrayList<ControlEvent> events = new ArrayList<ControlEvent>(EVENTS);
-		Collections.reverse(events);
-		return new Snapshot(
-				matchesActiveRunLocked(runId) ? activeRunId : normalizeRunId(runId),
-				safeNodes,
-				copy,
-				policyOverride,
-				redirectTargetNode,
-				redirectRemaining,
-				pacingDelayMs,
-				events);
-	}
-
-	private static NodeControl controlLocked(int nodeIndex)
-	{
-		int safeNode = safeNode(nodeIndex);
-		NodeControl control = CONTROLS.get(Integer.valueOf(safeNode));
-		return control == null ? NodeControl.defaults(safeNode) : control;
-	}
-
-	private static boolean matchesActiveRunLocked(String runId)
-	{
-		String safeRun = normalizeRunId(runId);
-		return safeRun.length() == 0
-				|| activeRunId.length() == 0
-				|| activeRunId.equals(safeRun);
-	}
-
-	private static int safeNode(int nodeIndex)
-	{
-		return Math.max(1, Math.min(nodeIndex, Math.max(1, activeNodeCount)));
-	}
-
-	private static void addEventLocked(String action, String detail)
-	{
-		EVENTS.add(new ControlEvent(
-				System.currentTimeMillis(),
-				action,
-				detail));
-		while (EVENTS.size() > MAX_EVENTS)
-		{
-			EVENTS.remove(0);
-		}
-	}
-
-	private static String normalizeRunId(String runId)
-	{
-		return runId == null ? "" : runId.trim();
-	}
-
-	private static void appendSeparator(StringBuilder builder)
-	{
-		if (builder.length() > 0)
-		{
-			builder.append(" | ");
-		}
-	}
-
-	private static double clamp(
-			double value,
-			double minimum,
-			double maximum)
-	{
-		if (Double.isNaN(value) || Double.isInfinite(value))
-		{
-			return minimum;
-		}
-		return Math.max(minimum, Math.min(maximum, value));
-	}
-
-	private static int clampDelay(int value)
-	{
-		return Math.max(0, Math.min(MAX_PACING_DELAY_MS, value));
-	}
-
-	private static String formatDelay(int delayMs)
-	{
-		int safeDelay = clampDelay(delayMs);
-		if (safeDelay >= 1000 && safeDelay % 1000 == 0)
-		{
-			return (safeDelay / 1000) + " s";
-		}
-		if (safeDelay >= 1000)
-		{
-			return String.format(java.util.Locale.US, "%.1f s",
-					safeDelay / 1000.0);
-		}
-		return safeDelay + " ms";
+		SchedulingRunContext context = SchedulingRuntime.get(runId.trim());
+		return context != null ? context : null;
 	}
 }

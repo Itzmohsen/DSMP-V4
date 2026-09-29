@@ -90,6 +90,24 @@ public class CrossValidation {
         return evaluation;
     }
 
+    /**
+     * A fresh, independent set of evaluators for one fold.
+     *
+     * Mirrors the configuration installed by {@link #initialize}, so per-fold
+     * results are computed exactly as before but without cross-fold interference.
+     */
+    private Evaluation newFoldEvaluation() {
+        Evaluation foldEvaluation = new Evaluation();
+        if (multiLayerPerceptron.getOutputsCount() == 1) {
+            foldEvaluation.addEvaluator(new ClassifierEvaluator.Binary(0.5));
+        } else {
+            foldEvaluation.addEvaluator(
+                    new ClassifierEvaluator.MultiClass(dataSet.getColumnNames()));
+        }
+        foldEvaluation.addEvaluator(new ErrorEvaluator(new MeanSquaredError()));
+        return foldEvaluation;
+    }
+
     public void run() throws InterruptedException, ExecutionException {
 
         
@@ -166,6 +184,11 @@ public class CrossValidation {
         @Override
         public EvaluationResult call() {
             MultiLayerPerceptron multilayer = SerializationUtils.clone(this.multiLayerPerceptron);
+            // Each fold gets its own evaluators. The folds run concurrently on a
+            // thread pool, and Evaluation.evaluateDataSet resets and then
+            // accumulates into the evaluator's confusion matrix, so a shared
+            // instance let the folds overwrite each other's metrics.
+            Evaluation foldEvaluation = newFoldEvaluation();
 
             DataSet trainingSet = new DataSet(dataSet.size() - foldSize);
             DataSet testSet = new DataSet(foldSize);
@@ -181,9 +204,9 @@ public class CrossValidation {
                 }
             }
             multilayer.learn(trainingSet);
-            EvaluationResult evaluationResult = new EvaluationResult();
+            EvaluationResult evaluationResult =
+                    foldEvaluation.evaluateDataSet(multilayer, testSet);
             evaluationResult.setNeuralNetwork(multilayer);
-            evaluationResult = evaluation.evaluateDataSet(multilayer, testSet);
             return evaluationResult;
         }
 

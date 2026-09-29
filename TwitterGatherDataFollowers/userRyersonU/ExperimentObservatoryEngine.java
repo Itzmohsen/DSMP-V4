@@ -226,7 +226,10 @@ final class ExperimentObservatoryEngine
 		b.append("- Fastest observed run: ").append(report.comparison.fastestRead).append("\n");
 		b.append("- Stability read: ").append(report.comparison.stabilityRead).append("\n");
 		b.append("- Graph read: ").append(report.comparison.graphRead).append("\n");
-		b.append("- Reproducibility score: ").append(report.comparison.reproducibilityScore).append("/100\n\n");
+		b.append("- Artifact completeness: ")
+				.append(report.comparison.reproducibilityScore)
+				.append("/100 (share of expected run artifacts present on disk; ")
+				.append("not a measurement of run-to-run reproducibility)\n\n");
 		b.append("## Reproducibility Capsule\n\n");
 		b.append("- Capsule ID: ").append(report.capsuleId).append("\n");
 		b.append("- Code commit: ").append(report.environment.gitCommit).append("\n");
@@ -260,7 +263,7 @@ final class ExperimentObservatoryEngine
 		jsonNumberField(b, 1, "nodeMapFiles", report.inventory.nodeMapFiles, true);
 		jsonNumberField(b, 1, "recommendationArtifacts",
 				report.inventory.recommendationArtifacts, true);
-		jsonNumberField(b, 1, "reproducibilityScore",
+		jsonNumberField(b, 1, "artifactCompletenessScore",
 				report.comparison.reproducibilityScore, true);
 		b.append("  \"runs\": [\n");
 		for (int i = 0; i < report.matrix.size(); i++)
@@ -287,6 +290,13 @@ final class ExperimentObservatoryEngine
 		return b.toString();
 	}
 
+	/**
+	 * Artifact completeness, not reproducibility.
+	 *
+	 * This counts which expected run artifacts exist on disk. It re-runs nothing,
+	 * compares no two runs and measures no variance, so it cannot say whether a
+	 * run reproduces. It was previously exported as a "reproducibility score".
+	 */
 	private static ComparisonSummary compare(
 			List<RunSpec> matrix,
 			TimingSummary timing,

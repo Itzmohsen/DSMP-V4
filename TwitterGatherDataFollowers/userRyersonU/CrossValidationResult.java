@@ -57,6 +57,11 @@ public class CrossValidationResult {
             count++;
         }
         count = count * classLabels.size(); // * classes count
+        if (count <= 0) {
+            // No folds or no classes: leave the averages at zero rather than
+            // dividing by zero and reporting NaN for every metric.
+            return;
+        }
         average.accuracy = average.accuracy / count;
         average.precision = average.precision / count;
         average.recall = average.recall / count;

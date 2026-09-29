@@ -30,7 +30,16 @@ final class TemporalGraphFoundationModelSupport
 	private static final int DETAIL_TERM_LIMIT = 4;
 	private static final int GRAPH_SAMPLE_LIMIT = 24;
 	private static final int TIMELINE_FRAME_COUNT = 12;
-	private static final double CALIBRATION_CONFIDENCE = 0.90;
+	/**
+	 * Quantile used for the score-stability band.
+	 *
+	 * This is NOT a statistical confidence level. The band below is an arithmetic
+	 * function of the model's own component scores, and the "residual" it is
+	 * compared against is the gap between the final score and the same model's
+	 * mid-timeline score. No held-out labels are involved anywhere, so nothing
+	 * here estimates how often the model is right.
+	 */
+	private static final double STABILITY_QUANTILE = 0.90;
 	private static final double TEXT_WEIGHT = 0.34;
 	private static final double GRAPH_WEIGHT = 0.22;
 	private static final double TIME_WEIGHT = 0.18;
@@ -49,89 +58,210 @@ final class TemporalGraphFoundationModelSupport
 	{
 	}
 
+	/**
+	 * Everything the model needs that does not depend on the target: user
+	 * profiles, the temporal scan of the dataset and the graph context. It is
+	 * built once per run from the whole corpus and then only read, so targets
+	 * can be scored independently, in any order and on any node.
+	 */
+	static final class Prepared
+	{
+		private final Input input;
+		private final LinkedHashMap<String,UserProfile> profiles;
+		private final TemporalCorpus corpus;
+		private final GraphContext graph;
+
+		private Prepared(
+				Input input,
+				LinkedHashMap<String,UserProfile> profiles,
+				TemporalCorpus corpus,
+				GraphContext graph)
+		{
+			this.input = input;
+			this.profiles = profiles;
+			this.corpus = corpus;
+			this.graph = graph;
+		}
+
+		boolean isEmpty()
+		{
+			return profiles.isEmpty();
+		}
+
+		boolean hasProfile(String user)
+		{
+			return profiles.containsKey(user);
+		}
+
+		int profileCount()
+		{
+			return profiles.size();
+		}
+	}
+
+	/** One target's scored candidates, kept rows and report. */
+	static final class TargetOutcome
+	{
+		private final String target;
+		private final TreeMap<String,Double> scores;
+		private final TreeMap<String,String> details;
+		private final TargetReport report;
+		private final int scoredPairs;
+
+		private TargetOutcome(
+				String target,
+				TreeMap<String,Double> scores,
+				TreeMap<String,String> details,
+				TargetReport report,
+				int scoredPairs)
+		{
+			this.target = target;
+			this.scores = scores;
+			this.details = details;
+			this.report = report;
+			this.scoredPairs = scoredPairs;
+		}
+
+		String getTarget()
+		{
+			return target;
+		}
+
+		TreeMap<String,Double> getScores()
+		{
+			return scores;
+		}
+
+		int getScoredPairs()
+		{
+			return scoredPairs;
+		}
+	}
+
 	static Result score(Input input)
+	{
+		Prepared prepared = prepare(input);
+		if (prepared.isEmpty() || prepared.input.targetUsers.isEmpty())
+		{
+			return Result.empty(prepared.input.runId, prepared.input.datasetFile,
+					"No usable user profiles were available.");
+		}
+		ArrayList<TargetOutcome> outcomes = new ArrayList<TargetOutcome>();
+		for (String targetUser : prepared.input.targetUsers)
+		{
+			TargetOutcome outcome = scoreTarget(prepared, targetUser);
+			if (outcome != null)
+			{
+				outcomes.add(outcome);
+			}
+		}
+		return assemble(prepared, outcomes);
+	}
+
+	static Prepared prepare(Input input)
 	{
 		Input safe = input == null ? Input.empty() : input;
 		LinkedHashMap<String,UserProfile> profiles = buildProfiles(safe);
-		if (profiles.isEmpty() || safe.targetUsers.isEmpty())
+		if (profiles.isEmpty())
 		{
-			return Result.empty(safe.runId, safe.datasetFile, "No usable user profiles were available.");
+			return new Prepared(safe, profiles, new TemporalCorpus(), new GraphContext());
 		}
-
 		TemporalCorpus corpus = readTemporalCorpus(safe.datasetFile, profiles);
 		applyTemporalNormalization(profiles, corpus);
 		GraphContext graph = buildGraphContext(safe, profiles);
+		return new Prepared(safe, profiles, corpus, graph);
+	}
 
+	/**
+	 * Scores {@code targetUser} against every candidate this input may score
+	 * and keeps the top {@code localResultLimit}. Returns null when the target
+	 * has no profile. Reads the prepared state only.
+	 */
+	static TargetOutcome scoreTarget(Prepared prepared, String targetUser)
+	{
+		UserProfile target = prepared.profiles.get(targetUser);
+		if (target == null)
+		{
+			return null;
+		}
+		int scoredPairs = 0;
+		ArrayList<CandidateScore> candidateScores = new ArrayList<CandidateScore>();
+		for (UserProfile candidate : prepared.profiles.values())
+		{
+			if (candidate == null || target.name.equals(candidate.name)
+					|| !belongsToThisNode(candidate, prepared.input))
+			{
+				continue;
+			}
+			CandidateScore score = scoreCandidate(target, candidate, prepared.graph);
+			if (score.finalScore > 0.0 && Double.isFinite(score.finalScore))
+			{
+				candidateScores.add(score);
+				scoredPairs++;
+			}
+		}
+		assignRanks(candidateScores);
+		attachResearchEvidence(target, candidateScores, prepared.graph, prepared.corpus);
+		assignTimelineRanks(candidateScores);
+		Collections.sort(candidateScores, CandidateScore.FINAL_ORDER);
+		int keep = prepared.input.localResultLimit <= 0
+				? candidateScores.size()
+				: Math.min(prepared.input.localResultLimit, candidateScores.size());
+		TreeMap<String,Double> rowScores = new TreeMap<String,Double>();
+		TreeMap<String,String> rowDetails = new TreeMap<String,String>();
+		ArrayList<CandidateScore> keptScores = new ArrayList<CandidateScore>();
+		for (int i = 0; i < keep; i++)
+		{
+			CandidateScore score = candidateScores.get(i);
+			rowScores.put(score.candidate.name, score.finalScore);
+			rowDetails.put(score.candidate.name, detailFor(score));
+			keptScores.add(score);
+		}
+		return new TargetOutcome(
+				target.name,
+				rowScores,
+				rowDetails,
+				TargetReport.from(target, keptScores, prepared.graph, prepared.corpus),
+				scoredPairs);
+	}
+
+	/** The run's result from the outcomes of its targets, in target order. */
+	static Result assemble(Prepared prepared, List<TargetOutcome> outcomes)
+	{
 		TreeMap<String,TreeMap<String,Double>> scoreRows =
 				new TreeMap<String,TreeMap<String,Double>>();
 		TreeMap<String,TreeMap<String,String>> detailRows =
 				new TreeMap<String,TreeMap<String,String>>();
-			LinkedHashMap<String,TargetReport> reports =
-					new LinkedHashMap<String,TargetReport>();
-			int scoredPairs = 0;
-
-			for (String targetUser : safe.targetUsers)
+		LinkedHashMap<String,TargetReport> reports = new LinkedHashMap<String,TargetReport>();
+		int scoredPairs = 0;
+		for (TargetOutcome outcome : outcomes)
 		{
-			UserProfile target = profiles.get(targetUser);
-			if (target == null)
+			if (outcome == null)
 			{
 				continue;
 			}
-			ArrayList<CandidateScore> candidateScores =
-					new ArrayList<CandidateScore>();
-			for (UserProfile candidate : profiles.values())
-			{
-				if (candidate == null || target.name.equals(candidate.name)
-						|| !belongsToThisNode(candidate, safe))
-				{
-					continue;
-				}
-				CandidateScore score = scoreCandidate(target, candidate, graph);
-				if (score.finalScore > 0.0 && Double.isFinite(score.finalScore))
-				{
-					candidateScores.add(score);
-					scoredPairs++;
-					}
-				}
-				assignRanks(candidateScores);
-				attachResearchEvidence(target, candidateScores, graph, corpus);
-				assignTimelineRanks(candidateScores);
-				Collections.sort(candidateScores, CandidateScore.FINAL_ORDER);
-				int keep = safe.localResultLimit <= 0
-						? candidateScores.size()
-						: Math.min(safe.localResultLimit, candidateScores.size());
-			TreeMap<String,Double> rowScores = new TreeMap<String,Double>();
-			TreeMap<String,String> rowDetails = new TreeMap<String,String>();
-			ArrayList<CandidateScore> keptScores = new ArrayList<CandidateScore>();
-			for (int i = 0; i < keep; i++)
-			{
-				CandidateScore score = candidateScores.get(i);
-				rowScores.put(score.candidate.name, score.finalScore);
-				rowDetails.put(score.candidate.name, detailFor(score));
-				keptScores.add(score);
-			}
-				scoreRows.put(target.name, rowScores);
-				detailRows.put(target.name, rowDetails);
-				reports.put(target.name, TargetReport.from(target, keptScores, graph, corpus));
-			}
-
-			String summary = "Temporal Graph Foundation scored " + scoredPairs
-					+ " target-candidate pairs using text, graph, time, bridge, "
-					+ "popularity-debias, and ablation signals.";
-			ResearchSummary researchSummary =
-					ResearchSummary.from(reports.values(), scoredPairs, corpus, graph);
-			return new Result(
-					safe.runId,
-					safe.datasetFile,
-					summary,
-					corpus.rowsScanned,
-					corpus.datedRows,
-					graph.graphArtifactEdges,
-					scoreRows,
-					detailRows,
-					reports,
-					researchSummary);
+			scoreRows.put(outcome.target, outcome.scores);
+			detailRows.put(outcome.target, outcome.details);
+			reports.put(outcome.target, outcome.report);
+			scoredPairs += outcome.scoredPairs;
 		}
+		String summary = "Temporal Graph Foundation scored " + scoredPairs
+				+ " target-candidate pairs using text, graph, time, bridge, "
+				+ "popularity-debias, and ablation signals.";
+		ResearchSummary researchSummary =
+				ResearchSummary.from(reports.values(), scoredPairs, prepared.corpus, prepared.graph);
+		return new Result(
+				prepared.input.runId,
+				prepared.input.datasetFile,
+				summary,
+				prepared.corpus.rowsScanned,
+				prepared.corpus.datedRows,
+				prepared.graph.graphArtifactEdges,
+				scoreRows,
+				detailRows,
+				reports,
+				researchSummary);
+	}
 
 	private static LinkedHashMap<String,UserProfile> buildProfiles(Input input)
 	{
@@ -873,25 +1003,26 @@ final class TemporalGraphFoundationModelSupport
 			if (covered && score.calibrationPValue >= 0.30
 					&& score.confidenceLower >= 0.25)
 			{
-				score.calibrationVerdict =
-						Integer.toString((int)Math.round(CALIBRATION_CONFIDENCE * 100.0))
-						+ "% stable";
+				score.calibrationVerdict = "within the q"
+						+ Integer.toString((int)Math.round(STABILITY_QUANTILE * 100.0))
+						+ " self-consistency band";
 			}
 			else if (covered)
 			{
-				score.calibrationVerdict =
-						Integer.toString((int)Math.round(CALIBRATION_CONFIDENCE * 100.0))
-						+ "% covered, review";
+				score.calibrationVerdict = "inside the q"
+						+ Integer.toString((int)Math.round(STABILITY_QUANTILE * 100.0))
+						+ " band, review";
 			}
 			else
 			{
-				score.calibrationVerdict = "abstain: outside calibration band";
+				score.calibrationVerdict = "abstain: outside the self-consistency band";
 			}
-			score.calibrationNote = "time-split residual " + fmt(residual)
+			score.calibrationNote = "self-consistency gap " + fmt(residual)
 					+ " vs q" + Integer.toString(
-							(int)Math.round(CALIBRATION_CONFIDENCE * 100.0))
+							(int)Math.round(STABILITY_QUANTILE * 100.0))
 					+ " " + fmt(threshold)
-					+ ", p~" + fmt(score.calibrationPValue);
+					+ ", rank fraction ~" + fmt(score.calibrationPValue)
+					+ " (self-consistency only; no held-out labels)";
 		}
 
 		private static double calibrationThreshold(List<CandidateScore> scores)
@@ -907,7 +1038,7 @@ final class TemporalGraphFoundationModelSupport
 			}
 			Collections.sort(residuals);
 			int index = (int)Math.ceil((residuals.size() + 1)
-					* CALIBRATION_CONFIDENCE) - 1;
+					* STABILITY_QUANTILE) - 1;
 			index = Math.max(0, Math.min(residuals.size() - 1, index));
 			return residuals.get(index).doubleValue();
 		}
@@ -1052,7 +1183,7 @@ final class TemporalGraphFoundationModelSupport
 			}
 			if (score.confidenceRadius > 0.085)
 			{
-				flags.add("wide confidence interval");
+				flags.add("wide score band");
 			}
 			if (score.graph <= 0.04)
 			{

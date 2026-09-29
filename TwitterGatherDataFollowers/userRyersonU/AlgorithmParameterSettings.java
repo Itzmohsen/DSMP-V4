@@ -21,6 +21,7 @@ final class AlgorithmParameterSettings implements Serializable
 	static final int DEFAULT_SIMILARITY_LOCAL_TOP_MINIMUM = 20;
 	static final int DEFAULT_KMEANS_CLUSTERS = 3;
 	static final int DEFAULT_KMEANS_MAX_ITERATIONS = 10;
+	static final long DEFAULT_KMEANS_SEED = 1L;
 	static final double DEFAULT_SVM_C = 0.1;
 	static final boolean DEFAULT_SVM_CALIBRATION = true;
 	static final int DEFAULT_SCALABLE_SVM_EPOCHS = 10;
@@ -50,6 +51,7 @@ final class AlgorithmParameterSettings implements Serializable
 	private int similarityLocalTopMinimum;
 	private int kMeansClusters;
 	private int kMeansMaxIterations;
+	private long kMeansSeed;
 	private double svmC;
 	private boolean svmCalibration;
 	private int scalableSvmEpochs;
@@ -107,6 +109,8 @@ final class AlgorithmParameterSettings implements Serializable
 				"dsmp.kmeans.clusters", DEFAULT_KMEANS_CLUSTERS);
 		settings.kMeansMaxIterations = intProperty(
 				"dsmp.kmeans.maxIterations", DEFAULT_KMEANS_MAX_ITERATIONS);
+		settings.kMeansSeed = longProperty(
+				"dsmp.kmeans.seed", DEFAULT_KMEANS_SEED);
 		settings.svmC = doubleProperty("dsmp.svm.c", DEFAULT_SVM_C);
 		settings.svmCalibration = Boolean.parseBoolean(
 				System.getProperty("dsmp.svm.calibration",
@@ -170,6 +174,23 @@ final class AlgorithmParameterSettings implements Serializable
 		}
 	}
 
+	private static long longProperty(String name, long fallback)
+	{
+		String value = System.getProperty(name);
+		if (value == null)
+		{
+			return fallback;
+		}
+		try
+		{
+			return Long.parseLong(value.trim());
+		}
+		catch (NumberFormatException ignored)
+		{
+			return fallback;
+		}
+	}
+
 	private static double doubleProperty(String name, double fallback)
 	{
 		String value = System.getProperty(name);
@@ -206,6 +227,7 @@ final class AlgorithmParameterSettings implements Serializable
 		copy.similarityLocalTopMinimum = similarityLocalTopMinimum;
 		copy.kMeansClusters = kMeansClusters;
 		copy.kMeansMaxIterations = kMeansMaxIterations;
+		copy.kMeansSeed = kMeansSeed;
 		copy.svmC = svmC;
 		copy.svmCalibration = svmCalibration;
 		copy.scalableSvmEpochs = scalableSvmEpochs;
@@ -237,6 +259,7 @@ final class AlgorithmParameterSettings implements Serializable
 		similarityLocalTopMinimum = DEFAULT_SIMILARITY_LOCAL_TOP_MINIMUM;
 		kMeansClusters = DEFAULT_KMEANS_CLUSTERS;
 		kMeansMaxIterations = DEFAULT_KMEANS_MAX_ITERATIONS;
+		kMeansSeed = DEFAULT_KMEANS_SEED;
 		svmC = DEFAULT_SVM_C;
 		svmCalibration = DEFAULT_SVM_CALIBRATION;
 		scalableSvmEpochs = DEFAULT_SCALABLE_SVM_EPOCHS;
@@ -297,6 +320,10 @@ final class AlgorithmParameterSettings implements Serializable
 				validateInt(errors, "K-Means clusters", kMeansClusters, 2, 200);
 				validateInt(errors, "K-Means max iterations",
 						kMeansMaxIterations, 1, 100);
+				if (kMeansSeed < 0L)
+				{
+					errors.add("K-Means seed must be zero or greater.");
+				}
 				break;
 			case RecommendationModeSupport.SVM:
 				validateDouble(errors, "SVM complexity C", svmC, 0.001, 100.0);
@@ -424,7 +451,8 @@ final class AlgorithmParameterSettings implements Serializable
 			case RecommendationModeSupport.K_MEANS:
 			case RecommendationModeSupport.K_MEANS_EUCLIDEAN:
 				return effective.getKMeansClusters() + " clusters, "
-						+ effective.getKMeansMaxIterations() + " max iterations";
+						+ effective.getKMeansMaxIterations() + " max iterations, seed "
+						+ effective.getKMeansSeed();
 			case RecommendationModeSupport.SVM:
 				return "C=" + formatDouble(effective.getSvmC())
 						+ ", calibration "
@@ -472,6 +500,7 @@ final class AlgorithmParameterSettings implements Serializable
 		command.add("-Ddsmp.kmeans.clusters=" + effective.getKMeansClusters());
 		command.add("-Ddsmp.kmeans.maxIterations="
 				+ effective.getKMeansMaxIterations());
+		command.add("-Ddsmp.kmeans.seed=" + effective.getKMeansSeed());
 		command.add("-Ddsmp.svm.c=" + effective.getSvmC());
 		command.add("-Ddsmp.svm.calibration="
 				+ effective.isSvmCalibrationEnabled());
@@ -570,6 +599,11 @@ final class AlgorithmParameterSettings implements Serializable
 	{
 		return customEnabled ? kMeansMaxIterations
 				: DEFAULT_KMEANS_MAX_ITERATIONS;
+	}
+
+	long getKMeansSeed()
+	{
+		return customEnabled ? kMeansSeed : DEFAULT_KMEANS_SEED;
 	}
 
 	double getSvmC()
@@ -710,6 +744,11 @@ final class AlgorithmParameterSettings implements Serializable
 		kMeansMaxIterations = value;
 	}
 
+	void setKMeansSeed(long value)
+	{
+		kMeansSeed = value;
+	}
+
 	void setSvmC(double value)
 	{
 		svmC = value;
@@ -831,6 +870,7 @@ final class AlgorithmParameterSettings implements Serializable
 				&& similarityLocalTopMinimum == other.similarityLocalTopMinimum
 				&& kMeansClusters == other.kMeansClusters
 				&& kMeansMaxIterations == other.kMeansMaxIterations
+				&& kMeansSeed == other.kMeansSeed
 				&& Double.compare(svmC, other.svmC) == 0
 				&& svmCalibration == other.svmCalibration
 				&& scalableSvmEpochs == other.scalableSvmEpochs
@@ -863,6 +903,7 @@ final class AlgorithmParameterSettings implements Serializable
 		result = 31 * result + similarityLocalTopMinimum;
 		result = 31 * result + kMeansClusters;
 		result = 31 * result + kMeansMaxIterations;
+		result = 31 * result + (int)(kMeansSeed ^ (kMeansSeed >>> 32));
 		long bits = Double.doubleToLongBits(svmC);
 		result = 31 * result + (int)(bits ^ (bits >>> 32));
 		result = 31 * result + (svmCalibration ? 1 : 0);

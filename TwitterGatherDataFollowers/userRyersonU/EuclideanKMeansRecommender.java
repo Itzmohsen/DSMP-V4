@@ -75,17 +75,19 @@ final class EuclideanKMeansRecommender
 			repairEmptyClusters(newAssignments, userNames,
 					preparedDocuments, centroids, effectiveClusters);
 
-			if (newAssignments.equals(assignments))
-			{
-				converged = true;
-				assignments = newAssignments;
-				break;
-			}
-
+			//Count every completed assignment pass, including the one that proves
+			//convergence, and always recompute centroids from the final assignment
+			//so the reported clusters are not one step stale.
+			iterations++;
+			boolean stable = newAssignments.equals(assignments);
 			assignments = newAssignments;
 			centroids = recomputeCentroids(
 					assignments, preparedDocuments, effectiveClusters);
-			iterations++;
+			if (stable)
+			{
+				converged = true;
+				break;
+			}
 		}
 		if (assignments == null)
 		{

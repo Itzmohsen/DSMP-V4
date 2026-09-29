@@ -69,6 +69,7 @@ final class AlgorithmSettingsDialog extends JDialog
 	private JSpinner similarityMinimumSpinner;
 	private JSpinner kMeansClustersSpinner;
 	private JSpinner kMeansIterationsSpinner;
+	private JSpinner kMeansSeedSpinner;
 	private JSpinner svmCSpinner;
 	private JCheckBox svmCalibrationBox;
 	private JSpinner scalableEpochsSpinner;
@@ -291,14 +292,19 @@ final class AlgorithmSettingsDialog extends JDialog
 			case RecommendationModeSupport.K_MEANS_EUCLIDEAN:
 				kMeansClustersSpinner = intSpinner(2, 200, 1);
 				kMeansIterationsSpinner = intSpinner(1, 100, 1);
+				kMeansSeedSpinner = intSpinner(0, 1000000, 1);
 				row = addRow(grid, row,
 						"Number of clusters",
 						"Default is 3, matching the current K-Means logic.",
 						kMeansClustersSpinner);
-				addRow(grid, row,
+				row = addRow(grid, row,
 						"Maximum iterations",
 						"Stops clustering if assignments have not converged earlier.",
 						kMeansIterationsSpinner);
+				addRow(grid, row,
+						"Cluster seed",
+						"Picks the first centroid. The same seed always reproduces the same clustering.",
+						kMeansSeedSpinner);
 				break;
 			case RecommendationModeSupport.SVM:
 				svmCSpinner = doubleSpinner(0.001, 100.0, 0.01);
@@ -356,7 +362,7 @@ final class AlgorithmSettingsDialog extends JDialog
 						mlpLearningRateSpinner);
 				row = addRow(grid, row,
 						"Max error",
-						"Training target error threshold.",
+						"Training target error threshold (legacy engine stops at dsmp.mlp.maxEpochs, default 10000).",
 						mlpMaxErrorSpinner);
 				row = addRow(grid, row,
 						"Sparse epochs",
@@ -368,7 +374,8 @@ final class AlgorithmSettingsDialog extends JDialog
 						mlpSparseL2Spinner);
 				addRow(grid, row,
 						"FedProx mu",
-						"0.0 is FedAvg. Larger values keep local models closer.",
+						"Proximal pull toward the initial weights; 0.0 disables it. "
+								+ "The MLP now trains one model on the whole run.",
 						mlpFedProxMuSpinner);
 				break;
 			case RecommendationModeSupport.DOC2VEC:
@@ -638,6 +645,8 @@ final class AlgorithmSettingsDialog extends JDialog
 		{
 			kMeansClustersSpinner.setValue(settings.getKMeansClusters());
 			kMeansIterationsSpinner.setValue(settings.getKMeansMaxIterations());
+			kMeansSeedSpinner.setValue(Integer.valueOf(
+					(int)Math.min(1000000L, Math.max(0L, settings.getKMeansSeed()))));
 		}
 		if (svmCSpinner != null)
 		{
@@ -757,6 +766,7 @@ final class AlgorithmSettingsDialog extends JDialog
 		{
 			settings.setKMeansClusters(intValue(kMeansClustersSpinner));
 			settings.setKMeansMaxIterations(intValue(kMeansIterationsSpinner));
+			settings.setKMeansSeed(intValue(kMeansSeedSpinner));
 		}
 		if (svmCSpinner != null)
 		{

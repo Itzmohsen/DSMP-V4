@@ -1,18 +1,22 @@
 package TwitterGatherDataFollowers.userRyersonU;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * The Dynamic Queue Lab: a real-time run of the live work dispatcher.
+ *
+ * Each node lane is a real thread that claims units from a {@link WorkPhase}
+ * over the same {@link WorkDispatcher} the live simulator uses. A unit of cost
+ * c represents c * millisecondsPerCostUnit of reference work; a node of speed s
+ * spends that divided by s, exactly as a live node's measured work is dilated.
+ * Link delays, memory admission, queue capacity and injected failures behave
+ * as in a live run.
+ */
 final class DynamicQueueSchedulerEngine
 {
 	interface Listener
@@ -60,6 +64,7 @@ final class DynamicQueueSchedulerEngine
 	{
 		private final AtomicBoolean cancelled;
 		private final Thread supervisor;
+		private volatile WorkPhase phase;
 
 		private Controller(AtomicBoolean cancelled, Thread supervisor)
 		{
@@ -70,6 +75,11 @@ final class DynamicQueueSchedulerEngine
 		void cancel()
 		{
 			cancelled.set(true);
+			WorkPhase current = phase;
+			if (current != null)
+			{
+				current.close("cancelled by user");
+			}
 			if (supervisor != null)
 			{
 				supervisor.interrupt();
@@ -91,24 +101,25 @@ final class DynamicQueueSchedulerEngine
 		private final String currentState;
 		private final String currentJob;
 
-		NodeSnapshot(NodeRuntime runtime, long elapsedMillis)
+		private NodeSnapshot(NodeRuntime runtime, WorkDispatcher.NodeStats stats,
+				long elapsedMillis)
 		{
-			synchronized (runtime.lock)
+			synchronized (runtime)
 			{
 				this.profile = runtime.profile;
 				this.assignedJobs = runtime.assignedJobs;
 				this.completedJobs = runtime.completedJobs;
 				this.failedJobs = runtime.failedJobs;
 				this.retriedJobs = runtime.retriedJobs;
-				this.runningJobs = runtime.runningJobs;
-				this.queuedJobs = runtime.queuedJobs;
 				this.busyMillis = runtime.busyMillis;
-				long laneMillis = elapsedMillis
-						* Math.max(1, runtime.activeWorkerSlots);
-				this.idleMillis = Math.max(0L, laneMillis - runtime.busyMillis);
-				this.currentState = runtime.currentState;
+				this.currentState = runtime.runningJobs > 0 ? "running"
+						: (runtime.finished ? "idle" : "waiting");
 				this.currentJob = runtime.currentJob;
+				this.runningJobs = runtime.runningJobs;
 			}
+			this.queuedJobs = stats == null ? 0 : stats.getReserved();
+			long laneMillis = elapsedMillis * Math.max(1, profile.getMaxConcurrentJobs());
+			this.idleMillis = Math.max(0L, laneMillis - busyMillis);
 		}
 
 		NodeCapacityProfile getProfile()
@@ -258,21 +269,22 @@ final class DynamicQueueSchedulerEngine
 		private final boolean finished;
 		private final boolean cancelled;
 
-		Snapshot(SharedRunState state, boolean finished, boolean cancelled)
+		private Snapshot(RunState state, boolean finished, boolean cancelled)
 		{
 			long elapsed = state.elapsedMillis();
-			ArrayList<NodeSnapshot> nodeCopies =
-					new ArrayList<NodeSnapshot>();
-			int nodeWaiting = 0;
-			int nodeRunning = 0;
-			for (NodeRuntime runtime : state.nodes)
+			List<WorkDispatcher.NodeStats> stats = state.dispatcher.nodeStats();
+			ArrayList<NodeSnapshot> copies = new ArrayList<NodeSnapshot>();
+			int running = 0;
+			for (int index = 0; index < state.nodes.size(); index++)
 			{
-				NodeSnapshot snapshot = new NodeSnapshot(runtime, elapsed);
-				nodeCopies.add(snapshot);
-				nodeWaiting += snapshot.getQueuedJobs();
-				nodeRunning += snapshot.getRunningJobs();
+				NodeSnapshot snapshot = new NodeSnapshot(
+						state.nodes.get(index),
+						index < stats.size() ? stats.get(index) : null,
+						elapsed);
+				copies.add(snapshot);
+				running += snapshot.getRunningJobs();
 			}
-			synchronized (state.lock)
+			synchronized (state)
 			{
 				this.policy = state.policy;
 				this.template = state.template;
@@ -284,13 +296,14 @@ final class DynamicQueueSchedulerEngine
 				this.completedJobs = state.completedJobs;
 				this.failedJobs = state.failedJobs;
 				this.retriedJobs = state.retriedJobs;
-				this.waitingJobs = state.sharedQueue.size() + nodeWaiting;
-				this.runningJobs = nodeRunning;
-				this.elapsedMillis = elapsed;
-				this.finished = finished;
-				this.cancelled = cancelled;
 			}
-			this.nodes = Collections.unmodifiableList(nodeCopies);
+			this.waitingJobs = state.dispatcher.count(WorkDispatcher.UnitState.BACKLOG)
+					+ state.dispatcher.count(WorkDispatcher.UnitState.RESERVED);
+			this.runningJobs = running;
+			this.elapsedMillis = elapsed;
+			this.finished = finished;
+			this.cancelled = cancelled;
+			this.nodes = Collections.unmodifiableList(copies);
 		}
 
 		SchedulerLabEngine.SchedulingPolicy getPolicy()
@@ -392,99 +405,76 @@ final class DynamicQueueSchedulerEngine
 		}
 	}
 
-	private static final class WorkState
-	{
-		private final SchedulerLabEngine.WorkloadUnit unit;
-		private final HashSet<Integer> failedNodeIndexes =
-				new HashSet<Integer>();
-		private int attempts;
-
-		WorkState(SchedulerLabEngine.WorkloadUnit unit)
-		{
-			this.unit = unit;
-		}
-	}
-
 	private static final class NodeRuntime
 	{
-		private final Object lock = new Object();
 		private final NodeCapacityProfile profile;
-		private final ArrayDeque<WorkState> localQueue =
-				new ArrayDeque<WorkState>();
+		private final NodeSpec spec;
 		private int assignedJobs;
 		private int completedJobs;
 		private int failedJobs;
 		private int retriedJobs;
 		private int runningJobs;
-		private int queuedJobs;
-		private int activeWorkerSlots;
 		private long busyMillis;
-		private String currentState = "idle";
+		private boolean finished;
 		private String currentJob = "";
 
-		NodeRuntime(NodeCapacityProfile profile)
+		private NodeRuntime(NodeCapacityProfile profile, NodeSpec spec)
 		{
 			this.profile = profile;
-			this.activeWorkerSlots = Math.max(
-					1,
-					Math.min(4, profile.getMaxConcurrentJobs()));
+			this.spec = spec;
 		}
 	}
 
-	private static final class SharedRunState
+	private static final class RunState
 	{
-		private final Object lock = new Object();
-		private final List<NodeRuntime> nodes;
-		private final ArrayDeque<WorkState> sharedQueue =
-				new ArrayDeque<WorkState>();
-		private final ArrayList<Segment> segments = new ArrayList<Segment>();
-		private final ArrayList<String> logLines = new ArrayList<String>();
 		private final SchedulerLabEngine.SchedulingPolicy policy;
 		private final SchedulerLabEngine.WorkloadTemplate template;
+		private final List<NodeRuntime> nodes;
+		private final WorkDispatcher dispatcher;
+		private final List<SchedulerLabEngine.WorkloadUnit> jobs;
 		private final int totalJobs;
-		private final int heapMb;
-		private final int millisecondsPerCostUnit;
-		private final int maxRetries;
-		private final AtomicBoolean cancelled;
-		private long activeMemoryMb;
-		private long startNano;
+		private final int msPerCost;
+		private final long startNanos = System.nanoTime();
+		private final ArrayList<Segment> segments = new ArrayList<Segment>();
+		private final ArrayList<String> logLines = new ArrayList<String>();
 		private int completedJobs;
 		private int failedJobs;
 		private int retriedJobs;
 
-		SharedRunState(
-				List<NodeRuntime> nodes,
-				SchedulerLabEngine.SchedulingPolicy policy,
-				SchedulerLabEngine.WorkloadTemplate template,
-				int totalJobs,
-				int heapMb,
-				int millisecondsPerCostUnit,
-				int maxRetries,
-				AtomicBoolean cancelled)
+		private RunState(Config config, List<NodeRuntime> nodes,
+				WorkDispatcher dispatcher, List<SchedulerLabEngine.WorkloadUnit> jobs,
+				int totalJobs)
 		{
+			this.policy = config.policy;
+			this.template = config.template;
 			this.nodes = nodes;
-			this.policy = policy;
-			this.template = template;
+			this.dispatcher = dispatcher;
+			this.jobs = jobs;
 			this.totalJobs = totalJobs;
-			this.heapMb = heapMb;
-			this.millisecondsPerCostUnit = millisecondsPerCostUnit;
-			this.maxRetries = maxRetries;
-			this.cancelled = cancelled;
-			this.startNano = System.nanoTime();
+			this.msPerCost = config.millisecondsPerCostUnit;
 		}
 
 		long elapsedMillis()
 		{
-			return Math.max(0L, (System.nanoTime() - startNano) / 1000000L);
+			return Math.max(0L, (System.nanoTime() - startNanos) / 1000000L);
 		}
 
+		synchronized void log(String line)
+		{
+			logLines.add(String.format(Locale.US, "t=%06d ms  %s",
+					Long.valueOf(elapsedMillis()), line == null ? "" : line));
+			while (logLines.size() > 500)
+			{
+				logLines.remove(0);
+			}
+		}
 	}
 
 	private DynamicQueueSchedulerEngine()
 	{
 	}
 
-	static Controller runAsync(Config config, Listener listener)
+	static Controller runAsync(Config config, final Listener listener)
 	{
 		final AtomicBoolean cancelled = new AtomicBoolean(false);
 		final Config safeConfig = config == null
@@ -497,16 +487,19 @@ final class DynamicQueueSchedulerEngine
 						8,
 						2)
 				: config;
+		final Controller[] holder = new Controller[1];
 		Thread supervisor = new Thread(new Runnable()
 		{
 			public void run()
 			{
-				runSupervisor(safeConfig, cancelled, listener);
+				runSupervisor(safeConfig, cancelled, listener, holder);
 			}
 		}, "DynamicQueueScheduler-supervisor");
 		supervisor.setDaemon(true);
+		Controller controller = new Controller(cancelled, supervisor);
+		holder[0] = controller;
 		supervisor.start();
-		return new Controller(cancelled, supervisor);
+		return controller;
 	}
 
 	static Result runBlocking(Config config) throws InterruptedException
@@ -550,9 +543,7 @@ final class DynamicQueueSchedulerEngine
 		controller.cancel();
 		if (failure[0] != null)
 		{
-			throw new IllegalStateException(
-					"Dynamic queue run failed.",
-					failure[0]);
+			throw new IllegalStateException("Dynamic queue run failed.", failure[0]);
 		}
 		return result[0];
 	}
@@ -560,75 +551,132 @@ final class DynamicQueueSchedulerEngine
 	private static void runSupervisor(
 			Config config,
 			AtomicBoolean cancelled,
-			Listener listener)
+			Listener listener,
+			Controller[] holder)
 	{
 		try
 		{
+			List<NodeSpec> specs = NodeSpec.fromProfiles(config.profiles, null, true);
 			ArrayList<NodeRuntime> nodes = new ArrayList<NodeRuntime>();
-			for (NodeCapacityProfile profile : config.profiles)
+			int largestMemory = 0;
+			boolean faults = false;
+			for (int index = 0; index < specs.size(); index++)
 			{
-				nodes.add(new NodeRuntime(profile));
+				nodes.add(new NodeRuntime(config.profiles.get(index), specs.get(index)));
+				largestMemory = Math.max(largestMemory, specs.get(index).getMemoryMb());
+				faults |= specs.get(index).getFailureProbability() > 0.0;
 			}
-			List<SchedulerLabEngine.WorkloadUnit> units =
-					SchedulerLabEngine.createWorkload(
-							config.template,
-							config.workUnitCount,
-							config.workUnitCount);
-			SharedRunState state = new SharedRunState(
-					nodes,
-					config.policy,
-					config.template,
-					units.size(),
-					config.heapMb,
-					config.millisecondsPerCostUnit,
-					config.maxRetries,
-					cancelled);
-			prepareQueues(state, units);
-			log(state, "prepared " + units.size() + " independent work units.");
-			emit(listener, state, false);
-
-			int workerCount = 0;
-			for (NodeRuntime node : nodes)
+			List<SchedulerLabEngine.WorkloadUnit> all = SchedulerLabEngine.createWorkload(
+					config.template, config.workUnitCount, config.workUnitCount);
+			ArrayList<SchedulerLabEngine.WorkloadUnit> runnable =
+					new ArrayList<SchedulerLabEngine.WorkloadUnit>();
+			ArrayList<WorkUnitSpec> units = new ArrayList<WorkUnitSpec>();
+			ArrayList<String> skipped = new ArrayList<String>();
+			for (int index = 0; index < all.size(); index++)
 			{
-				workerCount += Math.max(1, node.activeWorkerSlots);
-			}
-			CountDownLatch latch = new CountDownLatch(workerCount);
-			for (NodeRuntime node : nodes)
-			{
-				int slots = Math.max(1, node.activeWorkerSlots);
-				for (int lane = 0; lane < slots; lane++)
+				SchedulerLabEngine.WorkloadUnit job = all.get(index);
+				if (job.getMemoryMb() > largestMemory || job.getMemoryMb() > config.heapMb)
 				{
-					final NodeRuntime workerNode = node;
+					skipped.add(job.getId() + " needs " + job.getMemoryMb()
+							+ " MB; no node budget or heap can hold it.");
+					continue;
+				}
+				runnable.add(job);
+				int retries = Math.min(job.getMaxRetries(), config.maxRetries);
+				units.add(new WorkUnitSpec(
+						runnable.size(),
+						String.format(Locale.US, "%06d:%s", index + 1, job.getId()),
+						job.getCostUnits(),
+						job.getMemoryMb(),
+						job.getPriority(),
+						job.getDeadlineTick(),
+						0,
+						null,
+						retries + 1));
+			}
+			WorkDispatcher dispatcher = new WorkDispatcher(
+					"dynamic-queue-lab",
+					config.policy,
+					specs,
+					units,
+					new WorkDispatcher.Options()
+							.faultInjection(faults, SchedulerLabEngine.FAULT_SEED)
+							.globalMemoryBudgetMb(config.heapMb)
+							.msPerTimeUnit(config.millisecondsPerCostUnit)
+							.maxRetainedEvents(2000));
+			final RunState state = new RunState(config, nodes, dispatcher, runnable, all.size());
+			final WorkPhase phase = new WorkPhase(dispatcher, null, 0L);
+			holder[0].phase = phase;
+			synchronized (state)
+			{
+				state.failedJobs = skipped.size();
+			}
+			state.log("prepared " + units.size() + " unit(s) with policy "
+					+ config.policy.getLabel() + (faults ? "; failure injection on" : "") + ".");
+			for (String line : skipped)
+			{
+				state.log("skipped " + line);
+			}
+			emit(listener, state, false, cancelled.get());
+
+			int workers = 0;
+			for (NodeSpec spec : specs)
+			{
+				workers += spec.getLanes();
+			}
+			final CountDownLatch latch = new CountDownLatch(workers);
+			final AtomicBoolean cancelledFlag = cancelled;
+			final Listener safeListener = listener;
+			for (int index = 0; index < nodes.size(); index++)
+			{
+				final NodeRuntime node = nodes.get(index);
+				for (int lane = 0; lane < node.spec.getLanes(); lane++)
+				{
 					final int laneIndex = lane;
 					Thread worker = new Thread(new Runnable()
 					{
 						public void run()
 						{
-							runWorker(workerNode, laneIndex, state, listener);
-							latch.countDown();
+							try
+							{
+								runLane(node, laneIndex, state, phase, cancelledFlag, safeListener);
+							}
+							finally
+							{
+								latch.countDown();
+							}
 						}
-					}, "DynamicQueue-node" + node.profile.getNodeIndex()
-							+ "-lane" + (lane + 1));
+					}, "DynamicQueue-node" + node.spec.getIndex() + "-lane" + (lane + 1));
 					worker.setDaemon(true);
 					worker.start();
 				}
 			}
-			while (!cancelled.get())
+			while (!cancelled.get() && latch.getCount() > 0L)
 			{
-				if (latch.getCount() == 0L)
+				emit(listener, state, false, false);
+				try
 				{
-					break;
+					Thread.sleep(180L);
 				}
-				emit(listener, state, false);
-				Thread.sleep(180L);
+				catch (InterruptedException interrupted)
+				{
+					if (cancelled.get())
+					{
+						break;
+					}
+				}
 			}
 			if (cancelled.get())
 			{
-				log(state, "cancelled by user; completed work is kept in this run snapshot.");
+				phase.close("cancelled by user");
+				state.log("cancelled by user; committed work is kept in this snapshot.");
 			}
 			latch.await();
-			Snapshot finalSnapshot =
-					new Snapshot(state, true, cancelled.get());
+			if (dispatcher.hasFailed())
+			{
+				state.log(dispatcher.getFailureReason());
+			}
+			Snapshot finalSnapshot = new Snapshot(state, true, cancelled.get());
 			if (listener != null)
 			{
 				listener.onSnapshot(finalSnapshot);
@@ -644,634 +692,155 @@ final class DynamicQueueSchedulerEngine
 		}
 	}
 
-	private static void runWorker(
+	private static void runLane(
 			NodeRuntime node,
-			int laneIndex,
-			SharedRunState state,
+			int lane,
+			RunState state,
+			WorkPhase phase,
+			AtomicBoolean cancelled,
 			Listener listener)
 	{
-		while (!state.cancelled.get())
+		try
 		{
-			WorkState work = nextWork(node, state);
-			if (work == null)
+			while (!cancelled.get())
 			{
-				if (isRunDrained(state))
-				{
-					break;
-				}
-				setNodeState(node, "waiting", "");
-				sleepQuietly(20L);
-				continue;
-			}
-			runWorkUnit(node, laneIndex, work, state, listener);
-		}
-		setNodeState(node, "idle", "");
-	}
-
-	private static void runWorkUnit(
-			NodeRuntime node,
-			int laneIndex,
-			WorkState work,
-			SharedRunState state,
-			Listener listener)
-	{
-		if (!acquireMemory(node, work, state))
-		{
-			requeueWork(node, work, state, false);
-			return;
-		}
-		long start = state.elapsedMillis();
-		long runtime = estimateRuntimeMillis(
-				work.unit,
-				node.profile,
-				state.millisecondsPerCostUnit);
-		synchronized (node.lock)
-		{
-			node.runningJobs++;
-			node.currentState = "running";
-			node.currentJob = work.unit.getId();
-		}
-		log(state, "node " + node.profile.getNodeIndex()
-				+ " started " + work.unit.getId()
-				+ " (" + work.unit.getType().getLabel() + ")");
-		emit(listener, state, false);
-		sleepInterruptibly(runtime, state.cancelled);
-		boolean failed = shouldFail(node.profile, work);
-		long end = state.elapsedMillis();
-		synchronized (node.lock)
-		{
-			node.runningJobs = Math.max(0, node.runningJobs - 1);
-			node.busyMillis += Math.max(1L, end - start);
-			node.currentState = failed ? "retrying" : "complete";
-			node.currentJob = work.unit.getId();
-		}
-		synchronized (state.lock)
-		{
-			state.activeMemoryMb = Math.max(
-					0L,
-					state.activeMemoryMb - work.unit.getMemoryMb());
-			state.segments.add(new Segment(
-					node.profile.getNodeIndex(),
-					laneIndex,
-					work.unit.getId(),
-					work.unit.getType(),
-					start,
-					end,
-					failed,
-					work.attempts));
-			state.lock.notifyAll();
-		}
-		if (failed && work.attempts < retryLimit(work, state))
-		{
-			work.attempts++;
-			work.failedNodeIndexes.add(Integer.valueOf(
-					node.profile.getNodeIndex()));
-			synchronized (node.lock)
-			{
-				node.failedJobs++;
-				node.retriedJobs++;
-			}
-			synchronized (state.lock)
-			{
-				state.retriedJobs++;
-			}
-			log(state, "node " + node.profile.getNodeIndex()
-					+ " failed " + work.unit.getId()
-					+ "; retry " + work.attempts + " queued.");
-			requeueWork(node, work, state, true);
-		}
-		else if (failed)
-		{
-			synchronized (node.lock)
-			{
-				node.failedJobs++;
-			}
-			synchronized (state.lock)
-			{
-				state.failedJobs++;
-			}
-			log(state, "node " + node.profile.getNodeIndex()
-					+ " failed " + work.unit.getId()
-					+ "; retry limit reached.");
-		}
-		else
-		{
-			synchronized (node.lock)
-			{
-				node.completedJobs++;
-				node.currentState = "complete";
-			}
-			synchronized (state.lock)
-			{
-				state.completedJobs++;
-			}
-			log(state, "node " + node.profile.getNodeIndex()
-					+ " completed " + work.unit.getId() + ".");
-		}
-		emit(listener, state, false);
-	}
-
-	private static void prepareQueues(
-			SharedRunState state,
-			List<SchedulerLabEngine.WorkloadUnit> units)
-	{
-		ArrayList<WorkState> jobs = new ArrayList<WorkState>();
-		for (SchedulerLabEngine.WorkloadUnit unit : units)
-		{
-			jobs.add(new WorkState(unit));
-		}
-		sortWork(jobs, state.policy);
-		if (usesLocalQueues(state.policy))
-		{
-			assignInitialQueues(state, jobs);
-		}
-		else
-		{
-			synchronized (state.lock)
-			{
-				for (WorkState job : jobs)
-				{
-					state.sharedQueue.add(job);
-				}
-				state.lock.notifyAll();
-			}
-		}
-	}
-
-	private static void assignInitialQueues(
-			SharedRunState state,
-			List<WorkState> jobs)
-	{
-		long[] loads = new long[state.nodes.size()];
-		int rr = 0;
-		ArrayList<Integer> weightedRing = weightedRing(state.nodes);
-		int weightedCursor = 0;
-		for (WorkState job : jobs)
-		{
-			int nodeIndex;
-			if (state.policy == SchedulerLabEngine.SchedulingPolicy.ROUND_ROBIN)
-			{
-				nodeIndex = rr++ % state.nodes.size();
-			}
-			else if (state.policy
-					== SchedulerLabEngine.SchedulingPolicy.WEIGHTED_ROUND_ROBIN
-					&& !weightedRing.isEmpty())
-			{
-				nodeIndex = weightedRing.get(
-						weightedCursor++ % weightedRing.size()).intValue();
-			}
-			else
-			{
-				nodeIndex = smallestLoad(loads);
-			}
-			assignToLocalNode(state.nodes.get(nodeIndex), job);
-			loads[nodeIndex] += estimateRuntimeMillis(
-					job.unit,
-					state.nodes.get(nodeIndex).profile,
-					state.millisecondsPerCostUnit);
-		}
-	}
-
-	private static WorkState nextWork(
-			NodeRuntime node,
-			SharedRunState state)
-	{
-		synchronized (node.lock)
-		{
-			if (!node.localQueue.isEmpty())
-			{
-				WorkState work = node.localQueue.removeFirst();
-				node.queuedJobs = Math.max(0, node.queuedJobs - 1);
-				return work;
-			}
-		}
-		if (state.policy == SchedulerLabEngine.SchedulingPolicy.WORK_STEALING)
-		{
-			WorkState stolen = stealWork(node, state);
-			if (stolen != null)
-			{
-				return stolen;
-			}
-		}
-		if (usesLocalQueues(state.policy))
-		{
-			return null;
-		}
-		synchronized (state.lock)
-		{
-			WorkState selected = null;
-			for (WorkState candidate : state.sharedQueue)
-			{
-				if (canRunOnNode(candidate, node, state))
-				{
-					if (selected == null
-							|| prefer(candidate, selected, state.policy))
-					{
-						selected = candidate;
-					}
-				}
-			}
-			if (selected != null)
-			{
-				state.sharedQueue.remove(selected);
-				assignToRuntime(node, selected);
-				return selected;
-			}
-		}
-		return null;
-	}
-
-	private static WorkState stealWork(
-			NodeRuntime idle,
-			SharedRunState state)
-	{
-		NodeRuntime donor = null;
-		for (NodeRuntime node : state.nodes)
-		{
-			if (node == idle)
-			{
-				continue;
-			}
-			synchronized (node.lock)
-			{
-				if (node.localQueue.size() < 2)
-				{
-					continue;
-				}
-				if (donor == null)
-				{
-					donor = node;
-				}
-				else
-				{
-					synchronized (donor.lock)
-					{
-						if (node.localQueue.size()
-								> donor.localQueue.size())
-						{
-							donor = node;
-						}
-					}
-				}
-			}
-		}
-		if (donor == null)
-		{
-			return null;
-		}
-		synchronized (donor.lock)
-		{
-			WorkState work = donor.localQueue.pollLast();
-			if (work == null || !canRunOnNode(work, idle, state))
-			{
-				if (work != null)
-				{
-					donor.localQueue.addLast(work);
-				}
-				return null;
-			}
-			donor.queuedJobs = Math.max(0, donor.queuedJobs - 1);
-			assignToRuntime(idle, work);
-			log(state, "node " + idle.profile.getNodeIndex()
-					+ " stole " + work.unit.getId()
-					+ " from node " + donor.profile.getNodeIndex() + ".");
-			return work;
-		}
-	}
-
-	private static boolean acquireMemory(
-			NodeRuntime node,
-			WorkState work,
-			SharedRunState state)
-	{
-		long deadline = System.currentTimeMillis() + 60000L;
-		synchronized (state.lock)
-		{
-			while (!state.cancelled.get())
-			{
-				if (work.unit.getMemoryMb() > node.profile.getMemoryLimitMb())
-				{
-					log(state, "node " + node.profile.getNodeIndex()
-							+ " cannot run " + work.unit.getId()
-							+ " because the job exceeds its memory profile.");
-					return false;
-				}
-				if (state.activeMemoryMb + work.unit.getMemoryMb()
-						<= state.heapMb)
-				{
-					state.activeMemoryMb += work.unit.getMemoryMb();
-					return true;
-				}
-				setNodeState(node, "waiting for memory", work.unit.getId());
+				WorkDispatcher.Assignment assignment;
 				try
 				{
-					state.lock.wait(80L);
+					assignment = phase.claim(node.spec.getIndex(), lane);
+				}
+				catch (IllegalStateException closedOrFailed)
+				{
+					return;
 				}
 				catch (InterruptedException interrupted)
 				{
 					Thread.currentThread().interrupt();
-					return false;
+					return;
 				}
-				if (System.currentTimeMillis() > deadline)
+				if (assignment == null)
 				{
-					return false;
+					return;
 				}
-			}
-		}
-		return false;
-	}
-
-	private static void requeueWork(
-			NodeRuntime node,
-			WorkState work,
-			SharedRunState state,
-			boolean retry)
-	{
-		if (state.cancelled.get())
-		{
-			return;
-		}
-		if (usesLocalQueues(state.policy)
-				&& state.policy != SchedulerLabEngine.SchedulingPolicy.WORK_STEALING)
-		{
-			assignToLocalNode(node, work);
-			return;
-		}
-		synchronized (state.lock)
-		{
-			if (retry
-					&& state.policy
-							== SchedulerLabEngine.SchedulingPolicy.DEADLINE_PRIORITY)
-			{
-				state.sharedQueue.addFirst(work);
-			}
-			else
-			{
-				state.sharedQueue.addLast(work);
-			}
-			state.lock.notifyAll();
-		}
-	}
-
-	private static boolean isRunDrained(SharedRunState state)
-	{
-		synchronized (state.lock)
-		{
-			if (!state.sharedQueue.isEmpty())
-			{
-				return false;
-			}
-			for (NodeRuntime node : state.nodes)
-			{
-				synchronized (node.lock)
+				SchedulerLabEngine.WorkloadUnit job =
+						state.jobs.get(assignment.getUnitId() - 1);
+				synchronized (node)
 				{
-					if (!node.localQueue.isEmpty()
-							|| node.runningJobs > 0)
+					node.assignedJobs++;
+					node.runningJobs++;
+					node.currentJob = job.getId();
+				}
+				sleep((long)Math.round(assignment.getTransferDelayMs()), cancelled);
+				long start = state.elapsedMillis();
+				//Reference work c * ms, spent at this node's speed.
+				double millis = assignment.getUnit().getCost() * state.msPerCost
+						/ node.spec.getSpeed();
+				sleep((long)Math.round(millis), cancelled);
+				if (cancelled.get())
+				{
+					phase.withdraw(node.spec.getIndex(), lane);
+					synchronized (node)
 					{
-						return false;
+						node.runningJobs = Math.max(0, node.runningJobs - 1);
+					}
+					return;
+				}
+				WorkDispatcher.Outcome outcome = phase.complete(assignment);
+				long end = state.elapsedMillis();
+				boolean lost = outcome == WorkDispatcher.Outcome.INJECTED_FAILURE
+						|| outcome == WorkDispatcher.Outcome.FINAL_FAILURE;
+				synchronized (node)
+				{
+					node.runningJobs = Math.max(0, node.runningJobs - 1);
+					node.busyMillis += Math.max(1L, end - start);
+					if (outcome == WorkDispatcher.Outcome.COMMITTED)
+					{
+						node.completedJobs++;
+					}
+					else if (lost)
+					{
+						node.failedJobs++;
+						if (outcome == WorkDispatcher.Outcome.INJECTED_FAILURE)
+						{
+							node.retriedJobs++;
+						}
 					}
 				}
-			}
-			return state.completedJobs + state.failedJobs >= state.totalJobs;
-		}
-	}
-
-	private static void assignToLocalNode(NodeRuntime node, WorkState work)
-	{
-		synchronized (node.lock)
-		{
-			node.localQueue.addLast(work);
-			assignToRuntime(node, work);
-			node.queuedJobs++;
-		}
-	}
-
-	private static void assignToRuntime(NodeRuntime node, WorkState work)
-	{
-		synchronized (node.lock)
-		{
-			node.assignedJobs++;
-			node.currentState = "queued";
-			node.currentJob = work.unit.getId();
-		}
-	}
-
-	private static boolean canRunOnNode(
-			WorkState work,
-			NodeRuntime node,
-			SharedRunState state)
-	{
-		if (work.unit.getMemoryMb() > node.profile.getMemoryLimitMb())
-		{
-			return false;
-		}
-		if (state.policy
-				== SchedulerLabEngine.SchedulingPolicy.FAILURE_AWARE_RESCHEDULING
-				&& work.failedNodeIndexes.contains(
-						Integer.valueOf(node.profile.getNodeIndex()))
-				&& work.failedNodeIndexes.size() < state.nodes.size())
-		{
-			return false;
-		}
-		return true;
-	}
-
-	private static boolean prefer(
-			WorkState candidate,
-			WorkState current,
-			SchedulerLabEngine.SchedulingPolicy policy)
-	{
-		if (policy == SchedulerLabEngine.SchedulingPolicy.DEADLINE_PRIORITY)
-		{
-			int priority = Integer.compare(
-					candidate.unit.getPriority(),
-					current.unit.getPriority());
-			if (priority != 0)
-			{
-				return priority > 0;
-			}
-			return candidate.unit.getDeadlineTick()
-					< current.unit.getDeadlineTick();
-		}
-		if (policy == SchedulerLabEngine.SchedulingPolicy.MEMORY_AWARE_SAFE_WAVE)
-		{
-			return candidate.unit.getMemoryMb()
-					< current.unit.getMemoryMb();
-		}
-		return false;
-	}
-
-	private static boolean usesLocalQueues(
-			SchedulerLabEngine.SchedulingPolicy policy)
-	{
-		return policy == SchedulerLabEngine.SchedulingPolicy.STATIC_EQUAL_SPLIT
-				|| policy == SchedulerLabEngine.SchedulingPolicy.ROUND_ROBIN
-				|| policy == SchedulerLabEngine.SchedulingPolicy.WEIGHTED_ROUND_ROBIN
-				|| policy == SchedulerLabEngine.SchedulingPolicy.WORK_STEALING;
-	}
-
-	private static void sortWork(
-			List<WorkState> jobs,
-			SchedulerLabEngine.SchedulingPolicy policy)
-	{
-		if (policy == SchedulerLabEngine.SchedulingPolicy.DEADLINE_PRIORITY)
-		{
-			Collections.sort(jobs, new Comparator<WorkState>()
-			{
-				public int compare(WorkState first, WorkState second)
+				synchronized (state)
 				{
-					int priority = Integer.compare(
-							second.unit.getPriority(),
-							first.unit.getPriority());
-					if (priority != 0)
+					state.segments.add(new Segment(node.spec.getIndex(), lane, job.getId(),
+							job.getType(), start, end, lost, assignment.getExecution()));
+					if (outcome == WorkDispatcher.Outcome.COMMITTED)
 					{
-						return priority;
+						state.completedJobs++;
 					}
-					return Integer.compare(
-							first.unit.getDeadlineTick(),
-							second.unit.getDeadlineTick());
+					else if (outcome == WorkDispatcher.Outcome.INJECTED_FAILURE)
+					{
+						state.retriedJobs++;
+					}
+					else if (outcome == WorkDispatcher.Outcome.FINAL_FAILURE)
+					{
+						state.failedJobs++;
+					}
 				}
-			});
-		}
-	}
-
-	private static ArrayList<Integer> weightedRing(List<NodeRuntime> nodes)
-	{
-		ArrayList<Integer> ring = new ArrayList<Integer>();
-		for (int index = 0; index < nodes.size(); index++)
-		{
-			double weight = NodeCapacityScheduler.schedulingWeight(
-					nodes.get(index).profile);
-			int turns = Math.max(1, Math.min(16,
-					(int)Math.round(weight * 2.0)));
-			for (int turn = 0; turn < turns; turn++)
-			{
-				ring.add(Integer.valueOf(index));
+				state.log("node " + node.spec.getIndex() + " "
+						+ outcomeLabel(outcome) + " " + job.getId()
+						+ " (execution " + assignment.getExecution() + ").");
+				emit(listener, state, false, false);
 			}
 		}
-		return ring;
-	}
-
-	private static int smallestLoad(long[] loads)
-	{
-		int best = 0;
-		for (int index = 1; index < loads.length; index++)
+		finally
 		{
-			if (loads[index] < loads[best])
+			synchronized (node)
 			{
-				best = index;
-			}
-		}
-		return best;
-	}
-
-	private static int retryLimit(
-			WorkState work,
-			SharedRunState state)
-	{
-		return Math.min(
-				Math.max(0, work.unit.getMaxRetries()),
-				Math.max(0, state.maxRetries));
-	}
-
-	private static long estimateRuntimeMillis(
-			SchedulerLabEngine.WorkloadUnit unit,
-			NodeCapacityProfile profile,
-			int millisecondsPerCostUnit)
-	{
-		double runtime = unit.getCostUnits()
-				* Math.max(1, millisecondsPerCostUnit);
-		runtime /= Math.max(0.10, profile.getCpuMultiplier());
-		if (profile.isSlowdownSimulationEnabled())
-		{
-			runtime *= Math.max(1.0, profile.getSlowdownMultiplier());
-		}
-		runtime += NodeCapacityScheduler.perJobDelayMillis(profile);
-		return Math.max(8L, Math.min(120000L, Math.round(runtime)));
-	}
-
-	private static boolean shouldFail(
-			NodeCapacityProfile profile,
-			WorkState work)
-	{
-		if (!profile.isFailureSimulationEnabled()
-				|| profile.getFailureProbabilityPercent() <= 0)
-		{
-			return false;
-		}
-		String key = profile.getNodeIndex()
-				+ "|" + work.unit.getId()
-				+ "|" + work.attempts;
-		int bucket = Math.floorMod(key.hashCode(), 100);
-		return bucket < profile.getFailureProbabilityPercent();
-	}
-
-	private static void setNodeState(
-			NodeRuntime node,
-			String state,
-			String job)
-	{
-		synchronized (node.lock)
-		{
-			node.currentState = state == null ? "idle" : state;
-			node.currentJob = job == null ? "" : job;
-		}
-	}
-
-	private static void log(SharedRunState state, String line)
-	{
-		synchronized (state.lock)
-		{
-			String message = String.format(
-					Locale.US,
-					"t=%06d ms  %s",
-					Long.valueOf(state.elapsedMillis()),
-					line == null ? "" : line);
-			state.logLines.add(message);
-			while (state.logLines.size() > 500)
-			{
-				state.logLines.remove(0);
+				node.finished = true;
 			}
 		}
 	}
 
-	private static void emit(
-			Listener listener,
-			SharedRunState state,
-			boolean finished)
+	private static String outcomeLabel(WorkDispatcher.Outcome outcome)
+	{
+		switch (outcome)
+		{
+			case COMMITTED:
+				return "completed";
+			case INJECTED_FAILURE:
+				return "lost to an injected failure, retry queued:";
+			case FINAL_FAILURE:
+				return "failed permanently:";
+			case STALE:
+				return "discarded a revoked execution of";
+			default:
+				return "finished";
+		}
+	}
+
+	private static void emit(Listener listener, RunState state, boolean finished,
+			boolean cancelled)
 	{
 		if (listener != null)
 		{
-			listener.onSnapshot(new Snapshot(
-					state,
-					finished,
-					state.cancelled.get()));
+			listener.onSnapshot(new Snapshot(state, finished, cancelled));
 		}
 	}
 
-	private static void sleepQuietly(long millis)
+	private static void sleep(long millis, AtomicBoolean cancelled)
 	{
-		try
-		{
-			Thread.sleep(Math.max(1L, millis));
-		}
-		catch (InterruptedException interrupted)
-		{
-			Thread.currentThread().interrupt();
-		}
-	}
-
-	private static void sleepInterruptibly(
-			long millis,
-			AtomicBoolean cancelled)
-	{
-		long remaining = Math.max(1L, millis);
+		long remaining = Math.max(0L, millis);
 		while (remaining > 0L && !cancelled.get())
 		{
-			long chunk = Math.min(remaining, 80L);
-			long before = System.currentTimeMillis();
-			sleepQuietly(chunk);
-			remaining -= Math.max(1L, System.currentTimeMillis() - before);
+			long chunk = Math.min(remaining, 50L);
+			long before = System.nanoTime();
+			try
+			{
+				Thread.sleep(chunk);
+			}
+			catch (InterruptedException interrupted)
+			{
+				Thread.currentThread().interrupt();
+				return;
+			}
+			remaining -= Math.max(1L, (System.nanoTime() - before) / 1000000L);
 		}
 	}
 
@@ -1279,8 +848,7 @@ final class DynamicQueueSchedulerEngine
 			List<NodeCapacityProfile> profiles,
 			int heapMb)
 	{
-		ArrayList<NodeCapacityProfile> safe =
-				new ArrayList<NodeCapacityProfile>();
+		ArrayList<NodeCapacityProfile> safe = new ArrayList<NodeCapacityProfile>();
 		if (profiles != null)
 		{
 			for (NodeCapacityProfile profile : profiles)
@@ -1295,18 +863,21 @@ final class DynamicQueueSchedulerEngine
 		{
 			safe.add(NodeCapacityProfile.defaultProfile(1, 1, heapMb));
 		}
-		Collections.sort(safe, new Comparator<NodeCapacityProfile>()
+		Collections.sort(safe, new java.util.Comparator<NodeCapacityProfile>()
 		{
-			public int compare(
-					NodeCapacityProfile first,
-					NodeCapacityProfile second)
+			public int compare(NodeCapacityProfile first, NodeCapacityProfile second)
 			{
-				return Integer.compare(
-						first.getNodeIndex(),
-						second.getNodeIndex());
+				return Integer.compare(first.getNodeIndex(), second.getNodeIndex());
 			}
 		});
-		return safe;
+		ArrayList<NodeCapacityProfile> dense = new ArrayList<NodeCapacityProfile>();
+		for (int index = 0; index < safe.size(); index++)
+		{
+			NodeCapacityProfile profile = safe.get(index);
+			dense.add(profile.getNodeIndex() == index + 1
+					? profile : profile.withNodeIndex(index + 1));
+		}
+		return dense;
 	}
 
 	private static int clamp(int value, int minimum, int maximum)

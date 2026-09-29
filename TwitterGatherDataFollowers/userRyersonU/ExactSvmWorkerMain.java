@@ -25,10 +25,14 @@ public final class ExactSvmWorkerMain
 
 		try
 		{
+			long cpuStart = NodeEmulator.threadCpuNanos();
 			ExactSvmWorkerResult result = ExactSvmModelSupport.trainAndScore(
 					new File(args[0]),
 					new File(args[1]),
 					new File(args[2]));
+			//Reported so the parent can emulate this work at its node's speed.
+			result.setWorkerCpuNanos(NodeEmulator.isCpuTimeMeasured()
+					? Math.max(0L, NodeEmulator.threadCpuNanos() - cpuStart) : -1L);
 			try (ObjectOutputStream output = new ObjectOutputStream(
 					new FileOutputStream(args[3])))
 			{

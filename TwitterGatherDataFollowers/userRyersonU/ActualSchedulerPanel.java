@@ -808,47 +808,10 @@ final class ActualSchedulerPanel extends JPanel
 		return RecommendationSchedulerRegistry.activeRunId();
 	}
 
+	/** The run's most recent work phase (input, Doc2Vec shards, candidates, targets, ...). */
 	private RecommendationWorkQueueRegistry.QueueSnapshot currentLiveQueueSnapshot()
 	{
-		int nodeCount = Math.max(1, ownerNodeCount());
-		if (actualSnapshot != null && !actualSnapshot.getNodes().isEmpty())
-		{
-			nodeCount = Math.max(nodeCount, actualSnapshot.getNodes().size());
-		}
-		int algorithm = currentAlgorithm();
-		if (algorithm == ControllerAgent.Doc2Vec)
-		{
-			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					nodeCount,
-					currentTargetCount());
-			return RecommendationWorkQueueRegistry.snapshotDoc2VecQueue(
-					activeLiveRunId(),
-					nodeCount,
-					shardCount);
-		}
-		if (algorithm == ControllerAgent.CommonNeighbors
-				|| algorithm == ControllerAgent.COS_SIM)
-		{
-			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					nodeCount,
-					currentCandidateCount());
-			String algorithmKey = algorithm == ControllerAgent.CommonNeighbors
-					? "CommonNeighbors" : "Similarity";
-			return RecommendationWorkQueueRegistry.snapshotExperimentalCandidateQueue(
-					activeLiveRunId(),
-					algorithmKey,
-					nodeCount,
-					shardCount);
-		}
-		if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm))
-		{
-			return RecommendationWorkQueueRegistry.snapshotTargetUserQueue(
-					activeLiveRunId(),
-					RecommendationModeSupport.algorithmName(algorithm),
-					nodeCount,
-					currentTargetCount());
-		}
-		return RecommendationWorkQueueRegistry.emptyQueueSnapshot();
+		return RecommendationWorkQueueRegistry.latestPhaseSnapshot(activeLiveRunId());
 	}
 
 	private void updateLiveControlsDisplay()
@@ -1120,6 +1083,42 @@ final class ActualSchedulerPanel extends JPanel
 		return true;
 	}
 
+	/** How an algorithm's model stage is cut into scheduled work, for the plan log. */
+	static String modelStageDescription(int algorithm)
+	{
+		if (algorithm == ControllerAgent.Doc2Vec)
+		{
+			return "Doc2Vec index shards (one per node in the original mode, four per lane otherwise), "
+					+ "scored in persistent workers; exact global top n";
+		}
+		if (algorithm == ControllerAgent.COS_SIM || algorithm == ControllerAgent.CommonNeighbors)
+		{
+			return "candidate shards homed on the nodes that own them; exact global top L";
+		}
+		if (algorithm == ControllerAgent.K_MEANS || algorithm == ControllerAgent.K_MEANSEUCLIDEAN)
+		{
+			return "exact distributed clustering: each node assigns its own users, "
+					+ "centroids are exact sums combined in node order";
+		}
+		if (algorithm == ControllerAgent.TEMPORAL_GRAPH_FOUNDATION)
+		{
+			return "one unit per target, scored against the whole run's candidates";
+		}
+		if (algorithm == ControllerAgent.MLP)
+		{
+			return "one training unit on the whole run's users, targets held out";
+		}
+		if (algorithm == ControllerAgent.SCALABLE_SVM)
+		{
+			return "one shared Scalable Linear SVM for the whole run";
+		}
+		if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm))
+		{
+			return "one unit per target: an SMO model on every other user of the run";
+		}
+		return "not scheduled as work units";
+	}
+
 	private static String actualRunKey(NodeExecutionMonitor.Snapshot snapshot)
 	{
 		if (snapshot == null)
@@ -1147,40 +1146,14 @@ final class ActualSchedulerPanel extends JPanel
 				.append(RuntimeResourceSettings.formatMegabytes(
 						ownerHeapSetting()))
 				.append('\n');
-		builder.append("contract: complete score maps only; organizer merge unchanged\n");
-		if (algorithm == ControllerAgent.Doc2Vec && plan.isActive())
-		{
-			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					ownerNodeCount(),
-					Math.max(1, targetCount));
-			builder.append("active simulator queue: Doc2Vec candidate shards are split into ")
-					.append(shardCount)
-					.append(" virtual jobs and claimed from a live pull queue by recommender nodes\n");
-			builder.append("safe boundary: the shared Doc2Vec model is unchanged; only independent candidate scoring shards move\n");
-		}
-		else if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm)
-				&& plan.allowsExperimentalSideEffects())
-		{
-			builder.append("active simulator queue: SVM target users are claimed as live target jobs by recommender nodes\n");
-			builder.append("safe boundary: one complete target-user score row; stale drained completions are ignored\n");
-		}
-		else if ((algorithm == ControllerAgent.COS_SIM
-				|| algorithm == ControllerAgent.CommonNeighbors)
-				&& plan.allowsExperimentalSideEffects())
-		{
-			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					ownerNodeCount(),
-					Math.max(1, ownerCandidateEstimate()));
-			builder.append("active simulator queue: candidate users are split into ")
-					.append(shardCount)
-					.append(" live virtual jobs and claimed by recommender nodes\n");
-			builder.append("safe boundary: independent candidate scoring shard before organizer merge\n");
-		}
-		else
-		{
-			builder.append("active simulator queue: not enabled for this algorithm\n");
-			builder.append("safe boundary: before TF-IDF, clusters, ARFF, or model state\n");
-		}
+		builder.append("contract: recommendations are identical for every node count, placement, "
+				+ "policy, capacity profile, live control and failure pattern\n");
+		builder.append("input: whole users per batch; live controls move users, never parts of a user\n");
+		builder.append("model stage: ").append(modelStageDescription(algorithm)).append('\n');
+		builder.append(plan.getMode() == RecommendationSchedulerPlan.Mode.DSMP_DEFAULT
+				? "placement: original DSMP list scheduling; work with a home node stays there; no emulation\n"
+				: "placement: " + plan.getPolicy().getLabel()
+						+ "; node speed, lanes, memory, queue and link delay are emulated live\n");
 		builder.append("note: ").append(plan.getNote()).append('\n');
 		if (previewResult != null)
 		{
@@ -2177,78 +2150,20 @@ final class ActualSchedulerPanel extends JPanel
 				int nodeCount,
 				int workItemCount)
 		{
-			if (workItemCount <= 0)
-			{
-				return false;
-			}
-			if (algorithm == ControllerAgent.Doc2Vec && plan.isActive())
-			{
-				return workItemCount > Math.max(1, nodeCount);
-			}
-			if (plan.allowsExperimentalSideEffects()
-					&& (algorithm == ControllerAgent.COS_SIM
-							|| algorithm == ControllerAgent.CommonNeighbors))
-			{
-				return workItemCount > Math.max(1, nodeCount);
-			}
-			return plan.allowsExperimentalSideEffects()
-					&& RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm);
+			return workItemCount > 0;
 		}
 
 		private RecommendationWorkQueueRegistry.QueueSnapshot snapshotLiveCandidateQueue(
 				int nodeCount,
 				int workItemCount)
 		{
-			if (algorithm == ControllerAgent.Doc2Vec)
-			{
-				return RecommendationWorkQueueRegistry.snapshotDoc2VecQueue(
-						effectiveRunId(),
-						nodeCount,
-						workItemCount);
-			}
-			if (algorithm == ControllerAgent.CommonNeighbors
-					|| algorithm == ControllerAgent.COS_SIM)
-			{
-				String algorithmKey = algorithm == ControllerAgent.CommonNeighbors
-						? "CommonNeighbors" : "Similarity";
-				return RecommendationWorkQueueRegistry
-						.snapshotExperimentalCandidateQueue(
-								effectiveRunId(),
-								algorithmKey,
-								nodeCount,
-								workItemCount);
-			}
-			if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm))
-			{
-				return RecommendationWorkQueueRegistry.snapshotTargetUserQueue(
-						effectiveRunId(),
-						RecommendationModeSupport.algorithmName(algorithm),
-						nodeCount,
-						workItemCount);
-			}
-			return RecommendationWorkQueueRegistry.emptyQueueSnapshot();
+			return RecommendationWorkQueueRegistry.latestPhaseSnapshot(effectiveRunId());
 		}
 
 		private int liveQueueWorkItemCount(int nodeCount)
 		{
-			if (algorithm == ControllerAgent.Doc2Vec)
-			{
-				return NodeCapacityScheduler.virtualCandidateShardCount(
-						nodeCount,
-						targetCount);
-			}
-			if (algorithm == ControllerAgent.CommonNeighbors
-					|| algorithm == ControllerAgent.COS_SIM)
-			{
-				return NodeCapacityScheduler.virtualCandidateShardCount(
-						nodeCount,
-						Math.max(1, ownerCandidateEstimate()));
-			}
-			if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm))
-			{
-				return Math.max(1, targetCount);
-			}
-			return 0;
+			return RecommendationWorkQueueRegistry.latestPhaseSnapshot(effectiveRunId())
+					.getTotalShards();
 		}
 
 		private void drawQueueHeader(
@@ -2260,8 +2175,8 @@ final class ActualSchedulerPanel extends JPanel
 			drawTitle(g, "Dynamic Live Work Queue", 18, 27);
 			drawSubtitle(g,
 					activeLiveQueue
-							? "Nodes pull independent safe-boundary work; every item is claimed once and stale drained completions are ignored."
-							: "Use Doc2Vec, Scheduling Experiment with Similarity/Common Neighbors, or SVM to turn this queue on.",
+							? "The run's current work phase: every unit is committed exactly once; revoked and failed units run again elsewhere."
+							: "No work phase is open yet: the queue appears when a run reaches its input or model stage.",
 					18,
 					46);
 			int metricY = 60;
@@ -2286,8 +2201,8 @@ final class ActualSchedulerPanel extends JPanel
 			int y = 126;
 			drawSoftCard(g, 22, y, width - 44, 82, BLUE,
 					"Current Simulator path",
-					RecommendationModeSupport.algorithmName(algorithm)
-							+ " keeps the safe DSMP assignment boundary.");
+					RecommendationModeSupport.algorithmName(algorithm) + ": "
+							+ modelStageDescription(algorithm) + ".");
 			drawSoftCard(g, 22, y + 96, width - 44, 82, PURPLE,
 					"Queue preview",
 					workItemCount + " work item"
@@ -2295,10 +2210,10 @@ final class ActualSchedulerPanel extends JPanel
 							+ " across " + nodeCount + " node"
 							+ (nodeCount == 1 ? "" : "s") + ".");
 			drawSoftCard(g, 22, y + 192, width - 44, 82, GREEN,
-					"How to activate",
-					"Use Doc2Vec, or choose Scheduling Experiment with Similarity/Common Neighbors or SVM.");
+					"When it appears",
+					"The queue opens when a run reaches input delivery or a scheduled model stage.");
 			drawSubtitle(g,
-					"The panel stays read-only; it never changes scores, graph files, or organizer merge logic.",
+					"Scheduling never changes recommendations: every unit is committed exactly once.",
 					24,
 					Math.min(height - 24, y + 296));
 		}

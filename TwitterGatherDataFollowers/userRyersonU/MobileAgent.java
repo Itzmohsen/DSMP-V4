@@ -878,20 +878,11 @@ public class MobileAgent extends Agent {
 						String userScoresText="";
 						userScoresText = "================== Recommendations for " + userAgentName + " ==================\n";
 
-						if (algorithmRec == K_MEANS || algorithmRec == K_MEANSEUCLIDEAN)  // K-means Euclidean was added by Sepide
-						{
-							writer.write(userAgentName+"\tK_Means: "+listRecServers.size()+" Server(s)\t");
-							//userScoresText = userAgentName+" K_Means: "+listRecServers.size()+" Server(s) ";
-						}
-						else if (algorithmRec == COS_SIM)
-						{
-							writer.write(userAgentName+"\tCos_Sim: "+listRecServers.size()+" Server(s)\t");
-							//userScoresText = userAgentName+" Cos_Sim: "+listRecServers.size()+" Server(s) ";
-						}
-						else if (algorithmRec == TEMPORAL_GRAPH_FOUNDATION)
-						{
-							writer.write(userAgentName+"\tTemporal_Graph_Foundation: "+listRecServers.size()+" Server(s)\t");
-						}
+						//Every algorithm writes the same two leading columns so a reader
+						//can parse the file by position. Previously only K-Means, Cosine
+						//and TGF wrote them, so SVM, MLP and Doc2Vec rows were shifted.
+						writer.write(userAgentName+"\t"+recommendationAlgorithmLabel()
+								+": "+listRecServers.size()+" Server(s)\t");
 						System.out.print(getLocalName()+" scores: ");
 						for (String otherUser: scoreReceived.keySet())
 						{
@@ -2084,6 +2075,24 @@ public class MobileAgent extends Agent {
 		acknowledgement.setConversationId(conversationIDReceived);
 		acknowledgement.setOntology("Scores Received");
 		send(acknowledgement);
+	}
+
+	/** Stable per-algorithm label for the recommendation output file. */
+	private String recommendationAlgorithmLabel()
+	{
+		switch (algorithmRec)
+		{
+			case K_MEANS: return "K_Means";
+			case K_MEANSEUCLIDEAN: return "K_Means_Euclidean";
+			case COS_SIM: return "Cos_Sim";
+			case TEMPORAL_GRAPH_FOUNDATION: return "Temporal_Graph_Foundation";
+			case SVM: return "SVM";
+			case RecommendationModeSupport.SCALABLE_SVM: return "Scalable_Linear_SVM";
+			case MLP: return "MLP";
+			case Doc2Vec: return "Doc2Vec";
+			case CommonNeighbors: return "Common_Neighbors";
+			default: return "Algorithm_" + algorithmRec;
+		}
 	}
 
 	private String getRecommendationOutputFileName()

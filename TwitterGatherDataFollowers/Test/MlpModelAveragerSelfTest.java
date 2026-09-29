@@ -28,7 +28,7 @@ public final class MlpModelAveragerSelfTest
 			saveConstantModel(first, 1.0);
 			saveConstantModel(second, 3.0);
 			saveConstantModel(third, 5.0);
-			MlpModelAverager.averageLegacyCompatible(
+			MlpModelAverager.average(
 					Arrays.asList(
 							first.getAbsolutePath(),
 							second.getAbsolutePath(),
@@ -37,7 +37,8 @@ public final class MlpModelAveragerSelfTest
 
 			MultiLayerPerceptron result = (MultiLayerPerceptron)
 					NeuralNetwork.createFromFile(averaged.getAbsolutePath());
-			double expected = (3.0 + 8.0) / 3.0;
+			// Plain FedAvg: every node contributes exactly 1/N.
+			double expected = (1.0 + 3.0 + 5.0) / 3.0;
 			for (int layerIndex = 1;
 					layerIndex < result.getLayers().size(); layerIndex++)
 			{
@@ -48,10 +49,42 @@ public final class MlpModelAveragerSelfTest
 					{
 						require(Math.abs(connection.getWeight().getValue() - expected)
 								< 1.0e-12,
-								"streamed MLP average changed legacy weight behavior");
+								"averaged MLP weight is not the mean of the node weights");
 					}
 				}
 			}
+			// Averaging must not depend on the order models arrive in.
+			File reordered = temporaryModelFile("reordered");
+			try
+			{
+				MlpModelAverager.average(
+						Arrays.asList(
+								third.getAbsolutePath(),
+								first.getAbsolutePath(),
+								second.getAbsolutePath()),
+						reordered.getAbsolutePath());
+				MultiLayerPerceptron shuffled = (MultiLayerPerceptron)
+						NeuralNetwork.createFromFile(reordered.getAbsolutePath());
+				for (int layerIndex = 1;
+						layerIndex < shuffled.getLayers().size(); layerIndex++)
+				{
+					for (Neuron neuron
+							: shuffled.getLayers().get(layerIndex).getNeurons())
+					{
+						for (Connection connection : neuron.getInputConnections())
+						{
+							require(Math.abs(connection.getWeight().getValue() - expected)
+									< 1.0e-12,
+									"averaged MLP weight depends on model order");
+						}
+					}
+				}
+			}
+			finally
+			{
+				reordered.delete();
+			}
+
 			System.out.println("MlpModelAveragerSelfTest passed");
 		}
 		finally

@@ -48,6 +48,7 @@ public final class CorpusStreamingAgent extends Agent
 	private int batchSequence;
 	private int nodeCount = 1;
 	private int totalInputBatchCount;
+	private int routedUserCount;
 	private boolean completed;
 
 	protected void setup()
@@ -58,7 +59,9 @@ public final class CorpusStreamingAgent extends Agent
 				? (ControllerAgentGui) args[1] : null;
 		routeSources = corpusStream.getRouteSources();
 		nodeCount = inferNodeCount(routeSources);
-		totalInputBatchCount = estimateInputBatchCount(routeSources);
+		int[] counts = scanRoutes(routeSources);
+		totalInputBatchCount = counts[0];
+		routedUserCount = counts[1];
 
 		try
 		{
@@ -137,10 +140,12 @@ public final class CorpusStreamingAgent extends Agent
 		completed = false;
 		routeDeliveryStates.clear();
 		routeDeliveryStates.addAll(createRouteDeliveryStates(routeSources));
-		RecommendationWorkQueueRegistry.beginInputBatchQueue(
-				activeConversationId,
-				nodeCount,
-				totalInputBatchCount);
+		SchedulingRunContext context = SchedulingRuntime.get(activeConversationId);
+		if (context != null)
+		{
+			//From here on each batch of whole users is routed at run time.
+			context.inputPlanned(routedUserCount);
+		}
 		sendAvailableBatches();
 	}
 
@@ -181,26 +186,19 @@ public final class CorpusStreamingAgent extends Agent
 
 		try
 		{
-			DispatchPlan plan = dispatchPlanForRoute(
-					state.getRoute(),
-					activeConversationId);
-			if (!plan.hasReceivers())
-			{
-				return;
-			}
 			int sequence = batchSequence + 1;
 			boolean prepared = state.prepareNextBatch(
 					activeConversationId,
 					getLocalName(),
 					sequence,
 					MAX_BATCH_ROWS,
-					plan.getReceivers(),
-					plan.getPrimaryServer());
+					null,
+					0);
 			if (prepared)
 			{
 				batchSequence = sequence;
-				// Dispatch at send time so the last redirect token is not
-				// consumed before the batch chooses its actual receiver.
+				//The receiver is chosen when the batch is first sent, from the
+				//users it holds and the live controls at that moment.
 				sendPendingBatch(state);
 			}
 		}
@@ -221,20 +219,20 @@ public final class CorpusStreamingAgent extends Agent
 		}
 		String sender = acknowledgement.getSender() == null
 				? null : acknowledgement.getSender().getLocalName();
-		int pendingOwnerNode = state.getPendingOwnerNode();
-		int pendingWorkItemNumber = state.getPendingWorkItemNumber();
+		int receiver = state.getPendingOwnerNode();
+		List<String> users = state.getPendingUsers();
+		boolean replicated = state.getRoute().getRecommenderServers().size() > 1;
 		if (!state.acknowledge(sender, acknowledgement.getInReplyTo()))
 		{
 			return;
 		}
-		if (!state.hasPendingBatch())
+		SchedulingRunContext context = SchedulingRuntime.get(activeConversationId);
+		if (!state.hasPendingBatch() && !replicated && context != null)
 		{
-			RecommendationWorkQueueRegistry.completeInputBatch(
-					activeConversationId,
-					pendingOwnerNode,
-					nodeCount,
-					totalInputBatchCount,
-					pendingWorkItemNumber);
+			for (String user : users)
+			{
+				context.inputDelivered(user, receiver);
+			}
 		}
 		sendAvailableBatches();
 	}
@@ -261,24 +259,24 @@ public final class CorpusStreamingAgent extends Agent
 		{
 			return;
 		}
-		if (state.getPendingDeliveryAttempts() <= 0)
+		if (!state.isAssigned())
 		{
-			DispatchPlan plan = dispatchPlanForRoute(
-					state.getRoute(),
-					activeConversationId);
+			DispatchPlan plan = dispatchPlanForBatch(state, activeConversationId);
 			if (!plan.hasReceivers())
 			{
+				//Held (a paused node); the ticker retries.
 				return;
 			}
-			state.retargetPendingBatch(
-					plan.getReceivers(),
-					plan.getPrimaryServer());
-			RecommendationWorkQueueRegistry.dispatchInputBatch(
-					activeConversationId,
-					state.getPendingOwnerNode(),
-					nodeCount,
-					totalInputBatchCount,
-					state.getPendingWorkItemNumber());
+			state.assignPendingBatch(plan.getReceivers(), plan.getPrimaryServer());
+			SchedulingRunContext context = SchedulingRuntime.get(activeConversationId);
+			if (context != null && plan.getReceivers().size() == 1
+					&& state.getRoute().getRecommenderServers().size() == 1)
+			{
+				for (String user : state.getPendingUsers())
+				{
+					context.inputDispatched(user, plan.getPrimaryServer());
+				}
+			}
 		}
 
 		ACLMessage batch = new ACLMessage(ACLMessage.INFORM);
@@ -403,15 +401,6 @@ public final class CorpusStreamingAgent extends Agent
 		closeRouteReaders();
 		for (RouteDeliveryState state : routeDeliveryStates)
 		{
-			if (state.hasPendingBatch())
-			{
-				RecommendationWorkQueueRegistry.failInputBatch(
-						activeConversationId,
-						state.getPendingOwnerNode(),
-						nodeCount,
-						totalInputBatchCount,
-						state.getPendingWorkItemNumber());
-			}
 			state.clearPendingBatch();
 		}
 		RecommendationRunAbortRegistry.abort(
@@ -436,69 +425,48 @@ public final class CorpusStreamingAgent extends Agent
 		}
 	}
 
-	private static DispatchPlan dispatchPlanForRoute(
-			CorpusStreamRoute route,
-			String runId)
+	/**
+	 * Receivers of a batch. A replicated route goes to every node its route
+	 * names (every node needs those users) and waits while any node is paused.
+	 * A non-replicated batch holds whole users and goes to the one node the
+	 * run's scheduler routes them to, so live controls move users, never parts
+	 * of a user. Without a scheduling context the route's own node receives it.
+	 */
+	private static DispatchPlan dispatchPlanForBatch(RouteDeliveryState state, String runId)
 	{
+		CorpusStreamRoute route = state == null ? null : state.getRoute();
 		if (route == null)
 		{
 			return DispatchPlan.blocked();
 		}
-		LiveWorkloadAdjustmentRegistry.Snapshot controls =
-				LiveWorkloadAdjustmentRegistry.snapshot(runId);
-		List<Integer> originalReceivers = route.getRecommenderServers();
-		boolean replicatedRoute = originalReceivers.size() > 1;
-		if (!replicatedRoute
-				&& controls.getRedirectRemaining() > 0
-				&& controls.isEligible(controls.getRedirectTargetNode()))
+		SchedulingRunContext context = SchedulingRuntime.get(runId);
+		List<Integer> original = route.getRecommenderServers();
+		if (original.size() > 1)
 		{
-			int targetNode = controls.getRedirectTargetNode();
-			return new DispatchPlan(
-					Collections.singletonList(Integer.valueOf(targetNode)),
-					targetNode);
-		}
-		LinkedHashSet<Integer> receivers = new LinkedHashSet<Integer>();
-		for (Integer server : originalReceivers)
-		{
-			if (server == null)
-			{
-				continue;
-			}
-			int node = Math.max(1, server.intValue());
-			LiveWorkloadAdjustmentRegistry.NodeControl control =
-					controls.controlForNode(node);
-			if (!control.isPaused() && !control.isUnavailable())
-			{
-				receivers.add(Integer.valueOf(node));
-				continue;
-			}
-			if (replicatedRoute)
+			if (context != null && context.holdReplicatedInput())
 			{
 				return DispatchPlan.blocked();
 			}
-			if (control.isDraining()
-					&& controls.isEligible(control.getDrainTargetNode()))
-			{
-				receivers.add(Integer.valueOf(control.getDrainTargetNode()));
-			}
+			return new DispatchPlan(original, route.getPrimaryRecommenderServer());
 		}
-		if (receivers.isEmpty())
+		int originalNode = Math.max(1, original.get(0).intValue());
+		if (context == null)
+		{
+			return new DispatchPlan(original, originalNode);
+		}
+		int receiver = context.routeUsers(
+				state.getPendingUsers(), originalNode, state.getPendingRowCount());
+		if (receiver <= 0)
 		{
 			return DispatchPlan.blocked();
 		}
-		int primary = route.getPrimaryRecommenderServer();
-		if (!receivers.contains(Integer.valueOf(primary)))
-		{
-			primary = receivers.iterator().next().intValue();
-		}
-		return new DispatchPlan(new ArrayList<Integer>(receivers), primary);
+		return new DispatchPlan(Collections.singletonList(Integer.valueOf(receiver)), receiver);
 	}
 
-	static ArrayList<Integer> dispatchReceiversForTest(
-			CorpusStreamRoute route,
-			String runId)
+	/** Receivers the next batch of {@code state} would get now (for tests). */
+	static ArrayList<Integer> dispatchReceiversForTest(RouteDeliveryState state, String runId)
 	{
-		return dispatchPlanForRoute(route, runId).getReceivers();
+		return dispatchPlanForBatch(state, runId).getReceivers();
 	}
 
 	private static int inferNodeCount(
@@ -529,13 +497,17 @@ public final class CorpusStreamingAgent extends Agent
 		return Math.max(1, maxNode);
 	}
 
-	private static int estimateInputBatchCount(
-			List<ReplayableCorpusStream.RouteSource> sources)
+	/**
+	 * Scans the route files once: {number of batches, number of users on
+	 * non-replicated routes}. A route file keeps each user's rows together.
+	 */
+	private static int[] scanRoutes(List<ReplayableCorpusStream.RouteSource> sources)
 	{
 		int batches = 0;
+		int routedUsers = 0;
 		if (sources == null)
 		{
-			return 0;
+			return new int[] {0, 0};
 		}
 		for (ReplayableCorpusStream.RouteSource source : sources)
 		{
@@ -543,17 +515,23 @@ public final class CorpusStreamingAgent extends Agent
 			{
 				continue;
 			}
+			boolean replicated = source.getRoute().getRecommenderServers().size() > 1;
 			ReplayableCorpusStream.Reader reader = null;
 			try
 			{
 				reader = source.openReader();
 				while (reader.hasRemaining())
 				{
-					if (reader.readBatch(MAX_BATCH_ROWS).isEmpty())
+					ArrayList<String> rows = reader.readBatch(MAX_BATCH_ROWS);
+					if (rows.isEmpty())
 					{
 						break;
 					}
 					batches++;
+					if (!replicated)
+					{
+						routedUsers += usersOfRows(rows).size();
+					}
 				}
 			}
 			catch (IOException e)
@@ -577,7 +555,30 @@ public final class CorpusStreamingAgent extends Agent
 				}
 			}
 		}
-		return Math.max(0, batches);
+		return new int[] {Math.max(0, batches), Math.max(0, routedUsers)};
+	}
+
+	/** Distinct users of tweet rows ("count, user, id, followee, text"), in order. */
+	static List<String> usersOfRows(List<String> rows)
+	{
+		LinkedHashSet<String> users = new LinkedHashSet<String>();
+		if (rows != null)
+		{
+			for (String row : rows)
+			{
+				if (row == null)
+				{
+					continue;
+				}
+				int first = row.indexOf('\t');
+				int second = first < 0 ? -1 : row.indexOf('\t', first + 1);
+				if (second > first)
+				{
+					users.add(row.substring(first + 1, second));
+				}
+			}
+		}
+		return new ArrayList<String>(users);
 	}
 
 	static int maxBatchRows()
@@ -720,7 +721,8 @@ public final class CorpusStreamingAgent extends Agent
 		private int pendingDeliveryAttempts;
 		private long pendingDeliverySentAt;
 		private int pendingOwnerNode;
-		private int pendingWorkItemNumber;
+		private boolean pendingAssigned;
+		private List<String> pendingUsers = Collections.<String>emptyList();
 		private final Set<String> pendingAcknowledgements =
 				new LinkedHashSet<String>();
 		private boolean completed;
@@ -749,11 +751,24 @@ public final class CorpusStreamingAgent extends Agent
 			return completed;
 		}
 
+		/** A batch was read and is not yet acknowledged by every receiver. */
 		boolean hasPendingBatch()
 		{
 			return pendingBatchId != null
 					&& pendingBatchPayload != null
-					&& !pendingAcknowledgements.isEmpty();
+					&& (!pendingAssigned || !pendingAcknowledgements.isEmpty());
+		}
+
+		/** The pending batch has receivers (it is sent, or about to be). */
+		boolean isAssigned()
+		{
+			return pendingAssigned;
+		}
+
+		/** Users whose rows the pending batch holds, each whole. */
+		List<String> getPendingUsers()
+		{
+			return pendingUsers;
 		}
 
 		String getPendingBatchId()
@@ -784,11 +799,6 @@ public final class CorpusStreamingAgent extends Agent
 		int getPendingOwnerNode()
 		{
 			return Math.max(1, pendingOwnerNode);
-		}
-
-		int getPendingWorkItemNumber()
-		{
-			return Math.max(0, pendingWorkItemNumber);
 		}
 
 		int getPendingRowCount()
@@ -828,31 +838,42 @@ public final class CorpusStreamingAgent extends Agent
 					+ Math.max(1, primaryServer));
 			payload.addAll(rows);
 
-			if (!setPendingReceivers(receivers))
-			{
-				throw new IOException(
-						"Corpus route " + (routeIndex + 1)
-						+ " has no recommender receivers.");
-			}
-
 			pendingBatchId = conversationId + ":" + senderName + ":"
 					+ sequence;
 			pendingBatchPayload = payload;
 			pendingDeliveryAttempts = 0;
 			pendingDeliverySentAt = 0L;
-			pendingOwnerNode = Math.max(1, primaryServer);
-			pendingWorkItemNumber = Math.max(1, sequence);
+			pendingUsers = Collections.unmodifiableList(usersOfRows(rows));
+			pendingAssigned = false;
+			pendingAcknowledgements.clear();
+			if (receivers != null)
+			{
+				assignPendingBatch(receivers, primaryServer);
+				if (!pendingAssigned)
+				{
+					clearPendingBatch();
+					throw new IOException(
+							"Corpus route " + (routeIndex + 1)
+							+ " has no recommender receivers.");
+				}
+			}
 			return true;
 		}
 
-		void retargetPendingBatch(
+		/**
+		 * Gives the pending batch its receivers and owner, once, before it is
+		 * first sent; retries go to the same receivers, so a batch is never
+		 * delivered to two different nodes.
+		 */
+		void assignPendingBatch(
 				List<Integer> receivers,
 				int primaryServer)
 		{
-			if (!hasPendingBatch() || !setPendingReceivers(receivers))
+			if (pendingBatchId == null || pendingAssigned || !setPendingReceivers(receivers))
 			{
 				return;
 			}
+			pendingAssigned = true;
 			pendingOwnerNode = Math.max(1, primaryServer);
 			if (pendingBatchPayload != null && !pendingBatchPayload.isEmpty())
 			{
@@ -922,7 +943,8 @@ public final class CorpusStreamingAgent extends Agent
 			pendingDeliveryAttempts = 0;
 			pendingDeliverySentAt = 0L;
 			pendingOwnerNode = 0;
-			pendingWorkItemNumber = 0;
+			pendingAssigned = false;
+			pendingUsers = Collections.<String>emptyList();
 			pendingAcknowledgements.clear();
 		}
 

@@ -62,7 +62,7 @@ public class ControllerAgent extends GuiAgent {
 	private long tweetDelay;
 	private String currentRecommendationRunId = RecommendationRunLifecycle.createRunId();
 
-	String[] stopWordsArray = {"a","able","about","above","abst","accordance","according","accordingly","across","act",
+	static final String[] stopWordsArray = {"a","able","about","above","abst","accordance","according","accordingly","across","act",
 			"actually","added","adj","affected","affecting","affects","after","afterwards","again","against",
 			"ah","all","almost","alone","along","already","also","although","always","am",
 			"among","amongst","an","and","announce","another","any","anybody","anyhow","anymore",
@@ -130,6 +130,10 @@ public class ControllerAgent extends GuiAgent {
 			"without","wont","words","world","would","wouldnt","www","x","y","yes",
 			"yet","yo","you","youd","youll","your","youre","yours","yourself","yourselves","youve",
 			"z","zero"};
+
+	/** Shared, immutable stop-word lookup used by the normaliser. */
+	static final java.util.Set<String> STOP_WORD_SET =
+			TweetTextNormalizer.stopWordSet(stopWordsArray);
 	
 	
 	private int totalUsers = 0;
@@ -193,13 +197,6 @@ public class ControllerAgent extends GuiAgent {
 			Integer.getInteger("dsmp.max.direct.text.user.agents", 480)
 					.intValue());
 	private static final Pattern RETWEET_PATTERN = Pattern.compile("RT @");
-	private static final Pattern PUNCTUATION_PATTERN = Pattern.compile("[\\p{P}]");
-	private static final Pattern LINK_PATTERN = Pattern.compile(
-			"http[a-zA-Z0-9]*|bitly[a-zA-Z0-9]*|www[a-zA-Z0-9]*");
-	private static final Pattern SPECIAL_CHARACTER_PATTERN =
-			Pattern.compile("[^a-zA-Z\\p{Z}]");
-	private static final Pattern NON_ALPHA_PATTERN = Pattern.compile("[^a-zA-Z ]");
-	private static final Pattern MULTI_SPACE_PATTERN = Pattern.compile(" +");
 	
 	private AID agentNameAID;
 	private String agentName;
@@ -317,7 +314,10 @@ public class ControllerAgent extends GuiAgent {
 			SwingUtilities.invokeAndWait(new Runnable() {
 				public void run() {
 					myGui = new ControllerAgentGui(ControllerAgent.this);
-					myGui.revealAfterLaunch();
+					if (!NebulaDialogs.isSuppressed())
+					{
+						myGui.revealAfterLaunch();
+					}
 				}
 			});
 		} catch (Exception guiError) {
@@ -439,6 +439,7 @@ public class ControllerAgent extends GuiAgent {
 			// Profile mainProfile = new ProfileImpl(containerProperties);
 		
 			Profile mainProfile = new ProfileImpl();
+			joinOwnPlatform(mainProfile);
 			mainProfile.setParameter(Profile.CONTAINER_NAME, "workContainer");
 			mainProfile.setParameter("jade_core_messaging_MessageManager_poolsize", "20");
 			mainProfile.setParameter(
@@ -462,11 +463,32 @@ public class ControllerAgent extends GuiAgent {
 		return Math.max(minimum, Math.min(maximum, maxHeap / 4L));
 	}
 
+	/**
+	 * Points a new container at the main container this controller runs in.
+	 * Without this JADE's default (localhost:1099) is used, which joins the
+	 * wrong platform when the main container listens on another port or a
+	 * second simulator is running.
+	 */
+	private void joinOwnPlatform(Profile profile)
+	{
+		String host = getProperty(Profile.LOCAL_HOST, null);
+		String port = getProperty(Profile.LOCAL_PORT, null);
+		if (host != null && host.trim().length() > 0)
+		{
+			profile.setParameter(Profile.MAIN_HOST, host.trim());
+		}
+		if (port != null && port.trim().length() > 0)
+		{
+			profile.setParameter(Profile.MAIN_PORT, port.trim());
+		}
+	}
+
 	private void setUpUserSimContainer()
 	{
 		System.out.println("Set up user sim container");
 		try {
 			Profile userSimProfile = new ProfileImpl();
+			joinOwnPlatform(userSimProfile);
 			userSimProfile.setParameter(Profile.CONTAINER_NAME, "userSimContainer");
 			userSimContainer = runTime.createAgentContainer(userSimProfile);
 
@@ -1135,53 +1157,15 @@ public class ControllerAgent extends GuiAgent {
 	{
 		String currentText = tweetText == null ? "" : tweetText;
 
-		if (currentText.contains("Photo:"))
-		{
-			currentText = currentText.substring(0, currentText.indexOf("Photo:"));
-		}
-		if (currentText.contains("Photoset:"))
-		{
-			currentText = currentText.substring(0, currentText.indexOf("Photoset:"));
-		}
-		if (currentText.contains("RT @") && retweetsFlag == RE_TWEETS)
-		{
-			currentText = "";
-		}
-		else
-		{
-			currentText = RETWEET_PATTERN.matcher(currentText).replaceAll("RT ");
-		}
-
-		currentText = PUNCTUATION_PATTERN.matcher(currentText).replaceAll("");
-		currentText = LINK_PATTERN.matcher(currentText).replaceAll(" ");
-		if (hashTagsFlag == HASH_TAGS)
-		{
-			currentText = SPECIAL_CHARACTER_PATTERN.matcher(currentText).replaceAll(" ");
-		}
-		currentText = currentText.toLowerCase(Locale.ENGLISH);
-		if (stopWordsFlag == STOP_WORDS)
-		{
-			currentText = removeSvmPreflightStopWords(currentText);
-		}
-		currentText = currentText.trim();
-		currentText = NON_ALPHA_PATTERN.matcher(currentText).replaceAll("");
-		currentText = MULTI_SPACE_PATTERN.matcher(currentText).replaceAll(" ");
-		return currentText.trim();
+		//Shared with every recommender node so the vocabularies cannot diverge.
+		return TweetTextNormalizer.normalize(
+				currentText,
+				retweetsFlag == RE_TWEETS,
+				hashTagsFlag == HASH_TAGS,
+				stopWordsFlag == STOP_WORDS,
+				STOP_WORD_SET);
 	}
 
-	private String removeSvmPreflightStopWords(String currentText)
-	{
-		String paddedText = " " + currentText + " ";
-		for (String stopWord : stopWordsArray)
-		{
-			String stopWordPattern = " " + stopWord + " ";
-			if (paddedText.contains(stopWordPattern))
-			{
-				paddedText = paddedText.replace(stopWordPattern, " ");
-			}
-		}
-		return paddedText;
-	}
 
 	private int countSvmPreflightTokens(String normalizedText)
 	{
@@ -1299,7 +1283,7 @@ public class ControllerAgent extends GuiAgent {
 				{
 					continue;
 				}
-				double similarity = calculateSparseCosineScore(
+				double similarity = calculateUnitVectorCosine(
 						targetDocument, candidateEntry.getValue());
 				if (Double.isFinite(similarity) && similarity > 0.0)
 				{
@@ -1312,7 +1296,13 @@ public class ControllerAgent extends GuiAgent {
 		return byNode;
 	}
 
-	private double calculateSparseCosineScore(
+	/**
+	 * Cosine similarity of two L2-normalised sparse vectors.
+	 *
+	 * Computes the dot product only, which equals cosine because the controller
+	 * normalises every TF-IDF vector to unit length when it builds them.
+	 */
+	private double calculateUnitVectorCosine(
 			Map<String,Double> first,
 			Map<String,Double> second)
 	{
@@ -1613,6 +1603,8 @@ public class ControllerAgent extends GuiAgent {
 				int smallestBinIndex;
 
 				totalUsers = 0;
+				Map<String,Integer> plannedNodes = planPrimaryNodesForCounts(
+						listOfUsers, tweetCountsForUsers(listOfUsers));
 				
 				for (String user : listOfUsers)
 				{
@@ -1620,7 +1612,7 @@ public class ControllerAgent extends GuiAgent {
 
 					currentTweetCount = availableDb.getTweetCountFromUser(user);
 				
-					smallestBinIndex = selectCapacityAwareBin(bins);
+					smallestBinIndex = plannedNodes.get(user).intValue() - 1;
 //					totalRecBin = bins.get(smallestBinIndex);
 					totalRecBin = bins[smallestBinIndex];
 					totalRecBin += currentTweetCount;
@@ -1863,13 +1855,15 @@ public class ControllerAgent extends GuiAgent {
 				int smallestBinIndex;
 
 				totalUsers = 0;
+				Map<String,Integer> plannedNodes = planPrimaryNodesForCounts(
+						listOfUsers, tweetCountsForUsers(listOfUsers));
 				
 				for (String user : listOfUsers)
 				{
 					totalUsers++;
 
 					currentTweetCount = availableDb.getTweetCountFromUser(user);
-					smallestBinIndex = selectCapacityAwareBin(bins);
+					smallestBinIndex = plannedNodes.get(user).intValue() - 1;
 //					totalRecBin = bins.get(smallestBinIndex);
 					totalRecBin = bins[smallestBinIndex];
 					totalRecBin += currentTweetCount;
@@ -2109,12 +2103,13 @@ public class ControllerAgent extends GuiAgent {
 						graphGenerationEnabled,
 						readFrom == FROM_TEXT ? textFile : null);
 
+				//Input delivery depends only on the dataset and the algorithm, never
+				//on the scheduler plan, so the original and scheduled modes of an
+				//experiment differ in scheduling alone.
 				boolean boundedTextAgentProvisioning =
 						supportsBoundedCorpusStreaming(algorithmRec)
-						&& (shouldUseBoundedTextAgentProvisioning(
-								listOfUsers.size())
-								|| RecommendationSchedulerRegistry
-										.snapshot().isActive());
+						&& shouldUseBoundedTextAgentProvisioning(
+								listOfUsers.size());
 				int expectedTextParticipants = calculateTextParticipantCount(
 						listOfUsers,
 						usersRec,
@@ -2674,6 +2669,16 @@ public class ControllerAgent extends GuiAgent {
 				int totalRecBin = 0;
 				int smallestBinIndex;
 
+				LinkedHashMap<String,Integer> databaseCounts = new LinkedHashMap<String,Integer>();
+				resultSet.beforeFirst();
+				while(!resultSet.isLast())
+				{
+					resultSet.next();
+					databaseCounts.put(resultSet.getString(1), Integer.valueOf(resultSet.getInt(3)));
+				}
+				Map<String,Integer> plannedNodes = planPrimaryNodesForCounts(
+						new ArrayList<String>(databaseCounts.keySet()), databaseCounts);
+
 				resultSet.beforeFirst();
 				while(!resultSet.isLast())
 				{
@@ -2686,7 +2691,7 @@ public class ControllerAgent extends GuiAgent {
 
 					currentTweetCount  = resultSet.getInt(3);
 
-					smallestBinIndex = selectCapacityAwareBin(bins);
+					smallestBinIndex = plannedNodes.get(currentTwitterUser).intValue() - 1;
 					/*System.out.println("smallestBinIndex: "+smallestBinIndex);
 					  		for (int i = 0; i < bins.length; i++){
 					  			System.out.println("bin "+i+": "+bins[i]);
@@ -3024,11 +3029,142 @@ public class ControllerAgent extends GuiAgent {
 			return smallestIndex;
 		}
 
-		private int selectCapacityAwareBin(int[] currentBins)
+		/**
+		 * Primary node (1-based) of every user, planned before agents are made.
+		 *
+		 * In the original DSMP mode this is exactly the V3 rule: users in list
+		 * order, each to the bin with the fewest tweets (ties to the lowest
+		 * index), replicated users adding their tweets to every bin. In the
+		 * scheduled modes the run's policy places the non-replicated users with
+		 * {@link PlacementPlanner} on the nodes' emulated speeds, treating each
+		 * node as one machine (its main thread processes its own input) and a
+		 * user's rows as its cost, which the measured text-processing time is
+		 * linear in. Replicated users load every node equally, so they are base
+		 * load; their scoring owner rotates over the nodes in name order.
+		 */
+		private Map<String,Integer> planPrimaryNodes(
+				List<String> usersInListOrder,
+				Map<String,Integer> rowCounts,
+				java.util.Set<String> replicatedUsers)
 		{
-			return NodeCapacityScheduler.chooseNodeByCapacity(
-					currentBins,
-					numRecAgents);
+			LinkedHashMap<String,Integer> primary = new LinkedHashMap<String,Integer>();
+			int nodes = Math.max(1, numRecAgents);
+			SchedulingRunContext context = SchedulingRuntime.get(currentRecommendationRunId);
+			if (context == null || context.getMode() == SchedulingRunContext.Mode.BASELINE)
+			{
+				long[] bins = new long[nodes];
+				for (String user : usersInListOrder)
+				{
+					long rows = rowCount(rowCounts, user);
+					int smallest = findSmallestBin(bins);
+					bins[smallest] += rows;
+					if (replicatedUsers.contains(user))
+					{
+						for (int node = 0; node < nodes; node++)
+						{
+							if (node != smallest)
+							{
+								bins[node] += rows;
+							}
+						}
+					}
+					primary.put(user, Integer.valueOf(smallest + 1));
+				}
+				if (context != null)
+				{
+					context.recordPlacement("Original DSMP list scheduling: rows per node "
+							+ Arrays.toString(bins), null);
+					context.recordPrimaryNodes(primary);
+				}
+				return primary;
+			}
+			double[] baseLoad = new double[nodes];
+			ArrayList<WorkUnitSpec> units = new ArrayList<WorkUnitSpec>();
+			ArrayList<String> replicatedSorted = new ArrayList<String>();
+			for (String user : usersInListOrder)
+			{
+				long rows = rowCount(rowCounts, user);
+				if (replicatedUsers.contains(user))
+				{
+					replicatedSorted.add(user);
+					for (int node = 0; node < nodes; node++)
+					{
+						baseLoad[node] += rows;
+					}
+					continue;
+				}
+				units.add(new WorkUnitSpec(
+						units.size() + 1,
+						user,
+						rows,
+						estimateRetainedMegabytes(user),
+						0,
+						Double.POSITIVE_INFINITY,
+						0,
+						null));
+			}
+			PlacementPlanner.Plan plan = PlacementPlanner.plan(
+					context.effectivePolicy(),
+					units,
+					context.currentSpecs(),
+					baseLoad,
+					false,
+					true,
+					0.0);
+			for (WorkUnitSpec unit : units)
+			{
+				primary.put(unit.getKey(), Integer.valueOf(plan.nodeOfUnit(unit.getId())));
+			}
+			Collections.sort(replicatedSorted);
+			for (int index = 0; index < replicatedSorted.size(); index++)
+			{
+				primary.put(replicatedSorted.get(index), Integer.valueOf(index % nodes + 1));
+			}
+			context.recordPlacement(context.effectivePolicy().getLabel()
+					+ " placement of " + units.size() + " user(s): " + plan.summary(),
+					plan.getWarnings());
+			context.recordPrimaryNodes(primary);
+			return primary;
+		}
+
+		private Map<String,Integer> tweetCountsForUsers(List<String> users)
+		{
+			LinkedHashMap<String,Integer> counts = new LinkedHashMap<String,Integer>();
+			for (String user : users)
+			{
+				counts.put(user, Integer.valueOf(availableDb.getTweetCountFromUser(user)));
+			}
+			return counts;
+		}
+
+		private static long rowCount(Map<String,Integer> rowCounts, String user)
+		{
+			Integer rows = rowCounts.get(user);
+			return rows == null ? 0L : Math.max(0, rows.intValue());
+		}
+
+		/** Rough retained-memory estimate for placement budgets, in MB. */
+		private int estimateRetainedMegabytes(String user)
+		{
+			TextUserLoadEstimate estimate = estimateTextUserLoad(user);
+			long bytes = estimate.approximateTermCount * 96L
+					+ (long)availableDb.getTweetCountFromUser(user) * 64L;
+			return (int)Math.max(0L, (bytes + (1L << 20) - 1L) >> 20);
+		}
+
+		private Map<String,Integer> planPrimaryNodesForCounts(
+				List<String> usersInListOrder,
+				Map<String,Integer> rowCounts)
+		{
+			java.util.LinkedHashSet<String> replicated = new java.util.LinkedHashSet<String>();
+			for (String user : usersInListOrder)
+			{
+				if (usersRec != null && usersRec.contains(user))
+				{
+					replicated.add(user);
+				}
+			}
+			return planPrimaryNodes(usersInListOrder, rowCounts, replicated);
 		}
 
 			private int findSmallestBin(long[] currentBins) {
@@ -3041,13 +3177,6 @@ public class ControllerAgent extends GuiAgent {
 				} 
 			} 
 				return smallestIndex;
-			}
-
-			private int selectCapacityAwareBin(long[] currentBins)
-			{
-				return NodeCapacityScheduler.chooseNodeByCapacity(
-						currentBins,
-						numRecAgents);
 			}
 
 			static boolean shouldUseBoundedTextAgentProvisioning(int activeUserCount)
@@ -3109,70 +3238,41 @@ public class ControllerAgent extends GuiAgent {
 			{
 				return assignments;
 			}
-
-			final LinkedHashMap<String,Integer> originalUserOrder = new LinkedHashMap<String,Integer>();
-			for (int i = 0; i < listOfUsers.size(); i++)
-			{
-				originalUserOrder.put(listOfUsers.get(i), i);
-			}
-			
-			final LinkedHashMap<String,Long> userAssignmentLoads = new LinkedHashMap<String,Long>();
+			LinkedHashMap<String,Integer> rowCounts = new LinkedHashMap<String,Integer>();
+			java.util.LinkedHashSet<String> replicated = new java.util.LinkedHashSet<String>();
 			for (String user : listOfUsers)
 			{
-				userAssignmentLoads.put(user, estimateTextUserAssignmentLoad(user));
-			}
-
-			ArrayList<String> usersSortedByEstimatedLoad = new ArrayList<String>(listOfUsers);
-			Collections.sort(usersSortedByEstimatedLoad, new Comparator<String>() {
-				public int compare(String userA, String userB)
-				{
-					long userALoad = userAssignmentLoads.get(userA);
-					long userBLoad = userAssignmentLoads.get(userB);
-					if (userALoad < userBLoad)
-						return 1;
-					if (userALoad > userBLoad)
-						return -1;
-
-					Integer userAOrder = originalUserOrder.get(userA);
-					Integer userBOrder = originalUserOrder.get(userB);
-					if (userAOrder == null)
-						userAOrder = 0;
-					if (userBOrder == null)
-						userBOrder = 0;
-					return userAOrder.compareTo(userBOrder);
-				}
-			});
-
-			for (String user : usersSortedByEstimatedLoad)
-			{
-				int currentTweetCount = availableDb.getTweetCountFromUser(user);
-				long userAssignmentLoad = userAssignmentLoads.get(user);
-				int selectedBinIndex = selectCapacityAwareBin(balanceBins);
-				ArrayList<Integer> recServers;
-
-				addUserLoadToTextBin(tweetBins, balanceBins, selectedBinIndex, currentTweetCount, userAssignmentLoad);
+				rowCounts.put(user, Integer.valueOf(availableDb.getTweetCountFromUser(user)));
 				if (shouldReplicateTextUserToAllRecommenders(user))
+				{
+					replicated.add(user);
+				}
+			}
+			Map<String,Integer> primary = planPrimaryNodes(listOfUsers, rowCounts, replicated);
+			for (String user : listOfUsers)
+			{
+				int currentTweetCount = rowCounts.get(user).intValue();
+				int node = primary.get(user).intValue();
+				ArrayList<Integer> recServers;
+				if (replicated.contains(user))
 				{
 					recServers = createAllRecommenderServerList();
 					for (int i = 0; i < numRecAgents; i++)
 					{
-						if (i != selectedBinIndex)
-						{
-							addUserLoadToTextBin(tweetBins, balanceBins, i, currentTweetCount, userAssignmentLoad);
-						}
+						addUserLoadToTextBin(tweetBins, balanceBins, i, currentTweetCount, currentTweetCount);
 					}
 				}
 				else
 				{
 					recServers = new ArrayList<Integer>();
-					recServers.add(selectedBinIndex + 1);
+					recServers.add(Integer.valueOf(node));
+					addUserLoadToTextBin(tweetBins, balanceBins, node - 1, currentTweetCount, currentTweetCount);
 				}
-
-				assignments.put(user, new UserNodeAssignment(recServers, selectedBinIndex + 1));
+				assignments.put(user, new UserNodeAssignment(recServers, node));
 			}
 
-			System.out.println("Controller balanced text assignment loads: "+Arrays.toString(balanceBins));
-			System.out.println("Controller balanced text assignment tweet bins: "+Arrays.toString(tweetBins));
+			System.out.println("Controller text assignment rows per node: "+Arrays.toString(balanceBins));
+			System.out.println("Controller text assignment tweet bins: "+Arrays.toString(tweetBins));
 			return assignments;
 		}
 
@@ -3217,11 +3317,6 @@ public class ControllerAgent extends GuiAgent {
 			}
 			return recServers;
 		}
-
-			private long estimateTextUserAssignmentLoad(String user)
-			{
-				return estimateTextUserLoad(user).assignmentLoad;
-			}
 
 			private long[] estimateExactSvmRetainedSparseTermEntriesByNode(
 					Map<String,UserNodeAssignment> assignments)
@@ -3785,6 +3880,12 @@ public class ControllerAgent extends GuiAgent {
 					datasetReferenceUsers,
 					datasetGraphNodeNames);
 
+			//Install the user -> followee ground truth so the delivered top-N lists
+			//can be scored for ranking quality, not just classifier accuracy.
+			RecommendationQualityEvaluator.startRun(userFolloweeMap);
+			System.out.println("Recommendation quality ground truth: "
+					+ userFolloweeMap.size() + " user(s) with a known followee.");
+
 			if (malformedRows > 0)
 			{
 				String warning = "Skipped " + malformedRows
@@ -3825,27 +3926,14 @@ public class ControllerAgent extends GuiAgent {
 		else
 			currentText = RETWEET_PATTERN.matcher(currentText).replaceAll("RT ");
 
-		currentText = PUNCTUATION_PATTERN.matcher(currentText).replaceAll("");
-		currentText = LINK_PATTERN.matcher(currentText).replaceAll(" ");
-		if (hashTagsFlag == HASH_TAGS)
-		{
-			currentText = SPECIAL_CHARACTER_PATTERN.matcher(currentText).replaceAll(" ");
-		}
-		if (stopWordsFlag == STOP_WORDS)
-		{
-			for (String stopWord : stopWordsArray)
-			{
-				if (currentText.toLowerCase().contains(" "+stopWord+" "))
-				{
-					currentText = currentText.toLowerCase()
-							.replaceAll(" "+stopWord+" "," ");
-				}
-			}
-		}
-		currentText = currentText.toLowerCase();
-		currentText = currentText.trim();
-		currentText = NON_ALPHA_PATTERN.matcher(currentText).replaceAll("");
-		currentText = MULTI_SPACE_PATTERN.matcher(currentText).replaceAll(" ");
+		//Shared with every recommender node so centralUniqueDocTerms always
+		//contains exactly the terms the recommenders will produce.
+		currentText = TweetTextNormalizer.normalize(
+				currentText,
+				retweetsFlag == RE_TWEETS,
+				hashTagsFlag == HASH_TAGS,
+				stopWordsFlag == STOP_WORDS,
+				STOP_WORD_SET);
 
 		String[] tokens = currentText.split("\\s+");
 		if (tokens.length < 3)
@@ -3938,69 +4026,15 @@ public class ControllerAgent extends GuiAgent {
 			//System.out.println("Original text: "+currentText);
 
 
-			//Remove Photo: tweets
-			if (currentText.contains("Photo:"))
-				currentText = currentText.substring(0,currentText.indexOf("Photo:"));
-
-			//Remove Photoset: tweets
-			if (currentText.contains("Photoset:"))
-				currentText = currentText.substring(0,currentText.indexOf("Photoset:"));
-
-			//Remove all retweets if flagged
-			Matcher matcher; //a matcher
-			if (currentText.contains("RT @") && retweetsFlag == RE_TWEETS)
-				currentText="";
-			else
-			{
-				//Remove RT @, conserve the text from retweets
-				Pattern retweet = Pattern.compile("RT @");
-
-				matcher = retweet.matcher(currentText);
-				currentText = matcher.replaceAll("RT ");
-			}
-			//System.out.println("After RT @: " + currentText);
-
-			//Remove punctuations
-			Pattern punctuations = Pattern.compile("[\\p{P}]");
-			matcher = punctuations.matcher(currentText);
-			currentText = matcher.replaceAll("");
-
-			//System.out.println("After punctuations: "+ currentText);
-
-			//Remove url links
-			Pattern links = Pattern.compile("http[a-zA-Z0-9]*|bitly[a-zA-Z0-9]*|www[a-zA-Z0-9]*");
-			matcher = links.matcher(currentText);
-			currentText = matcher.replaceAll(" ");
-
-			//System.out.println("After url links: "+ currentText);
-
-			//Remove special characters including hash tags if flagged
-			if (hashTagsFlag == HASH_TAGS)
-			{
-				Pattern specialCharacters = Pattern.compile("[^a-zA-Z\\p{Z}]");
-				matcher = specialCharacters.matcher(currentText);
-				currentText = matcher.replaceAll(" ");
-			}
-			//System.out.println("After special characters: " + currentText);
-
-			//Remove stop words if flagged
-			if (stopWordsFlag == STOP_WORDS)
-			{
-				for (String stopWord : stopWordsArray){	
-					if (currentText.toLowerCase().contains(" "+stopWord+" "))
-						//System.out.println("FOUND STOPWORD: "+stopWord);
-						currentText = currentText.toLowerCase().replaceAll(" "+stopWord+" "," ");
-				}
-			}
-			//Change all text to lowercase
-			currentText=currentText.toLowerCase();
-
-			//Trim leading and ending white space
-			currentText=currentText.trim();
-			//Remove any non-alphabetical characters
-			currentText=currentText.replaceAll("[^a-zA-Z ]","");
-			//Shorten any spaces to just 1 single space
-			currentText=currentText.replaceAll(" +", " ");
+			//Shared with every recommender node so allUniqueDocTerms always contains
+			//exactly the terms the recommenders will produce. Keeping a private copy
+			//of this pipeline here is what let the vocabularies drift apart.
+			currentText = TweetTextNormalizer.normalize(
+					currentText,
+					retweetsFlag == RE_TWEETS,
+					hashTagsFlag == HASH_TAGS,
+					stopWordsFlag == STOP_WORDS,
+					STOP_WORD_SET);
 			//currentText=currentText.trim().replaceAll(" +", " ");
 
 			//System.out.println(getLocalName()+" Removed junk: "+currentText);
@@ -4158,9 +4192,16 @@ public class ControllerAgent extends GuiAgent {
 			for (String docTerm : userDoc.keySet())
 			{
 				tf=userDoc.get(docTerm); //tf raw frequency
-				df=allTermsDocumentFreq.get(docTerm);
+				//A term with no recorded frequency, or a document whose terms all
+				//appear everywhere, must not poison the vector with NaN or Infinity.
+				Integer knownDocFreq = allTermsDocumentFreq.get(docTerm);
+				df = knownDocFreq == null ? 0.0 : knownDocFreq.doubleValue();
 				idf=(double)Math.log10(totalDocuments/df) / Math.log10(2); //log base 2
 				tfidf=tf*idf;
+				if (df == 0.0 || !Double.isFinite(tfidf))
+				{
+					tfidf = 0.0;
+				}
 				userDocumentTFIDF.put(docTerm, tfidf);
 //				System.out.println("docTerm: "+docTerm+"\ttf: "+tf+"\tdf: "+df+"\tidf: "+idf+"\ttfidf: "+tfidf);
 				vectorMagnitude+=tfidf*tfidf;
@@ -4176,6 +4217,13 @@ public class ControllerAgent extends GuiAgent {
 			{
 				tfidf = userDocumentTFIDF.get(docTerm);
 				tfidf = tfidf / vectorMagnitude;
+				if (!Double.isFinite(tfidf))
+				{
+					//Zero-magnitude document: every term was corpus-wide, so the
+					//vector carries no information. Zero is the correct value and
+					//keeps NaN out of the ARFF files and similarity scores.
+					tfidf = 0.0;
+				}
 				userDocumentTFIDF.put(docTerm,tfidf);
 				docSumMag += tfidf*tfidf;
 			}
@@ -4462,9 +4510,10 @@ public class ControllerAgent extends GuiAgent {
 
 		data.setClassIndex(data.numAttributes() - 1);
 		SMO svmModel = new SMO();
-		svmModel.setC(0.1);
-		svmModel.setBuildCalibrationModels(true);
-		SvmReproducibility.applyModelSeed(svmModel);
+		//One definition of the exact SMO configuration, shared with the worker
+		//process and the recommender. This previously hardcoded C=0.1 and
+		//calibration=on, silently ignoring the Algorithm Settings dialog.
+		ExactSvmModelSupport.configure(svmModel);
 							
 		try{
 			svmModel.buildClassifier(data);

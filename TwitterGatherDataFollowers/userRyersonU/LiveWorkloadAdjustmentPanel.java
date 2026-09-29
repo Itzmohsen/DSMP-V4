@@ -539,8 +539,10 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		{
 			policy = SchedulerLabEngine.SchedulingPolicy.CAPACITY_WEIGHTED;
 		}
+		//Capacity emulated, without injected failures: an operator trying live
+		//controls should not also get random unit failures unless chosen.
 		RecommendationSchedulerRegistry.apply(
-				RecommendationSchedulerPlan.Mode.SCHEDULING_EXPERIMENT,
+				RecommendationSchedulerPlan.Mode.SCORING_SAFE,
 				policy,
 				nodes,
 				heap,
@@ -757,7 +759,7 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 			setPhase(
 					"READY",
 					"Arm a live queue before running.",
-					"Use Arm interactive run to turn on scheduling experiment mode and a visible action window, then start the simulator.",
+					"Use Arm interactive run to turn on the capacity-emulated scheduler and a visible action window, then start the simulator.",
 					StatusTone.READY);
 		}
 
@@ -830,57 +832,13 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 		return null;
 	}
 
+	/**
+	 * The run's current work phase (a model stage's units, else the input
+	 * delivery), which the live controls act on.
+	 */
 	private RecommendationWorkQueueRegistry.QueueSnapshot currentQueueSnapshot()
 	{
-		int nodeCount = effectiveNodeCount();
-		int algorithm = currentAlgorithm();
-		RecommendationWorkQueueRegistry.QueueSnapshot scoringQueue =
-				emptyQueueSnapshot();
-		if (algorithm == ControllerAgent.Doc2Vec)
-		{
-			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					nodeCount,
-					currentTargetCount());
-			scoringQueue = RecommendationWorkQueueRegistry.snapshotDoc2VecQueue(
-					activeRunId(),
-					nodeCount,
-					shardCount);
-		}
-		else if (algorithm == ControllerAgent.CommonNeighbors
-				|| algorithm == ControllerAgent.COS_SIM)
-		{
-			int shardCount = NodeCapacityScheduler.virtualCandidateShardCount(
-					nodeCount,
-					currentCandidateCount());
-			String algorithmKey = algorithm == ControllerAgent.CommonNeighbors
-					? "CommonNeighbors" : "Similarity";
-			scoringQueue = RecommendationWorkQueueRegistry.snapshotExperimentalCandidateQueue(
-					activeRunId(),
-					algorithmKey,
-					nodeCount,
-					shardCount);
-		}
-		else if (RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm))
-		{
-			scoringQueue = RecommendationWorkQueueRegistry.snapshotTargetUserQueue(
-					activeRunId(),
-					RecommendationModeSupport.algorithmName(algorithm),
-					nodeCount,
-					currentTargetCount());
-		}
-		if (scoringQueue.getTotalShards() > 0)
-		{
-			return scoringQueue;
-		}
-		RecommendationWorkQueueRegistry.QueueSnapshot inputQueue =
-				RecommendationWorkQueueRegistry.snapshotInputBatchQueue(
-						activeRunId(),
-						nodeCount);
-		if (inputQueue.getTotalShards() > 0)
-		{
-			return inputQueue;
-		}
-		return scoringQueue;
+		return RecommendationWorkQueueRegistry.latestPhaseSnapshot(activeRunId());
 	}
 
 	private boolean isLiveQueueActive()
@@ -900,29 +858,14 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 				&& supportsLiveQueueForCurrentAlgorithm();
 	}
 
+	/**
+	 * Every open work phase (input delivery or a model stage's units) is a
+	 * live queue in every scheduler mode; before one opens, controls still act
+	 * at phase boundaries of an active run.
+	 */
 	private boolean isLiveQueueSupported()
 	{
-		int algorithm = currentAlgorithm();
-		if (queueSnapshot.getTotalShards() <= 0)
-		{
-			return hasActiveRun() && supportsLiveQueueForCurrentAlgorithm();
-		}
-		if (isInputQueueSnapshot())
-		{
-			return true;
-		}
-		if (algorithm == ControllerAgent.Doc2Vec && plan.isActive())
-		{
-			return queueSnapshot.getTotalShards() > effectiveNodeCount();
-		}
-		if (plan.allowsExperimentalSideEffects()
-				&& (algorithm == ControllerAgent.COS_SIM
-						|| algorithm == ControllerAgent.CommonNeighbors))
-		{
-			return queueSnapshot.getTotalShards() > effectiveNodeCount();
-		}
-		return plan.allowsExperimentalSideEffects()
-				&& RecommendationModeSupport.isSvmFamilyAlgorithm(algorithm);
+		return hasActiveRun() && supportsLiveQueueForCurrentAlgorithm();
 	}
 
 	private boolean supportsLiveQueueForCurrentAlgorithm()
@@ -932,8 +875,7 @@ final class LiveWorkloadAdjustmentPanel extends JPanel
 
 	private boolean isInputQueueSnapshot()
 	{
-		String key = queueSnapshot == null ? "" : queueSnapshot.getKey();
-		return key.indexOf("|input-batch|") >= 0;
+		return RecommendationWorkQueueRegistry.isInputSnapshot(queueSnapshot);
 	}
 
 	private String liveAdjustmentBlockReason()

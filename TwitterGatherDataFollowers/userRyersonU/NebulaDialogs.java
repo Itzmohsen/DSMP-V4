@@ -54,8 +54,23 @@ final class NebulaDialogs
 		showMessage(parent, message, title, TONE_ERROR);
 	}
 
+	/**
+	 * Hidden automation mode ({@code -Ddsmp.gui.hidden=true}): no window is
+	 * shown, so dialogs are written to the log instead, and confirmations are
+	 * answered "No" (nothing destructive happens without a person).
+	 */
+	static boolean isSuppressed()
+	{
+		return Boolean.getBoolean("dsmp.gui.hidden");
+	}
+
 	static void showMessage(Component parent, String message, String title, int tone)
 	{
+		if (isSuppressed())
+		{
+			System.out.println("[dialog] " + title + ": " + message);
+			return;
+		}
 		NebulaDesign.installUiDefaults();
 		JOptionPane pane = new JOptionPane(
 				buildContent(message, title, tone),
@@ -73,6 +88,11 @@ final class NebulaDialogs
 	/** Returns JOptionPane.YES_OPTION or NO_OPTION, mirroring showConfirmDialog. */
 	static int showConfirm(Component parent, String message, String title, int tone)
 	{
+		if (isSuppressed())
+		{
+			System.out.println("[confirm, answered No] " + title + ": " + message);
+			return JOptionPane.NO_OPTION;
+		}
 		NebulaDesign.installUiDefaults();
 		Object[] options = { "Yes", "No" };
 		JOptionPane pane = new JOptionPane(
@@ -97,6 +117,11 @@ final class NebulaDialogs
 	/** Scrollable long-form text dialog (help walls, logs, reports). */
 	static void showLongText(Component parent, String title, String body)
 	{
+		if (isSuppressed())
+		{
+			System.out.println("[dialog] " + title + ":\n" + body);
+			return;
+		}
 		NebulaDesign.installUiDefaults();
 		JTextArea area = new JTextArea(body);
 		area.setEditable(false);

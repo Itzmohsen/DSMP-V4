@@ -40,6 +40,7 @@ MODEL_PARAMS = {
     "window": 5,
     "vector_size": 300,
     "epochs": 20,
+    "seed": 1,
 }
 MODEL_PARAM_ORDER = [
     "dm",
@@ -52,7 +53,13 @@ MODEL_PARAM_ORDER = [
     "vector_size",
     "epochs",
 ]
-SCRIPT_VERSION = 3
+# Gensim's asynchronous SGD is only reproducible with a single worker. Training
+# stays single-threaded by default so the same dataset and parameters always
+# produce the same vectors; set DSMP_DOC2VEC_ALLOW_PARALLEL=1 to trade that
+# guarantee for speed.
+REPRODUCIBLE_TRAINING = os.environ.get(
+    "DSMP_DOC2VEC_ALLOW_PARALLEL", "0").strip() not in ("1", "true", "TRUE", "yes")
+SCRIPT_VERSION = 4
 LOCK_POLL_SECONDS = 2
 
 
@@ -105,8 +112,14 @@ def validate_model_params(params):
         "window": (1, 50),
         "vector_size": (20, 1000),
         "epochs": (1, 200),
+        "seed": (0, 2 ** 31 - 1),
     }
     for key, (minimum, maximum) in ranges.items():
+        if key not in params:
+            # Only validate what the caller actually supplied. "seed" is a fixed
+            # model constant, not one of the nine command-line parameters, so it
+            # is absent from the parsed dictionary.
+            continue
         value = params[key]
         if isinstance(value, float):
             valid = math.isfinite(value) and minimum <= value <= maximum
@@ -152,6 +165,15 @@ def parse_args():
     return user, topn, dataset_file, node_number, num_nodes, workers
 
 
+def effective_workers(workers):
+    """Worker count actually used for training.
+
+    Pinned to 1 in reproducible mode so the cache key -- and therefore the model
+    -- does not depend on how many cores the machine happens to have.
+    """
+    return 1 if REPRODUCIBLE_TRAINING else max(1, int(workers))
+
+
 def dataset_signature(dataset_file, workers):
     absolute_path = os.path.abspath(dataset_file)
     stat_info = os.stat(absolute_path)
@@ -160,7 +182,8 @@ def dataset_signature(dataset_file, workers):
         "dataset_size": stat_info.st_size,
         "dataset_mtime_ns": stat_info.st_mtime_ns,
         "model_params": MODEL_PARAMS,
-        "workers": workers,
+        "workers": effective_workers(workers),
+        "reproducible": REPRODUCIBLE_TRAINING,
         "script_version": SCRIPT_VERSION,
         "runtime": runtime_signature(),
     }
@@ -450,6 +473,10 @@ def train_shared_model(dataset_file, cache_key, signature, model_path, meta_path
     report_progress("TRAINING", "Training the shared Doc2Vec model")
     print("model train: building shared Doc2Vec model")
     print(
+        "model determinism: seed=%s workers=%s reproducible=%s"
+        % (MODEL_PARAMS["seed"], effective_workers(workers), REPRODUCIBLE_TRAINING)
+    )
+    print(
         "model runtime: gensim=%s numpy=%s dot_kernel=%s patched=%s"
         % (
             GENSIM_RUNTIME["gensim_version"],
@@ -469,7 +496,8 @@ def train_shared_model(dataset_file, cache_key, signature, model_path, meta_path
         sample=MODEL_PARAMS["sample"],
         window=MODEL_PARAMS["window"],
         vector_size=MODEL_PARAMS["vector_size"],
-        workers=workers,
+        seed=MODEL_PARAMS["seed"],
+        workers=effective_workers(workers),
     )
     model.build_vocab(tagged_docs, progress_per=100)
     if model.corpus_count < 1:
