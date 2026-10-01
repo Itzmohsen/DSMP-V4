@@ -286,15 +286,17 @@ public final class ExactModelStagesSelfTest
 		double expected = ledger.getComputeNanos() * (dilation / speed - 1.0);
 		require(Math.abs(ledger.getOwedNanos() - expected) <= 1.0e-6 * expected + 10.0,
 				"owed dilation " + ledger.getOwedNanos() + " is not compute x (TDF/speed - 1) = " + expected);
-		//The sleeps themselves hit the owed time to within the carried residual
-		//(a fraction of a millisecond) plus how late the platform timer wakes a
-		//parked thread, measured here: microseconds on macOS and Linux, up to a
-		//15.6 ms timer period on a default Windows.
-		long overshoot = parkOvershootNanos();
-		require(Math.abs(ledger.getDilationNanos() - ledger.getOwedNanos())
-				<= 700000L + 0.01 * expected + 2L * overshoot,
-				"slept " + ledger.getDilationNanos() + " ns for " + ledger.getOwedNanos()
-				+ " ns owed (timer overshoot " + overshoot + " ns)");
+		//The sleeps pay what is owed, whatever the host's timer: never less (a
+		//settle spins away the sub-timer residual) and never more than the
+		//overshoot the emulator measured on its own payments (an overshoot is
+		//carried into the next payment, not paid again). How late a busy host
+		//wakes a thread is not checked here; records report it per run.
+		long excess = ledger.getDilationNanos() - ledger.getOwedNanos();
+		require(excess >= -1000L,
+				"slept " + ledger.getDilationNanos() + " ns but owed " + ledger.getOwedNanos() + " ns");
+		require(excess <= ledger.getSleepErrorNanos() + 1000L,
+				"slept " + excess + " ns more than owed, beyond the " + ledger.getSleepErrorNanos()
+				+ " ns of timer error measured on the payments");
 		//Bounds are relative to the CPU time the spins measured, because the thread
 		//CPU clock can be coarse (Windows advances it in 15.6 ms steps). Counting the
 		//inner span twice would add all of innerBurned; losing a spin would drop it.
@@ -305,20 +307,6 @@ public final class ExactModelStagesSelfTest
 				"nested spans counted work twice: " + ledger.getComputeNanos()
 				+ " ns measured, " + burned + " ns burned");
 		context.close("self-test finished");
-	}
-
-	/** The latest a short park woke up after its request, over a few samples. */
-	private static long parkOvershootNanos()
-	{
-		long worst = 0L;
-		for (int sample = 1; sample <= 20; sample++)
-		{
-			long request = sample * 100000L;
-			long start = System.nanoTime();
-			java.util.concurrent.locks.LockSupport.parkNanos(request);
-			worst = Math.max(worst, System.nanoTime() - start - request);
-		}
-		return worst;
 	}
 
 	/** Burns about {@code millis} of this thread's CPU; returns the CPU time the clock measured. */
