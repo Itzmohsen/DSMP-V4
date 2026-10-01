@@ -280,10 +280,23 @@ public final class ExactModelStagesSelfTest
 		weak.checkpoint();
 		burned += spin(20);
 		weak.end(outer);
+		weak.checkpoint();
 		NodeEmulator.Ledger ledger = weak.getLedger();
-		double expected = ledger.getComputeNanos() * (1.0 / speed - 1.0);
-		require(Math.abs(ledger.getDilationNanos() - expected) <= 1.0e-3 * expected + 10.0,
-				"dilation " + ledger.getDilationNanos() + " is not compute x (1/speed - 1) = " + expected);
+		double dilation = context.clock().getDilation();
+		double expected = ledger.getComputeNanos() * (dilation / speed - 1.0);
+		require(Math.abs(ledger.getOwedNanos() - expected) <= 1.0e-6 * expected + 10.0,
+				"owed dilation " + ledger.getOwedNanos() + " is not compute x (TDF/speed - 1) = " + expected);
+		//The sleeps pay what is owed, whatever the host's timer: never less (a
+		//settle spins away the sub-timer residual) and never more than the
+		//overshoot the emulator measured on its own payments (an overshoot is
+		//carried into the next payment, not paid again). How late a busy host
+		//wakes a thread is not checked here; records report it per run.
+		long excess = ledger.getDilationNanos() - ledger.getOwedNanos();
+		require(excess >= -1000L,
+				"slept " + ledger.getDilationNanos() + " ns but owed " + ledger.getOwedNanos() + " ns");
+		require(excess <= ledger.getSleepErrorNanos() + 1000L,
+				"slept " + excess + " ns more than owed, beyond the " + ledger.getSleepErrorNanos()
+				+ " ns of timer error measured on the payments");
 		//Bounds are relative to the CPU time the spins measured, because the thread
 		//CPU clock can be coarse (Windows advances it in 15.6 ms steps). Counting the
 		//inner span twice would add all of innerBurned; losing a spin would drop it.

@@ -141,6 +141,10 @@ public class ControllerAgent extends GuiAgent {
 	private ArrayList<String> listOfUsers = new ArrayList<String>(); //List of users from dataset
 	private ArrayList<String> listOfAgents = new ArrayList<String>(); //List of all agents created
 	private ArrayList<AgentController> listOfAgentControllers = new ArrayList<AgentController>(); //List of all agents AID created
+	/** Local names of the experiment agents created in the work container (for a clean teardown). */
+	private final LinkedHashSet<String> experimentAgentNames = new LinkedHashSet<String>();
+	/** Each initialization gets a work container of its own name. */
+	private int workContainerGeneration;
 	private ArrayList<Date> allUniqueDateTimes = new ArrayList<Date>(); 
 	
 	private static String serverName = DatabaseSettings.host();
@@ -403,7 +407,7 @@ public class ControllerAgent extends GuiAgent {
 		}
 		else if (actionToPerform == INITIALIZE)
 		{
-			if (initialized)
+			if (initialized || workContainer == null)
 			{
 				killContainer();
 				setUpWorkContainer();
@@ -440,7 +444,9 @@ public class ControllerAgent extends GuiAgent {
 		
 			Profile mainProfile = new ProfileImpl();
 			joinOwnPlatform(mainProfile);
-			mainProfile.setParameter(Profile.CONTAINER_NAME, "workContainer");
+			//A fresh name per initialization: late clean-up of the previous
+			//container can then never be mistaken for the new one.
+			mainProfile.setParameter(Profile.CONTAINER_NAME, "workContainer-" + (++workContainerGeneration));
 			mainProfile.setParameter("jade_core_messaging_MessageManager_poolsize", "20");
 			mainProfile.setParameter(
 					"jade_core_messaging_MessageManager_maxqueuesize",
@@ -880,23 +886,15 @@ public class ControllerAgent extends GuiAgent {
 
 	private void stopExperimentContainers()
 	{
-		for (AgentController currentAgentController : new ArrayList<AgentController>(listOfAgentControllers))
-		{
-			try
-			{
-				currentAgentController.kill();
-			}
-			catch (StaleProxyException e)
-			{
-				System.err.println("Could not stop experiment agent during reset: " + e.getMessage());
-			}
-		}
-
-		stopContainer(workContainer, "workContainer");
-		stopContainer(userSimContainer, "userSimContainer");
+		LinkedHashSet<String> names = new LinkedHashSet<String>(experimentAgentNames);
+		stopContainerWithin(workContainer, "work container", CONTAINER_STOP_TIMEOUT_MS);
+		stopContainerWithin(userSimContainer, "user simulation container", CONTAINER_STOP_TIMEOUT_MS);
 		workContainer = null;
 		userSimContainer = null;
 		agentController = null;
+		awaitAgentsGone(names, CONTAINER_STOP_TIMEOUT_MS);
+		listOfAgentControllers.clear();
+		experimentAgentNames.clear();
 	}
 
 	private void stopContainer(AgentContainer container, String containerName)
@@ -1360,7 +1358,7 @@ public class ControllerAgent extends GuiAgent {
 
 			String starterAgentName = "Starter Agent";
 			agentController = workContainer.createNewAgent(starterAgentName, StarterAgent.class.getName(), starterAgentArgs);
-			listOfAgentControllers.add(agentController);
+			trackAgent(starterAgentName, agentController);
 			agentController.start();
 			listOfAgents.add(starterAgentName);
 			System.out.println("Made agent: "+starterAgentName);
@@ -1509,6 +1507,18 @@ public class ControllerAgent extends GuiAgent {
 					usersRec,
 					graphGenerationEnabled,
 					readFrom == FROM_TEXT ? textFile : null);
+			SchedulingRunContext runContext = SchedulingRuntime.get(currentRecommendationRunId);
+			if (runContext != null)
+			{
+				RunRecorder runRecorder = runContext.recorder();
+				File datasetFile = readFrom == FROM_TEXT ? textFile : null;
+				runRecorder.property("dataset", datasetFile == null ? "" : datasetFile.getAbsolutePath());
+				runRecorder.property("datasetName", datasetFile == null ? "" : datasetFile.getName());
+				runRecorder.property("targetMode", String.valueOf(targetMode));
+				runRecorder.property("targetUsers", usersRec == null ? "" : String.valueOf(usersRec));
+				runRecorder.property("graphGeneration", String.valueOf(graphGenerationEnabled));
+				runRecorder.property("tweetLimit", String.valueOf(totalTweetLimit));
+			}
 
 		String basicModeError = validateRecommendationModeBeforeLoading();
 		if (basicModeError != null)
@@ -1589,7 +1599,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(orgAgentName, OrganizingAgent.class.getName(), orgAgentArgs);
 					agentController.start();
 					listOfAgents.add(orgAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(orgAgentName, agentController);
 					System.out.println("Made agent: "+orgAgentName);
 
 				}
@@ -1721,7 +1731,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(userAgentName, MobileAgent.class.getName(), userAgentArgs);   
 					agentController.start();
 					listOfAgents.add(userAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(userAgentName, agentController);
 					//System.out.println("Made agent: "+userAgentName);
 //					System.out.println("totalUsers: "+totalUsers);
 
@@ -1771,7 +1781,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(recAgentName, RecommenderAgent.class.getName(), recAgentArgs);
 					agentController.start();
 					listOfAgents.add(recAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(recAgentName, agentController);
 					System.out.println("Made agent: "+recAgentName);
 					j++;
 				}
@@ -1835,7 +1845,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(orgAgentName, OrganizingAgent.class.getName(), orgAgentArgs);
 					agentController.start();
 					listOfAgents.add(orgAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(orgAgentName, agentController);
 					System.out.println("Made agent: "+orgAgentName);
 
 				}
@@ -1966,7 +1976,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(userAgentName, MobileAgent.class.getName(), userAgentArgs);   
 					agentController.start();
 					listOfAgents.add(userAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(userAgentName, agentController);
 					//System.out.println("Made agent: "+userAgentName);
 //					System.out.println("totalUsers: "+totalUsers);
 
@@ -2015,7 +2025,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(recAgentName, RecommenderAgent.class.getName(), recAgentArgs);
 					agentController.start();
 					listOfAgents.add(recAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(recAgentName, agentController);
 					System.out.println("Made agent: "+recAgentName);
 					j++;
 				}
@@ -2283,7 +2293,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(orgAgentName, OrganizingAgent.class.getName(), orgAgentArgs);
 					agentController.start();
 					listOfAgents.add(orgAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(orgAgentName, agentController);
 					System.out.println("Made agent: "+orgAgentName);
 
 				}
@@ -2363,7 +2373,7 @@ public class ControllerAgent extends GuiAgent {
 										corpusAgentArgs);
 								agentController.start();
 								listOfAgents.add(corpusAgentName);
-								listOfAgentControllers.add(agentController);
+								trackAgent(corpusAgentName, agentController);
 								totalUsers = 1;
 								System.out.println(
 										"Made bounded corpus agent for "
@@ -2475,7 +2485,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(userAgentName, MobileAgent.class.getName(), userAgentArgs);   
 					agentController.start();
 					listOfAgents.add(userAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(userAgentName, agentController);
 					//System.out.println("Made agent: "+userAgentName);
 //					System.out.println("totalUsers: "+totalUsers);
 
@@ -2563,7 +2573,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(recAgentName, RecommenderAgent.class.getName(), recAgentArgs);
 					agentController.start();
 					listOfAgents.add(recAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(recAgentName, agentController);
 					System.out.println("Made agent: "+recAgentName);
 					j++;
 				}
@@ -2606,7 +2616,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(orgAgentName, OrganizingAgent.class.getName(), orgAgentArgs);
 					agentController.start();
 					listOfAgents.add(orgAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(orgAgentName, agentController);
 					System.out.println("Made agent: "+orgAgentName);
 
 				}*/
@@ -2762,7 +2772,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(userAgentName, MobileAgent.class.getName(), userAgentArgs);   
 					agentController.start();
 					listOfAgents.add(userAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(userAgentName, agentController);
 					System.out.println("Made agent: "+userAgentName);
 //					System.out.println("totalUsers: "+totalUsers);
 
@@ -2818,7 +2828,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(recAgentName, RecommenderAgent.class.getName(), recAgentArgs);
 					agentController.start();
 					listOfAgents.add(recAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(recAgentName, agentController);
 					System.out.println("Made agent: "+recAgentName);
 					j++;
 				}
@@ -2856,7 +2866,7 @@ public class ControllerAgent extends GuiAgent {
 					agentController = workContainer.createNewAgent(orgAgentName, OrganizingAgent.class.getName(), orgAgentArgs);
 					agentController.start();
 					listOfAgents.add(orgAgentName);
-					listOfAgentControllers.add(agentController);
+					trackAgent(orgAgentName, agentController);
 					System.out.println("Made agent: "+orgAgentName);
 
 				}
@@ -2878,30 +2888,135 @@ public class ControllerAgent extends GuiAgent {
 
 	} //inititalize
 
+	/**
+	 * Ends the experiment's agents before a new initialization. The container
+	 * is killed as a whole (JADE can hold an agent's table row forever after a
+	 * failed delivery, and a per-agent kill then blocks for good), within a
+	 * deadline, and the new agents are only created once the platform has
+	 * forgotten the old ones: JADE routes by agent name, and a late death
+	 * notice of an old agent would otherwise remove its same-named successor
+	 * from the routing table, silently losing the messages sent to it.
+	 */
 	public void killContainer()
 	{
-		for (AgentController ac : new ArrayList<AgentController>(listOfAgentControllers))
-		{
-			try
-			{
-				ac.kill();
-			}
-			catch (StaleProxyException e)
-			{
-				System.err.println("Could not stop an old experiment agent during re-initialization: " + e.getMessage());
-			}
-		}
-		stopContainer(workContainer, "workContainer");
+		LinkedHashSet<String> names = new LinkedHashSet<String>(experimentAgentNames);
+		stopContainerWithin(workContainer, "work container", CONTAINER_STOP_TIMEOUT_MS);
 		workContainer = null;
 		agentController = null;
+		awaitAgentsGone(names, CONTAINER_STOP_TIMEOUT_MS);
 
 		listOfAgentControllers.clear();
+		experimentAgentNames.clear();
 		listOfAgents.clear();
 		totalUsers=0;
 		usersRec.clear();
 
 		System.out.println("Killed container");
 
+	}
+
+	private static final long CONTAINER_STOP_TIMEOUT_MS = 30000L;
+
+	/** Remembers an experiment agent created in the work container. */
+	private void trackAgent(String localName, AgentController controller)
+	{
+		listOfAgentControllers.add(controller);
+		if (localName != null)
+		{
+			experimentAgentNames.add(localName);
+		}
+	}
+
+	/** Kills a container on a helper thread, waiting at most {@code timeoutMs}. */
+	private void stopContainerWithin(final AgentContainer container, final String label, long timeoutMs)
+	{
+		if (container == null)
+		{
+			return;
+		}
+		Thread killer = new Thread(new Runnable()
+		{
+			public void run()
+			{
+				stopContainer(container, label);
+			}
+		}, "stop-" + label.replace(' ', '-'));
+		killer.setDaemon(true);
+		killer.start();
+		try
+		{
+			killer.join(timeoutMs);
+		}
+		catch (InterruptedException interrupted)
+		{
+			Thread.currentThread().interrupt();
+		}
+		if (killer.isAlive())
+		{
+			System.err.println("The " + label + " did not stop within " + timeoutMs
+					+ " ms; the next initialization uses a new container.");
+		}
+	}
+
+	/**
+	 * Waits until the AMS lists none of {@code localNames} (their deaths, and
+	 * so their removal from the platform's routing table, have been processed).
+	 */
+	private void awaitAgentsGone(Set<String> localNames, long timeoutMs)
+	{
+		if (localNames.isEmpty())
+		{
+			return;
+		}
+		long started = System.currentTimeMillis();
+		SearchConstraints everything = new SearchConstraints();
+		everything.setMaxResults(Long.valueOf(-1L));
+		while (true)
+		{
+			HashSet<String> remaining = new HashSet<String>();
+			try
+			{
+				AMSAgentDescription[] agents = AMSService.search(this, new AMSAgentDescription(), everything);
+				for (AMSAgentDescription agent : agents)
+				{
+					if (agent != null && agent.getName() != null
+							&& localNames.contains(agent.getName().getLocalName()))
+					{
+						remaining.add(agent.getName().getLocalName());
+					}
+				}
+			}
+			catch (FIPAException failure)
+			{
+				System.err.println("Could not confirm that the old experiment agents are gone: " + failure.getMessage());
+				return;
+			}
+			if (remaining.isEmpty())
+			{
+				long waited = System.currentTimeMillis() - started;
+				if (waited > 200L)
+				{
+					System.out.println("The platform forgot the previous run's agents after " + waited + " ms.");
+				}
+				return;
+			}
+			if (System.currentTimeMillis() - started > timeoutMs)
+			{
+				System.err.println(remaining.size() + " agent(s) of the previous run are still registered after "
+						+ timeoutMs + " ms (for example " + remaining.iterator().next()
+						+ "); the new run may not reach them.");
+				return;
+			}
+			try
+			{
+				Thread.sleep(25L);
+			}
+			catch (InterruptedException interrupted)
+			{
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
 	}
 
 	public void readInGeneratingParameters() throws FileNotFoundException

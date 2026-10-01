@@ -6,23 +6,39 @@ import java.util.Locale;
 /**
  * One node's capacity contract, as entered by the user.
  *
- * Every field is physically emulated in scheduled runs (see {@link NodeSpec}):
- * the CPU multiplier sets relative speed (slower nodes' measured work is
- * dilated), max concurrent jobs sets worker lanes, the memory limit is an
- * admission budget, queue capacity is the most units the node may hold at once
- * (running plus prefetched), network delay is the one-way latency of the
- * node's link, slowdown divides speed further, and failure probability loses
- * that fraction of unit executions in fault-injection runs.
+ * Every field has one physical meaning in the cluster model (see
+ * {@link NodeSpec} and DSMP_V4_NODE_LAB.md):
+ *
+ * <ul>
+ * <li>CPU multiplier: the node's processing speed in reference cores. A node of
+ *     speed 2 does the same work in half the time of the reference node (speed
+ *     1). Speeds are absolute: they never depend on the other nodes.</li>
+ * <li>Max concurrent jobs: lanes, the units the node executes at once.</li>
+ * <li>Memory limit: admission budget for units that declare memory.</li>
+ * <li>Queue capacity: the most units the node holds at once (running plus
+ *     delivered); the rest wait at the coordinator.</li>
+ * <li>Network delay: one-way latency of the node's link to the coordinator.</li>
+ * <li>Bandwidth: the link's serialization rate in megabits per second (0 is
+ *     unlimited); a message of b bytes occupies the link for b / bandwidth.</li>
+ * <li>Slowdown: a degradation factor that divides the speed further.</li>
+ * <li>Failure probability: the fraction of unit executions lost to transient
+ *     faults (detected when the execution ends).</li>
+ * <li>MTBF / MTTR: the node's crash-recovery process; the node crashes after
+ *     a random up-time with mean MTBF and is repaired after a down-time with
+ *     mean MTTR. Crashes lose the work in progress.</li>
+ * </ul>
+ *
+ * Failures and crashes are injected only in fault-injection runs.
  */
 final class NodeCapacityProfile
 {
 	enum Role
 	{
-		NORMAL("Normal", "Reference speed, one lane"),
-		WEAK("Weak", "Half speed, half memory, 25 ms link"),
-		STRONG("Strong", "Double speed, two lanes, double memory"),
+		NORMAL("Normal", "Reference core, one lane, 1 Gbit/s LAN link"),
+		WEAK("Weak", "Half speed, half memory, 25 ms / 100 Mbit/s link"),
+		STRONG("Strong", "Double speed, two lanes, double memory, 10 Gbit/s link"),
 		MEMORY_HEAVY("Memory-heavy", "Reference speed, double memory"),
-		UNRELIABLE("Unreliable", "0.75 speed, 1.5x slowdown, 100 ms link, 5% failures");
+		UNRELIABLE("Unreliable", "0.75 speed, 1.5x slowdown, 100 ms link, 5% faults, crashes");
 
 		private final String label;
 		private final String description;
@@ -49,8 +65,8 @@ final class NodeCapacityProfile
 		}
 	}
 
-	static final double MIN_CPU_MULTIPLIER = 0.10;
-	static final double MAX_CPU_MULTIPLIER = 8.00;
+	static final double MIN_CPU_MULTIPLIER = 0.05;
+	static final double MAX_CPU_MULTIPLIER = 16.00;
 	static final int MIN_MEMORY_MB = 128;
 	static final int MAX_MEMORY_MB = 262144;
 	static final int MIN_MAX_CONCURRENT_JOBS = 1;
@@ -63,6 +79,9 @@ final class NodeCapacityProfile
 	static final double MAX_SLOWDOWN_MULTIPLIER = 50.00;
 	static final int MIN_FAILURE_PERCENT = 0;
 	static final int MAX_FAILURE_PERCENT = 100;
+	static final double MAX_BANDWIDTH_MBPS = 1000000.0;
+	static final double MAX_MTBF_SECONDS = 1.0e7;
+	static final double MAX_MTTR_SECONDS = 1.0e6;
 
 	private static final DecimalFormat DECIMAL = new DecimalFormat("0.##");
 
@@ -77,7 +96,11 @@ final class NodeCapacityProfile
 	private final double slowdownMultiplier;
 	private final boolean failureSimulationEnabled;
 	private final int failureProbabilityPercent;
+	private final double bandwidthMbps;
+	private final double mtbfSeconds;
+	private final double mttrSeconds;
 
+	/** A profile with an unlimited link and no crash process. */
 	NodeCapacityProfile(
 			int nodeIndex,
 			Role role,
@@ -90,6 +113,33 @@ final class NodeCapacityProfile
 			double slowdownMultiplier,
 			boolean failureSimulationEnabled,
 			int failureProbabilityPercent)
+	{
+		this(nodeIndex, role, cpuMultiplier, memoryLimitMb, maxConcurrentJobs,
+				networkDelayMs, queueCapacity, slowdownSimulationEnabled,
+				slowdownMultiplier, failureSimulationEnabled, failureProbabilityPercent,
+				0.0, 0.0, 0.0);
+	}
+
+	/**
+	 * @param bandwidthMbps link bandwidth in megabits per second; 0 is unlimited
+	 * @param mtbfSeconds   mean time between crashes; 0 disables crashes
+	 * @param mttrSeconds   mean time to repair a crash
+	 */
+	NodeCapacityProfile(
+			int nodeIndex,
+			Role role,
+			double cpuMultiplier,
+			int memoryLimitMb,
+			int maxConcurrentJobs,
+			int networkDelayMs,
+			int queueCapacity,
+			boolean slowdownSimulationEnabled,
+			double slowdownMultiplier,
+			boolean failureSimulationEnabled,
+			int failureProbabilityPercent,
+			double bandwidthMbps,
+			double mtbfSeconds,
+			double mttrSeconds)
 	{
 		this.nodeIndex = Math.max(1, nodeIndex);
 		this.role = role == null ? Role.NORMAL : role;
@@ -123,6 +173,9 @@ final class NodeCapacityProfile
 				failureProbabilityPercent,
 				MIN_FAILURE_PERCENT,
 				MAX_FAILURE_PERCENT);
+		this.bandwidthMbps = nonNegative(bandwidthMbps, MAX_BANDWIDTH_MBPS);
+		this.mtbfSeconds = nonNegative(mtbfSeconds, MAX_MTBF_SECONDS);
+		this.mttrSeconds = nonNegative(mttrSeconds, MAX_MTTR_SECONDS);
 	}
 
 	static NodeCapacityProfile defaultProfile(
@@ -147,92 +200,90 @@ final class NodeCapacityProfile
 		if (role == Role.WEAK)
 		{
 			return new NodeCapacityProfile(
-					nodeIndex,
-					role,
-					0.50,
+					nodeIndex, role, 0.50,
 					Math.max(MIN_MEMORY_MB, baseMemory / 2),
-					1,
-					25,
-					1,
-					false,
-					1.0,
-					false,
-					0);
+					1, 25, 1,
+					false, 1.0,
+					false, 0,
+					100.0, 0.0, 0.0);
 		}
 		if (role == Role.STRONG)
 		{
 			return new NodeCapacityProfile(
-					nodeIndex,
-					role,
-					2.00,
+					nodeIndex, role, 2.00,
 					Math.min(MAX_MEMORY_MB, baseMemory * 2),
-					2,
-					0,
-					2,
-					false,
-					1.0,
-					false,
-					0);
+					2, 0, 4,
+					false, 1.0,
+					false, 0,
+					10000.0, 0.0, 0.0);
 		}
 		if (role == Role.MEMORY_HEAVY)
 		{
 			return new NodeCapacityProfile(
-					nodeIndex,
-					role,
-					1.00,
+					nodeIndex, role, 1.00,
 					Math.min(MAX_MEMORY_MB, baseMemory * 2),
-					1,
-					0,
-					1,
-					false,
-					1.0,
-					false,
-					0);
+					1, 0, 2,
+					false, 1.0,
+					false, 0,
+					1000.0, 0.0, 0.0);
 		}
 		if (role == Role.UNRELIABLE)
 		{
 			return new NodeCapacityProfile(
-					nodeIndex,
-					role,
-					0.75,
+					nodeIndex, role, 0.75,
 					baseMemory,
-					1,
-					100,
-					1,
-					true,
-					1.50,
-					true,
-					5);
+					1, 100, 1,
+					true, 1.50,
+					true, 5,
+					100.0, 30.0, 2.0);
 		}
 		return new NodeCapacityProfile(
-				nodeIndex,
-				Role.NORMAL,
-				1.00,
+				nodeIndex, Role.NORMAL, 1.00,
 				baseMemory,
-				1,
-				0,
-				1,
-				false,
-				1.0,
-				false,
-				0);
+				1, 0, 2,
+				false, 1.0,
+				false, 0,
+				1000.0, 0.0, 0.0);
 	}
 
 	/** The same profile for a different node index. */
 	NodeCapacityProfile withNodeIndex(int index)
 	{
 		return new NodeCapacityProfile(
-				index,
-				role,
-				cpuMultiplier,
-				memoryLimitMb,
-				maxConcurrentJobs,
-				networkDelayMs,
-				queueCapacity,
-				slowdownSimulationEnabled,
-				slowdownMultiplier,
-				failureSimulationEnabled,
-				failureProbabilityPercent);
+				index, role, cpuMultiplier, memoryLimitMb, maxConcurrentJobs,
+				networkDelayMs, queueCapacity, slowdownSimulationEnabled,
+				slowdownMultiplier, failureSimulationEnabled, failureProbabilityPercent,
+				bandwidthMbps, mtbfSeconds, mttrSeconds);
+	}
+
+	/** The same profile with another link. */
+	NodeCapacityProfile withLink(int delayMs, double bandwidth)
+	{
+		return new NodeCapacityProfile(
+				nodeIndex, role, cpuMultiplier, memoryLimitMb, maxConcurrentJobs,
+				delayMs, queueCapacity, slowdownSimulationEnabled,
+				slowdownMultiplier, failureSimulationEnabled, failureProbabilityPercent,
+				bandwidth, mtbfSeconds, mttrSeconds);
+	}
+
+	/** The same profile with another crash-recovery process. */
+	NodeCapacityProfile withCrashProcess(double mtbf, double mttr)
+	{
+		return new NodeCapacityProfile(
+				nodeIndex, role, cpuMultiplier, memoryLimitMb, maxConcurrentJobs,
+				networkDelayMs, queueCapacity, slowdownSimulationEnabled,
+				slowdownMultiplier, failureSimulationEnabled, failureProbabilityPercent,
+				bandwidthMbps, mtbf, mttr);
+	}
+
+	/** The same profile with another speed, lanes and queue capacity. */
+	NodeCapacityProfile withCompute(double cpu, int lanes, int queue)
+	{
+		return new NodeCapacityProfile(
+				nodeIndex, role, cpu, memoryLimitMb, lanes,
+				networkDelayMs, queue, slowdownSimulationEnabled,
+				slowdownMultiplier, failureSimulationEnabled, failureProbabilityPercent,
+				bandwidthMbps, mtbfSeconds, mttrSeconds);
 	}
 
 	private static int defaultMemoryMb(int requestedNodes, int heapMb)
@@ -257,6 +308,34 @@ final class NodeCapacityProfile
 			return minimum;
 		}
 		return Math.max(minimum, Math.min(maximum, value));
+	}
+
+	private static double nonNegative(double value, double maximum)
+	{
+		if (Double.isNaN(value) || value <= 0.0)
+		{
+			return 0.0;
+		}
+		return Math.min(maximum, value);
+	}
+
+	/** True when every setting except the node index is equal. */
+	boolean sameSettingsAs(NodeCapacityProfile other)
+	{
+		return other != null
+				&& role == other.role
+				&& Math.abs(cpuMultiplier - other.cpuMultiplier) < 1e-9
+				&& memoryLimitMb == other.memoryLimitMb
+				&& maxConcurrentJobs == other.maxConcurrentJobs
+				&& networkDelayMs == other.networkDelayMs
+				&& queueCapacity == other.queueCapacity
+				&& slowdownSimulationEnabled == other.slowdownSimulationEnabled
+				&& Math.abs(slowdownMultiplier - other.slowdownMultiplier) < 1e-9
+				&& failureSimulationEnabled == other.failureSimulationEnabled
+				&& failureProbabilityPercent == other.failureProbabilityPercent
+				&& Math.abs(bandwidthMbps - other.bandwidthMbps) < 1e-9
+				&& Math.abs(mtbfSeconds - other.mtbfSeconds) < 1e-9
+				&& Math.abs(mttrSeconds - other.mttrSeconds) < 1e-9;
 	}
 
 	int getNodeIndex()
@@ -324,6 +403,35 @@ final class NodeCapacityProfile
 		return failureProbabilityPercent;
 	}
 
+	/** Link bandwidth in megabits per second; 0 means unlimited. */
+	double getBandwidthMbps()
+	{
+		return bandwidthMbps;
+	}
+
+	/** Mean time between crashes in seconds; 0 means the node never crashes. */
+	double getMtbfSeconds()
+	{
+		return mtbfSeconds;
+	}
+
+	/** Mean time to repair after a crash, in seconds. */
+	double getMttrSeconds()
+	{
+		return mttrSeconds;
+	}
+
+	boolean hasCrashProcess()
+	{
+		return mtbfSeconds > 0.0;
+	}
+
+	/** Speed in reference cores: CPU multiplier divided by the slowdown. */
+	double effectiveSpeed()
+	{
+		return cpuMultiplier / (slowdownSimulationEnabled ? slowdownMultiplier : 1.0);
+	}
+
 	String shortLabel()
 	{
 		return role.getLabel() + " "
@@ -338,20 +446,38 @@ final class NodeCapacityProfile
 				+ " | jobs " + maxConcurrentJobs;
 	}
 
+	static String formatBandwidth(double mbps)
+	{
+		if (mbps <= 0.0)
+		{
+			return "unlimited";
+		}
+		if (mbps >= 1000.0)
+		{
+			return DECIMAL.format(mbps / 1000.0) + " Gbit/s";
+		}
+		return DECIMAL.format(mbps) + " Mbit/s";
+	}
+
 	String simulationSummary()
 	{
 		StringBuilder builder = new StringBuilder();
 		builder.append(networkDelayMs > 0
-				? networkDelayMs + " ms message delay"
-				: "no message delay");
+				? networkDelayMs + " ms"
+				: "0 ms");
+		builder.append(" / ").append(formatBandwidth(bandwidthMbps));
 		builder.append(" | ");
 		builder.append(slowdownSimulationEnabled
 				? "slowdown " + DECIMAL.format(slowdownMultiplier) + "x"
 				: "slowdown off");
 		builder.append(" | ");
 		builder.append(failureSimulationEnabled
-				? "failure " + failureProbabilityPercent + "%"
-				: "failure off");
+				? "faults " + failureProbabilityPercent + "%"
+				: "faults off");
+		builder.append(" | ");
+		builder.append(hasCrashProcess()
+				? "MTBF " + DECIMAL.format(mtbfSeconds) + " s, MTTR " + DECIMAL.format(mttrSeconds) + " s"
+				: "no crashes");
 		return builder.toString();
 	}
 
@@ -359,7 +485,7 @@ final class NodeCapacityProfile
 	{
 		return String.format(
 				Locale.US,
-				"Node %d: %s, CPU %.2fx, memory %d MB, jobs %d, queue %d, delay %d ms, slowdown %s, failure %s",
+				"Node %d: %s, CPU %.2fx, memory %d MB, jobs %d, queue %d, delay %d ms, bandwidth %s, slowdown %s, faults %s, crashes %s",
 				nodeIndex,
 				role.getLabel(),
 				cpuMultiplier,
@@ -367,9 +493,14 @@ final class NodeCapacityProfile
 				maxConcurrentJobs,
 				queueCapacity,
 				networkDelayMs,
+				formatBandwidth(bandwidthMbps),
 				slowdownSimulationEnabled
 						? DECIMAL.format(slowdownMultiplier) + "x" : "off",
 				failureSimulationEnabled
-						? failureProbabilityPercent + "%" : "off");
+						? failureProbabilityPercent + "%" : "off",
+				hasCrashProcess()
+						? "MTBF " + DECIMAL.format(mtbfSeconds) + " s / MTTR "
+								+ DECIMAL.format(mttrSeconds) + " s"
+						: "off");
 	}
 }

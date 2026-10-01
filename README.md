@@ -1,6 +1,6 @@
 # DSMP Distributed Recommender Simulator
 
-This repository contains the Java/JADE DSMP simulator, the modern Swing GUI, the user-generation studio, the exact multi-node lab, and the dataset import lab.
+This repository contains the Java/JADE DSMP simulator, the modern Swing GUI, the user-generation studio, the Node Lab (cluster design, scheduling, live node control, run records and replicated studies, with results identical on any node split), and the dataset import lab.
 
 ## Fast Start
 
@@ -109,6 +109,7 @@ python build.py compile
 python build.py rebuild
 python build.py test
 python build.py run
+python build.py study FILE
 python build.py info
 python build.py clean
 ```
@@ -119,6 +120,7 @@ python build.py clean
 - `compile` compiles the Java sources if needed.
 - `rebuild` deletes compiled classes and compiles again.
 - `run` starts the GUI only after preflight passes.
+- `study FILE` runs a Node Lab study without the window and writes it to `Results/Studies/` (see below).
 - `info` prints detected paths and versions.
 - `clean` removes generated Java classes, the Python virtual environment, and runtime caches.
 
@@ -247,7 +249,8 @@ any scheduling policy, any live workload control and any retried failure; the
 scheduler changes only where and when work runs. See
 `DSMP_V4_SCHEDULING_REBUILD.md` for the design, the per-algorithm construction
 and the verification (including a live end-to-end check,
-`LiveExactnessHarness`). Two of the underlying properties:
+`LiveExactnessHarness`), and `DSMP_V4_NODE_LAB.md` for the node model and the
+analysis tools. Two of the underlying properties:
 
 - **TF-IDF is corpus-wide.** Document frequency and corpus size are summed across
   every node before weighting, so a term carries the same IDF everywhere and the
@@ -262,6 +265,38 @@ and the verification (including a live end-to-end check,
 
 If a node is lost mid-run, the corpus-wide TF-IDF barrier times out and the run
 fails with a clear message rather than silently falling back to per-node weights.
+
+## Node Lab
+
+The Node Lab (one entry in the navigation rail) is where the recommender's
+nodes are designed, scheduled, steered and measured:
+
+- **Cluster**: per-node speed (in reference cores), lanes, queue, memory, link
+  latency and bandwidth, slowdown, faults and crash-repair processes, with
+  presets and saved `Clusters/*.cluster` files.
+- **Plan**: execution mode (hardware, emulated cluster, emulated with faults),
+  one of twelve scheduling policies with an instant simulated preview, and an
+  optional scripted scenario (pause, drain, crash, capacity, policy switch at
+  a time or at a phase's progress).
+- **Live**: the running system, its phases against their lower bounds, and
+  controls to pause, take out, drain, crash or boost nodes.
+- **Results**: every run's complete record under `Results/Runs/`, its measures
+  (makespan, stages, efficiency against a lower bound no policy can beat,
+  utilization, wasted work, bytes moved), a replay of the run in the
+  discrete-event simulator as a model check, and what every other policy
+  would have taken on the same work.
+- **What-If** and **Studies**: policy comparisons in the simulator, and
+  replicated factorial experiments with common random numbers, confidence
+  intervals and Holm-adjusted paired tests.
+
+Studies also run without the window:
+
+```bash
+python build.py study Studies/my-study.study
+```
+
+See `DSMP_V4_NODE_LAB.md` for the model, the measures, the record format,
+the statistics, the validation and the limitations.
 
 ## Recommendation Quality
 

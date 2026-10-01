@@ -43,6 +43,21 @@ final class RecommendationSchedulerRegistry
 			int plannedHeapMb,
 			String note)
 	{
+		return apply(mode, policy, plannedNodes, plannedHeapMb, note, null);
+	}
+
+	/**
+	 * Sets the plan the next initialized run freezes; a null scenario keeps the
+	 * current plan's scenario.
+	 */
+	static RecommendationSchedulerPlan apply(
+			RecommendationSchedulerPlan.Mode mode,
+			SchedulerLabEngine.SchedulingPolicy policy,
+			int plannedNodes,
+			int plannedHeapMb,
+			String note,
+			Scenario scenario)
+	{
 		synchronized (LOCK)
 		{
 			revision++;
@@ -52,7 +67,22 @@ final class RecommendationSchedulerRegistry
 					revision,
 					plannedNodes,
 					plannedHeapMb,
-					note);
+					note,
+					scenario == null ? currentPlan.getScenario() : scenario);
+			return currentPlan;
+		}
+	}
+
+	/** Replaces only the scenario of the current plan. */
+	static RecommendationSchedulerPlan applyScenario(Scenario scenario)
+	{
+		synchronized (LOCK)
+		{
+			RecommendationSchedulerPlan plan = currentPlan;
+			revision++;
+			currentPlan = RecommendationSchedulerPlan.create(plan.getMode(), plan.getPolicy(), revision,
+					plan.getPlannedNodes(), plan.getPlannedHeapMb(), plan.getNote(),
+					scenario == null ? Scenario.NONE : scenario);
 			return currentPlan;
 		}
 	}
@@ -70,7 +100,8 @@ final class RecommendationSchedulerRegistry
 					revision,
 					plannedNodes,
 					plannedHeapMb,
-					"Original DSMP (V3) placement; no capacity emulation.");
+					"Original DSMP (V3) placement; no capacity emulation.",
+					currentPlan.getScenario());
 			return currentPlan;
 		}
 	}
@@ -94,18 +125,30 @@ final class RecommendationSchedulerRegistry
 		}
 		int nodes = Math.max(1, nodeCount);
 		NodeCapacityRegistry.configureForNodeCount(nodes, heapMb);
+		SchedulingRunContext.Mode mode = SchedulingRunContext.Mode.fromPlan(plan);
 		SchedulingRunContext context = new SchedulingRunContext(
 				runId,
-				SchedulingRunContext.Mode.fromPlan(plan),
+				mode,
 				plan.getPolicy(),
 				NodeCapacityRegistry.snapshot(),
 				nodes,
 				algorithm,
-				FAULT_SEED,
+				NodeCapacityRegistry.clusterSettings(),
+				mode == SchedulingRunContext.Mode.BASELINE ? Scenario.NONE : plan.getScenario(),
 				MAX_FAILURES_PER_UNIT,
 				STALL_TIMEOUT_MS,
 				LiveWorkloadAdjustmentRegistry.consumeNextRunPacingDelayMs());
+		RunRecorder recorder = context.recorder();
+		recorder.property("algorithm", RecommendationModeSupport.algorithmName(algorithm));
+		recorder.property("targets", Integer.toString(Math.max(0, targetCount)));
+		recorder.property("heapMb", Integer.toString(Math.max(RuntimeResourceSettings.MIN_HEAP_MB, heapMb)));
+		recorder.property("planNote", plan.getNote());
+		for (java.util.Map.Entry<String,String> entry : pendingRunProperties().entrySet())
+		{
+			recorder.property(entry.getKey(), entry.getValue());
+		}
 		SchedulingRuntime.register(context);
+		context.start();
 		System.out.println(
 				"Recommendation scheduler plan for run " + runId + ": "
 				+ context.describe()
@@ -117,6 +160,34 @@ final class RecommendationSchedulerRegistry
 			System.out.println("  " + spec.describe());
 		}
 		return context;
+	}
+
+	private static final java.util.LinkedHashMap<String,String> NEXT_RUN_PROPERTIES =
+			new java.util.LinkedHashMap<String,String>();
+
+	/**
+	 * Properties the next initialized run records in its manifest (for example
+	 * a study's name, cell and repetition). They apply to every later run until
+	 * cleared.
+	 */
+	static void setRunProperties(java.util.Map<String,String> properties)
+	{
+		synchronized (LOCK)
+		{
+			NEXT_RUN_PROPERTIES.clear();
+			if (properties != null)
+			{
+				NEXT_RUN_PROPERTIES.putAll(properties);
+			}
+		}
+	}
+
+	private static java.util.Map<String,String> pendingRunProperties()
+	{
+		synchronized (LOCK)
+		{
+			return new java.util.LinkedHashMap<String,String>(NEXT_RUN_PROPERTIES);
+		}
 	}
 
 	static String activeRunId()

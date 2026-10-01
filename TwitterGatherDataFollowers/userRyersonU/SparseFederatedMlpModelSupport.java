@@ -162,6 +162,8 @@ final class SparseFederatedMlpModelSupport
 			}
 			for (int epoch = 0; epoch < safeEpochs; epoch++)
 			{
+				//A revoked training unit (drain, crash) stops between epochs.
+				UnitCancellation.check();
 				shuffleOrder(order, new Random(trainingSeed + epoch * 0x9E3779B9L));
 				for (int index : order)
 				{

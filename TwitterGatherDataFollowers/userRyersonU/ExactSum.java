@@ -26,7 +26,7 @@ import java.util.Arrays;
  * last lies in [0, 2^32) and the last limb is signed, in [-2^31, 2^31). The
  * value is sum(limbs[k] * 2^(32 * (lowLimb + k))) * 2^-1074.
  */
-final class ExactSum implements Serializable
+final class ExactSum implements Serializable, PayloadSize.Sized
 {
 	private static final long serialVersionUID = 1L;
 
@@ -47,6 +47,12 @@ final class ExactSum implements Serializable
 
 	ExactSum()
 	{
+	}
+
+	/** Wire size: the limb offset and flags, then each 32-bit limb. */
+	public long payloadBytes()
+	{
+		return 8L + 4L * (limbs == null ? 0 : limbs.length);
 	}
 
 	ExactSum(double initial)

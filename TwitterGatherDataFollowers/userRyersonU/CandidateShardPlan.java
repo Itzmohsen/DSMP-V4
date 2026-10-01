@@ -15,9 +15,10 @@ import java.util.TreeMap;
  * contributions are combined in node order, so every node builds the same
  * plan: candidates grouped by owner, sorted by name, and cut into contiguous
  * shards of similar estimated cost. A shard's home is its owner, the node that
- * already holds those vectors; running it elsewhere costs a transfer. Each
- * candidate belongs to exactly one shard, so scoring every shard once scores
- * every candidate once.
+ * already holds those vectors; running it elsewhere moves them over the
+ * network (the unit's input bytes). Each candidate belongs to exactly one
+ * shard, so scoring every shard once scores every candidate once. Only the
+ * layout (names, owners, costs) is exchanged when the plan is built.
  */
 final class CandidateShardPlan
 {
@@ -103,6 +104,15 @@ final class CandidateShardPlan
 	{
 		int id = units.size() + 1;
 		shardUsers.add(Collections.unmodifiableList(new ArrayList<String>(users)));
+		//The shard's input is its candidates' vectors, held by the owner: a shard
+		//that runs elsewhere moves them over the network.
+		long sizingStart = NodeEmulator.threadCpuNanos();
+		long bytes = 4L;
+		for (String user : users)
+		{
+			bytes += PayloadSize.string(user) + PayloadSize.sparseVector(vectors.get(user));
+		}
+		PayloadSize.excludeCpu(NodeEmulator.threadCpuNanos() - sizingStart);
 		units.add(new WorkUnitSpec(
 				id,
 				String.format("o%04d-c%06d", owner, chunk),
@@ -111,8 +121,42 @@ final class CandidateShardPlan
 				0,
 				Double.POSITIVE_INFINITY,
 				owner,
-				null));
+				null).withData(bytes, 0L));
 	}
+
+	/**
+	 * Wire size of one node's contribution to the plan: the names and estimated
+	 * costs of the candidates it owns (their vectors stay home until a shard
+	 * needs them elsewhere).
+	 */
+	static long layoutBytes(Map<String,? extends Map<String,Double>> owned)
+	{
+		long bytes = 4L;
+		if (owned != null)
+		{
+			for (String user : owned.keySet())
+			{
+				bytes += PayloadSize.string(user) + 8L;
+			}
+		}
+		return bytes;
+	}
+
+	/** Every node downloads the layout of every shard: names, owners and costs. */
+	static final RunCollectives.DownloadSizer LAYOUT = new RunCollectives.DownloadSizer()
+	{
+		public long bytesFor(int node, Object result, List<Long> uploadBytesByNode,
+				List<Object> contributionsByNode)
+		{
+			long total = 4L;
+			for (Long upload : uploadBytesByNode)
+			{
+				total += upload.longValue();
+			}
+			return total + (result instanceof CandidateShardPlan
+					? 16L * ((CandidateShardPlan)result).units.size() : 0L);
+		}
+	};
 
 	List<WorkUnitSpec> units()
 	{

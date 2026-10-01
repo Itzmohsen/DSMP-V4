@@ -98,6 +98,9 @@ final class SchedulerLabEngine
 	 */
 	enum SchedulingPolicy
 	{
+		ORIGINAL_DSMP(
+				"Original DSMP (V3)",
+				"static baseline: every unit runs on the node that holds its data, as in V3; units without a home go to the node with the least assigned work; nothing moves unless its node leaves"),
 		STATIC_EQUAL_SPLIT(
 				"Static equal split",
 				"static baseline: contiguous blocks of equal size in canonical order; ignores cost and speed"),

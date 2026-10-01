@@ -692,6 +692,7 @@ public class StarterAgent extends Agent
 		send(msg2);
 		stageStartSimBroadcastEndTime = System.currentTimeMillis();
 		logStageDuration("START_SIM broadcast to MobileAgents", startSimBroadcastStartTime, stageStartSimBroadcastEndTime);
+		RunRecords.milestone(conversationIDInitial, "run-start");
 		if (isMobileAgentTweetDelayBypassEnabled())
 		{
 			String bypassLine = "[StageTimer] MobileAgent tweet-delay simulation bypass enabled; proceeding after recommender text-processing confirmation.";
@@ -822,6 +823,7 @@ public class StarterAgent extends Agent
 						//@Jason changed to -1 to reuse counter in ontology: Querying Done from Organizing Agent below
 						alltweetsflag = true;
 						stageAllTweetingCompletedTime = System.currentTimeMillis();
+						RunRecords.milestone(conversationIDInitial, "input-delivered");
 							logStageDuration("WAIT all MobileAgents Tweeting Completed", stageStartSimBroadcastEndTime, stageAllTweetingCompletedTime);
 							System.out.println(myAgent.getLocalName()+" TWEETING COMPLETED numberofusers: "+numberofusers);
 							ACLMessage inputDeliveryComplete =
@@ -898,6 +900,7 @@ public class StarterAgent extends Agent
 								: msg.getContent();
 						System.err.println(failure);
 						NodeExecutionMonitor.setRunPhase(failure);
+						RunRecords.finish(conversationIDInitial, "failed: " + failure);
 						myGui.handleSimulationStartFailure(failure);
 						finishSimulationLifecycle();
 						return;
@@ -916,6 +919,7 @@ public class StarterAgent extends Agent
 							System.err.println(failure);
 							NodeExecutionMonitor.setRunPhase(
 									"Recommendation run failed safely. No partial results were published.");
+							RunRecords.finish(conversationIDInitial, "failed: " + failure);
 							myGui.handleSimulationRunFailure(failure);
 							finishSimulationLifecycle();
 						}
@@ -995,6 +999,7 @@ public class StarterAgent extends Agent
 					//All recommender agents ready to cluster since text processing is completed
 					if (numOfRecAgentsCount == alltfidfserviceAgents.length){
 						stageAllTextProcessingCompletedTime = System.currentTimeMillis();
+						RunRecords.milestone(conversationIDInitial, "text-processing-complete");
 						long textProcessingWaitStartTime = stageAllTweetingCompletedTime > 0 ? stageAllTweetingCompletedTime : stageStartSimBroadcastEndTime;
 						logStageDuration("WAIT all RecommenderAgents Text Processing Complete", textProcessingWaitStartTime, stageAllTextProcessingCompletedTime);
 						NodeExecutionMonitor.setRunPhase(
@@ -1043,6 +1048,7 @@ public class StarterAgent extends Agent
 							startRecMsg.setConversationId(conversationIDInitial);
 
 							stageAlgorithmStartTime = System.currentTimeMillis();
+							RunRecords.milestone(conversationIDInitial, "model-start");
 							for (int i=0; i < alltfidfserviceAgents.length; i++){
 								String recAgentToSend = "Recommender-ServiceAgent"+(i+1);
 								System.out.println(getLocalName()+ " Start Recommend Algorithm Msg Sent To: "+recAgentToSend);
@@ -1077,6 +1083,7 @@ public class StarterAgent extends Agent
 					if(tfidfservercount == alltfidfserviceAgents.length)
 					{
 						stageAllAlgorithmsReportedTime = System.currentTimeMillis();
+						RunRecords.milestone(conversationIDInitial, "all-reported");
 						logStageDuration("WAIT all RecommenderAgents Algorithm/TFIDF Done", stageAlgorithmStartTime, stageAllAlgorithmsReportedTime);
 						NodeExecutionMonitor.setRunPhase(
 								"All recommender nodes reported; combining score maps.");
@@ -1094,6 +1101,7 @@ public class StarterAgent extends Agent
 
 					endKmeansMergeTime = System.nanoTime();
 					stageMergeCompletedTime = System.currentTimeMillis();
+					RunRecords.milestone(conversationIDInitial, "merge-complete");
 					logStageDuration("WAIT merge completed after algorithm start", stageAlgorithmStartTime, stageMergeCompletedTime);
 					logStageDuration("WAIT merge completed after all algorithms reported", stageAllAlgorithmsReportedTime, stageMergeCompletedTime);
 					NodeExecutionMonitor.setRunPhase(
@@ -1158,6 +1166,7 @@ public class StarterAgent extends Agent
 
 						//@Jason timing whole execution
 						final long endSimTime = System.currentTimeMillis();
+						RunRecords.finish(conversationIDInitial, "completed");
 						stageQueryCompletedTime = endSimTime;
 						logStageDuration("WAIT querying/recommendation completed", stageQueryStartTime, stageQueryCompletedTime);
 						System.out.println("Simulation Completed");

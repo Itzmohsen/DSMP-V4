@@ -11,6 +11,7 @@ final class NodeCapacityRegistry
 			new ArrayList<NodeCapacityProfile>();
 	private static int configuredNodeCount = 0;
 	private static int configuredHeapMb = RuntimeResourceSettings.currentMaxHeapMb();
+	private static ClusterSettings clusterSettings = ClusterSettings.defaults();
 
 	private NodeCapacityRegistry()
 	{
@@ -135,6 +136,23 @@ final class NodeCapacityRegistry
 	static NodeCapacityProfile profileForAgentName(String agentName)
 	{
 		return profileForNode(parseNodeIndex(agentName));
+	}
+
+	/** Cluster-wide settings (coordinator, time dilation, failure model, seed). */
+	static ClusterSettings clusterSettings()
+	{
+		synchronized (LOCK)
+		{
+			return clusterSettings;
+		}
+	}
+
+	static void setClusterSettings(ClusterSettings settings)
+	{
+		synchronized (LOCK)
+		{
+			clusterSettings = settings == null ? ClusterSettings.defaults() : settings;
+		}
 	}
 
 	static List<NodeCapacityProfile> snapshot()
@@ -267,30 +285,10 @@ final class NodeCapacityRegistry
 		{
 			return false;
 		}
-		NodeCapacityProfile defaultProfile =
-				NodeCapacityProfile.defaultProfile(
-						profile.getNodeIndex(),
-						nodeCount,
-						heapMb);
-		return profile.getRole() == defaultProfile.getRole()
-				&& Math.abs(profile.getCpuMultiplier()
-						- defaultProfile.getCpuMultiplier()) < 0.0000001
-				&& profile.getMemoryLimitMb()
-						== defaultProfile.getMemoryLimitMb()
-				&& profile.getMaxConcurrentJobs()
-						== defaultProfile.getMaxConcurrentJobs()
-				&& profile.getNetworkDelayMs()
-						== defaultProfile.getNetworkDelayMs()
-				&& profile.getQueueCapacity()
-						== defaultProfile.getQueueCapacity()
-				&& profile.isSlowdownSimulationEnabled()
-						== defaultProfile.isSlowdownSimulationEnabled()
-				&& Math.abs(profile.getSlowdownMultiplier()
-						- defaultProfile.getSlowdownMultiplier()) < 0.0000001
-				&& profile.isFailureSimulationEnabled()
-						== defaultProfile.isFailureSimulationEnabled()
-				&& profile.getFailureProbabilityPercent()
-						== defaultProfile.getFailureProbabilityPercent();
+		return profile.sameSettingsAs(NodeCapacityProfile.defaultProfile(
+				profile.getNodeIndex(),
+				nodeCount,
+				heapMb));
 	}
 
 	private static int parseNodeIndex(String agentName)

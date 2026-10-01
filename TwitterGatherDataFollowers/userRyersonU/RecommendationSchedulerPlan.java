@@ -7,14 +7,14 @@ final class RecommendationSchedulerPlan
 	enum Mode
 	{
 		DSMP_DEFAULT(
-				"Original DSMP",
-				"V3 list-scheduling placement; each node works on its own data; no capacity emulation."),
+				"Hardware (unemulated)",
+				"Runs on this machine's hardware with the original DSMP (V3) placement; node profiles are ignored and nothing is emulated. The exactness reference."),
 		SCORING_SAFE(
-				"Scheduled, capacity emulated",
-				"Placement and work dispatch follow the policy, and node speed, lanes, memory, queue and link delay are physically emulated. Recommendations are identical to the original mode."),
+				"Emulated cluster",
+				"Every node's speed, lanes, memory, queue, link latency and bandwidth are physically emulated on one time scale, and the policy places and dispatches the work. Recommendations are identical to the hardware mode."),
 		SCHEDULING_EXPERIMENT(
-				"Scheduled, fault injection",
-				"As capacity emulated, plus injected unit failures at each node's failure probability, retried with exactly-once commits. Recommendations are still identical.");
+				"Emulated cluster with faults",
+				"As emulated, plus transient unit faults and node crashes with repairs, all seeded and reproducible, retried with exactly-once commits. Recommendations are still identical.");
 
 		private final String label;
 		private final String description;
@@ -47,6 +47,7 @@ final class RecommendationSchedulerPlan
 	private final int plannedNodes;
 	private final int plannedHeapMb;
 	private final String note;
+	private final Scenario scenario;
 
 	private RecommendationSchedulerPlan(
 			Mode mode,
@@ -54,8 +55,10 @@ final class RecommendationSchedulerPlan
 			long revision,
 			int plannedNodes,
 			int plannedHeapMb,
-			String note)
+			String note,
+			Scenario scenario)
 	{
+		this.scenario = scenario == null ? Scenario.NONE : scenario;
 		this.mode = mode == null ? Mode.DSMP_DEFAULT : mode;
 		this.policy = policy == null
 				? SchedulerLabEngine.SchedulingPolicy.CAPACITY_WEIGHTED : policy;
@@ -75,7 +78,8 @@ final class RecommendationSchedulerPlan
 				0L,
 				Math.max(1, NodeCapacityRegistry.configuredNodeCount()),
 				NodeCapacityRegistry.configuredHeapMb(),
-				"Original DSMP (V3) placement; no capacity emulation.");
+				"Original DSMP (V3) placement; no capacity emulation.",
+				Scenario.NONE);
 	}
 
 	static RecommendationSchedulerPlan create(
@@ -86,13 +90,32 @@ final class RecommendationSchedulerPlan
 			int plannedHeapMb,
 			String note)
 	{
+		return create(mode, policy, revision, plannedNodes, plannedHeapMb, note, Scenario.NONE);
+	}
+
+	static RecommendationSchedulerPlan create(
+			Mode mode,
+			SchedulerLabEngine.SchedulingPolicy policy,
+			long revision,
+			int plannedNodes,
+			int plannedHeapMb,
+			String note,
+			Scenario scenario)
+	{
 		return new RecommendationSchedulerPlan(
 				mode,
 				policy,
 				revision,
 				plannedNodes,
 				plannedHeapMb,
-				note);
+				note,
+				scenario);
+	}
+
+	/** The scripted adjustments the next run executes (empty for none). */
+	Scenario getScenario()
+	{
+		return scenario;
 	}
 
 	Mode getMode()
@@ -140,12 +163,13 @@ final class RecommendationSchedulerPlan
 	{
 		if (!isActive())
 		{
-			return "Original DSMP scheduling";
+			return "Hardware (unemulated), original DSMP placement";
 		}
 		return mode.getLabel() + " | " + policy.getLabel()
 				+ " | " + plannedNodes + " node"
 				+ (plannedNodes == 1 ? "" : "s")
-				+ " | " + RuntimeResourceSettings.formatMegabytes(plannedHeapMb);
+				+ " | " + RuntimeResourceSettings.formatMegabytes(plannedHeapMb)
+				+ (scenario.isEmpty() ? "" : " | scenario: " + scenario.getName());
 	}
 
 	String compactPolicyLabel()

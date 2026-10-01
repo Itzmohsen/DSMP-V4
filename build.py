@@ -33,6 +33,9 @@ import zipfile
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(PROJECT_ROOT, ".venv")
 SRC_DIR = os.path.join(PROJECT_ROOT, "TwitterGatherDataFollowers", "userRyersonU")
+# Compatibility replacements for classes of bundled third-party jars; compiled
+# into classes/, which precedes the jars on every classpath.
+COMPAT_SRC_DIR = os.path.join(PROJECT_ROOT, "TwitterGatherDataFollowers", "compat")
 TEST_SRC_DIR = os.path.join(PROJECT_ROOT, "TwitterGatherDataFollowers", "Test")
 LIB_DIR = os.path.join(PROJECT_ROOT, "lib")
 CLASSES_DIR = os.path.join(PROJECT_ROOT, "classes")
@@ -509,7 +512,7 @@ def run_doc2vec_preflight(env=None):
 
 
 def java_source_files(include_tests=False):
-    roots = [SRC_DIR]
+    roots = [SRC_DIR, COMPAT_SRC_DIR]
     if include_tests:
         roots.append(TEST_SRC_DIR)
     files = []
@@ -1044,6 +1047,52 @@ def run_self_tests():
         perr("Failing self-tests: " + ", ".join(failed))
 
 
+STUDY_MAIN_CLASS = "TwitterGatherDataFollowers.userRyersonU.StudyCli"
+
+
+def run_study(path):
+    """Runs a Node Lab study file without the window (see StudyDesign for the format).
+
+    Every run of the study is executed, recorded under Results/Runs and
+    analysed under Results/Studies; the command fails unless every run
+    completed and every algorithm's runs produced identical recommendations.
+    """
+    if not path:
+        perr("Name the study file to run.",
+             suggestion="python build.py study Studies/my-study.study "
+                        "(the Node Lab's Studies page saves designs in this format).")
+    study_file = os.path.abspath(path)
+    if not os.path.isfile(study_file):
+        perr(f"Study file not found: {study_file}")
+    install()
+    compile_java(force=False)
+    java_major, _, env = preflight(require_classes=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_file = os.path.join(LOG_DIR, "study-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + ".log")
+    java_opts, _ = java_runtime_opts(java_major, log_file)
+    java_opts = [option for option in java_opts
+                 if not option.startswith("-Ddsmp.launcher.managed")
+                 and not option.startswith("-Ddsmp.restart.exitCode")]
+    command = (["java"] + java_opts + ["-Ddsmp.gui.hidden=true", "-cp", runtime_classpath(),
+                                       STUDY_MAIN_CLASS, study_file])
+    pinfo(f"Running study {study_file}")
+    pinfo(f"Study log: {log_file}")
+    with open(log_file, "w", encoding="utf-8", errors="replace") as log:
+        process = subprocess.Popen(command, cwd=PROJECT_ROOT, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+        assert process.stdout is not None
+        for line in process.stdout:
+            log.write(line)
+            if line.startswith("[study]"):
+                print(line, end="")
+        code = process.wait()
+    if code != 0:
+        perr(f"The study finished with exit code {code}: a run failed or results differed between runs.",
+             suggestion=f"See {log_file} and the study's report.md under Results/Studies.",
+             exit_code=code)
+    pinfo("Study passed: every run completed and every algorithm's results are identical.")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="DSMP reliable build and launch tool",
@@ -1054,6 +1103,7 @@ def parse_args():
               python build.py doctor      Check this clone without starting the GUI
               python build.py rebuild     Recompile Java from scratch
               python build.py test        Compile and run the Java self-test suite
+              python build.py study FILE  Run a Node Lab study file without the window
         """),
     )
     parser.add_argument(
@@ -1074,9 +1124,11 @@ def parse_args():
             "clean-java",
             "clean-python",
             "clean-runtime",
+            "study",
             "help",
         ],
     )
+    parser.add_argument("target", nargs="?", help="The study file (for the study command).")
     parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed command output.")
     return parser, parser.parse_args()
 
@@ -1118,6 +1170,8 @@ def main():
         clean_python_env()
     elif args.command == "clean-runtime":
         clean_runtime()
+    elif args.command == "study":
+        run_study(args.target)
     pinfo(f"Command '{args.command}' finished in {time.time() - started:.1f} seconds.")
 
 

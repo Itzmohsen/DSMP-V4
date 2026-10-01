@@ -165,6 +165,78 @@ final class GlobalDocumentFrequencyCoordinator
 		}
 	}
 
+	/**
+	 * One node's share of the document-frequency exchange when it runs as a
+	 * collective of the run ({@link RunCollectives}): its local counts and the
+	 * number of documents it owns. On the wire a node sends its non-zero counts
+	 * and receives the corpus-wide counts of the terms it holds.
+	 */
+	static final class Share implements PayloadSize.Sized
+	{
+		private final Map<String,Integer> counts;
+		private final int documents;
+
+		Share(Map<String,Integer> localFrequency, int documents)
+		{
+			this.counts = localFrequency == null
+					? Collections.<String,Integer>emptyMap() : localFrequency;
+			this.documents = Math.max(0, documents);
+		}
+
+		/** Non-zero counts: term and a 4-byte count each, plus the document count. */
+		public long payloadBytes()
+		{
+			long total = 8L;
+			for (Map.Entry<String,Integer> entry : counts.entrySet())
+			{
+				if (entry.getValue() != null && entry.getValue().intValue() > 0)
+				{
+					total += PayloadSize.string(entry.getKey()) + 4L;
+				}
+			}
+			return total;
+		}
+
+		/** Bytes of the corpus-wide counts of every term this node holds. */
+		long neededBytes()
+		{
+			long total = 8L;
+			for (String term : counts.keySet())
+			{
+				total += PayloadSize.string(term) + 4L;
+			}
+			return total;
+		}
+	}
+
+	/** Each node downloads the corpus-wide counts of the terms it holds. */
+	static final RunCollectives.DownloadSizer NEEDED_TERMS = new RunCollectives.DownloadSizer()
+	{
+		public long bytesFor(int node, Object result, java.util.List<Long> uploadBytesByNode,
+				java.util.List<Object> contributionsByNode)
+		{
+			Object share = contributionsByNode.get(node - 1);
+			return share instanceof Share ? ((Share)share).neededBytes() : PayloadSize.of(result);
+		}
+	};
+
+	/**
+	 * Sums the shares of every node (integer counts, so the order of the sum is
+	 * irrelevant; terms are kept in name order).
+	 */
+	static Totals combineShares(java.util.List<Object> shares)
+	{
+		RunState state = new RunState(Math.max(1, shares.size()));
+		for (Object share : shares)
+		{
+			if (share instanceof Share)
+			{
+				state.addCounts(((Share)share).counts, ((Share)share).documents);
+			}
+		}
+		return new Totals(state.mergedFrequency, state.mergedDocumentCount);
+	}
+
 	/** Drops any partial state for a run that ended or was abandoned. */
 	static void discard(String runId)
 	{

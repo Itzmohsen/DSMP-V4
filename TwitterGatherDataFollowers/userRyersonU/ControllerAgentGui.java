@@ -104,8 +104,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private static final int APPLICATION_TAB_GRAPH_INSIGHTS = 1;
 	private static final int APPLICATION_TAB_TGF_STUDIO = 2;
 	private static final int APPLICATION_TAB_EVIDENCE_STUDIO = 3;
-	private static final int APPLICATION_TAB_EXPERIMENT_OBSERVATORY = 4;
-	private static final int APPLICATION_TAB_USER_STUDIO = 5;
+	private static final int APPLICATION_TAB_USER_STUDIO = 4;
+	private static final int APPLICATION_TAB_NODE_LAB = 5;
 	public static final String USERSIM_PANEL_ID = "Change to User Sim";
 	public static final String PERFORMANCE_PANEL_ID = "Performance Measurement";
 	private int simulationNo;    // added by Sepide 
@@ -264,14 +264,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private GraphInsightsPanel graphInsightsPanel;
 	private TemporalGraphFoundationPanel temporalGraphFoundationPanel;
 	private RecommendationEvidenceStudioPanel recommendationEvidenceStudioPanel;
-	private ExperimentObservatoryPanel experimentObservatoryPanel;
+	private NodeLabPanel nodeLabPanel;
 	private volatile boolean observatoryAutomationMode;
 	private volatile String observatoryAutomationRunId = "";
 	private volatile ObservatoryAutomationListener observatoryAutomationListener;
-	private ActualSchedulerPanel actualSchedulerPanel;
-	private LiveWorkloadAdjustmentPanel liveWorkloadAdjustmentPanel;
-	private SchedulerLabPanel schedulerLabPanel;
-	private DynamicQueueLabPanel dynamicQueueLabPanel;
 	public JFileChooser fileChooser;  // private access changed to public by Sepide
 	public ArrayList<String> usersRec = new ArrayList<String>(); //Users looking for recommendation  added by Sepide
 
@@ -401,6 +397,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			NodeCapacityRegistry.configureForNodeCount(
 					numNodes,
 					currentHeapSetting());
+			refreshNodeLab();
+			updateNodeCapacitySummary();
 			RecommendationMemoryCoordinator.setStatusListener(
 					new RecommendationMemoryCoordinator.StatusListener() {
 						public void onStatus(
@@ -3433,10 +3431,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				updateRunAccuracyPanelVisibility();
 				refreshSimulatorDoc2VecCacheStatus();
 				refreshSimulatorHelpPanel();
-				if (actualSchedulerPanel != null)
-				{
-					actualSchedulerPanel.refreshFromSimulator();
-				}
+				refreshNodeLab();
 			}
 		}
 
@@ -3998,14 +3993,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			updateNodeCapacitySummary();
 			NodeExecutionMonitor.refreshCapacityProfiles();
 			refreshSimulatorHelpPanel();
-			if (actualSchedulerPanel != null)
-			{
-				actualSchedulerPanel.refreshFromSimulator();
-			}
-			if (schedulerLabPanel != null)
-			{
-				schedulerLabPanel.refreshCapacityFromSimulator();
-			}
+			refreshNodeLab();
 			System.out.println("numNodes: "+numNodes);
 
 		}
@@ -4210,11 +4198,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				algorithmSettingsButton.addActionListener(this);
 
 				nodeCapacityButton = createModernButton(
-						"Node Capacity",
+						"Open Node Lab",
 						BUTTON_NEUTRAL,
 						LineIconType.NODES);
 				nodeCapacityButton.setToolTipText(
-						"Configure capacity-aware node assignment for DSMP v4 scheduling and what-if analysis.");
+						"Design the cluster, choose the scheduling policy and scenario, and watch runs live in the Node Lab.");
 				nodeCapacityButton.addActionListener(this);
 
 				// added by Sepide
@@ -4429,11 +4417,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		temporalGraphFoundationPanel = new TemporalGraphFoundationPanel(this);
 		recommendationEvidenceStudioPanel =
 				new RecommendationEvidenceStudioPanel(this);
-		experimentObservatoryPanel = new ExperimentObservatoryPanel(this);
-		actualSchedulerPanel = new ActualSchedulerPanel(this);
-		liveWorkloadAdjustmentPanel = new LiveWorkloadAdjustmentPanel(this);
-		schedulerLabPanel = new SchedulerLabPanel(this);
-		dynamicQueueLabPanel = new DynamicQueueLabPanel(this);
+		nodeLabPanel = new NodeLabPanel(this);
 		JComponent simulatorTab =
 				StudioNightTheme.wrapTab(mainPanel, true);
 		JComponent graphInsightsTab =
@@ -4442,20 +4426,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				StudioNightTheme.wrapTab(temporalGraphFoundationPanel, false);
 		JComponent evidenceStudioTab =
 				StudioNightTheme.wrapTab(recommendationEvidenceStudioPanel, true);
-		JComponent observatoryTab =
-				StudioNightTheme.wrapTab(experimentObservatoryPanel, true);
 		JComponent userStudioTab =
 				StudioNightTheme.wrapTab(userGenMainPanel, true);
 		JComponent populationTab =
 				StudioNightTheme.wrapTab(populationSweepPanel, true);
-		JComponent schedulerTab =
-				StudioNightTheme.wrapTab(actualSchedulerPanel, true);
-		JComponent liveWorkloadTab =
-				StudioNightTheme.wrapTab(liveWorkloadAdjustmentPanel, true);
-		JComponent dynamicQueueTab =
-				StudioNightTheme.wrapTab(dynamicQueueLabPanel, true);
-		JComponent schedulerDemoTab =
-				StudioNightTheme.wrapTab(schedulerLabPanel, true);
+		JComponent nodeLabTab =
+				StudioNightTheme.wrapTab(nodeLabPanel, false);
 		JComponent importTab =
 				StudioNightTheme.wrapTab(uciRetailImportPanel, true);
 		JComponent helpTab =
@@ -4469,10 +4445,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		NebulaWidgets.setTabStyle(applicationTabs, NebulaWidgets.TAB_STYLE_RAIL);
 		java.util.Map<Integer, String> railSections = new java.util.HashMap<Integer, String>();
 		railSections.put(Integer.valueOf(0), "Workspace");
-		railSections.put(Integer.valueOf(5), "Studio");
-		railSections.put(Integer.valueOf(6), "Labs");
-		railSections.put(Integer.valueOf(11), "Data");
-		railSections.put(Integer.valueOf(12), "Support");
+		railSections.put(Integer.valueOf(4), "Studio");
+		railSections.put(Integer.valueOf(5), "Labs");
+		railSections.put(Integer.valueOf(7), "Data");
+		railSections.put(Integer.valueOf(8), "Support");
 		applicationTabs.setUI(new NebulaWidgets.RailTabbedPaneUI(railSections));
 		applicationTabs.addTab(
 				"Simulator",
@@ -4495,40 +4471,20 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				evidenceStudioTab,
 				"Explain completed recommendations with dataset, term, and graph evidence");
 		applicationTabs.addTab(
-				"Experiment Observatory",
-				new LineIcon(LineIconType.NODES, 16),
-				observatoryTab,
-				"Design controlled benchmark suites and export reproducibility capsules");
-		applicationTabs.addTab(
 				"User Studio",
 				new LineIcon(LineIconType.STUDIO, 16),
 				userStudioTab,
 				"Collect users, load corpora, and generate artificial tweet datasets");
 		applicationTabs.addTab(
-				"Exact Multi-Node Lab",
+				"Node Lab",
 				new LineIcon(LineIconType.NODES, 16),
+				nodeLabTab,
+				"Design the cluster, plan scheduling and faults, steer live runs, and analyse every run");
+		applicationTabs.addTab(
+				"Population Benchmark",
+				new LineIcon(LineIconType.ITERATIONS, 16),
 				populationTab,
-				"Verified population-wide parallel recommendation benchmark");
-		applicationTabs.addTab(
-				"Scheduler Lab",
-				new LineIcon(LineIconType.NODES, 16),
-				schedulerTab,
-				"Apply a real scheduling plan to the simulator's safe assignment boundary");
-		applicationTabs.addTab(
-				"Live Workload",
-				new LineIcon(LineIconType.NODES, 16),
-				liveWorkloadTab,
-				"Adjust live safe-boundary queue work while the simulator is running");
-		applicationTabs.addTab(
-				"Dynamic Queue (Demo)",
-				new LineIcon(LineIconType.NODES, 16),
-				dynamicQueueTab,
-				"Run isolated pull-queue scheduling demonstrations without producing simulator recommendations");
-		applicationTabs.addTab(
-				"Scheduler Lab (Demo)",
-				new LineIcon(LineIconType.NODES, 16),
-				schedulerDemoTab,
-				"Run isolated what-if scheduling demonstrations without changing simulator scoring");
+				"Isolated exact population-wide parallel recommendation benchmark (outside JADE)");
 		applicationTabs.addTab(
 				"Data Preprocessing Lab",
 				new LineIcon(LineIconType.TEXT_FILE, 16),
@@ -4559,21 +4515,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				{
 					recommendationEvidenceStudioPanel.refreshFromSimulator();
 				}
-				else if (isSelectedApplicationTab(experimentObservatoryPanel))
+				else if (isSelectedApplicationTab(nodeLabPanel))
 				{
-					experimentObservatoryPanel.refreshFromSimulator();
+					nodeLabPanel.refreshFromSimulator();
 				}
-				else if (isSelectedApplicationTab(schedulerLabPanel))
+				else if (isSelectedApplicationTab(populationSweepPanel))
 				{
-					schedulerLabPanel.refreshCapacityFromSimulator();
-				}
-				else if (isSelectedApplicationTab(actualSchedulerPanel))
-				{
-					actualSchedulerPanel.refreshFromSimulator();
-				}
-				else if (isSelectedApplicationTab(liveWorkloadAdjustmentPanel))
-				{
-					liveWorkloadAdjustmentPanel.refreshFromSimulator();
+					populationSweepPanel.refreshWorkerCards();
 				}
 			}
 		});
@@ -5260,10 +5208,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					heap,
 					"Experiment Observatory matrix row " + run.id());
 		}
-		if (actualSchedulerPanel != null)
-		{
-			actualSchedulerPanel.refreshFromSimulator();
-		}
+		refreshNodeLab();
 	}
 
 	private SchedulerLabEngine.SchedulingPolicy observatoryPolicyFor(String label)
@@ -5407,40 +5352,107 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		return true;
 	}
 
-	private void openNodeCapacityDialog()
+	/**
+	 * Applies a cluster designed in the Node Lab to the next run: the node
+	 * count, every node's profile and the cluster-wide settings. The cluster
+	 * is frozen when a run is initialized, so an initialized run must be
+	 * initialized again to use it.
+	 */
+	void applyClusterFromNodeLab(
+			java.util.List<NodeCapacityProfile> profiles,
+			ClusterSettings settings)
 	{
-		int nodeCount = currentNodeCountSetting();
 		int heapMb = currentHeapSetting();
-		NodeCapacityRegistry.configureForNodeCount(nodeCount, heapMb);
-		boolean applied =
-				NodeCapacitySettingsDialog.showDialog(this, nodeCount, heapMb);
-		if (!applied)
+		int count = Math.max(1, profiles == null ? 1 : profiles.size());
+		if (count != numNodes
+				|| numNodesField == null
+				|| !Integer.toString(count).equals(numNodesField.getText().trim()))
 		{
-			return;
+			numNodes = count;
+			if (numNodesField != null)
+			{
+				numNodesField.setText(Integer.toString(count));
+			}
+			RecommendationMemoryCoordinator.configureRequestedParallelism(count);
 		}
+		NodeCapacityRegistry.setProfiles(profiles, heapMb);
+		NodeCapacityRegistry.setClusterSettings(settings);
+		invalidateSimulatorInitializationState();
 		updateNodeCapacitySummary();
 		NodeExecutionMonitor.refreshCapacityProfiles();
 		refreshSimulatorHelpPanel();
-		if (actualSchedulerPanel != null)
+	}
+
+	/** The loaded dataset's file name, or "" (for the Node Lab's run checklist). */
+	String loadedDatasetName()
+	{
+		java.io.File file = myAgent == null ? null : myAgent.textFile;
+		return file == null ? "" : file.getName();
+	}
+
+	/** The algorithm selected in the Simulator tab. */
+	String selectedAlgorithmLabel()
+	{
+		Object selected = algorithmSelectionBox == null ? null : algorithmSelectionBox.getSelectedItem();
+		return selected == null ? "" : selected.toString();
+	}
+
+	/** How many target users the next run recommends for. */
+	int selectedTargetCount()
+	{
+		return agentsList == null || agentsList.isEmpty() ? 0
+				: Math.min(agentsList.size(), Math.max(1, getRecommendationBatchUserCount()));
+	}
+
+	boolean isSimulatorInitialized()
+	{
+		return simulatorInitialized && !simulatorInitializationInProgress;
+	}
+
+	boolean isSimulatorInitializing()
+	{
+		return simulatorInitializationInProgress;
+	}
+
+	/** Called by the Node Lab after it changed the plan of the next run. */
+	void nodeLabPlanChanged()
+	{
+		invalidateSimulatorInitializationState();
+		updateNodeCapacitySummary();
+		refreshSimulatorHelpPanel();
+	}
+
+	/** Opens the Node Lab on one of its pages ({@link NodeLabPanel#CLUSTER}, ...). */
+	void showNodeLab(String page)
+	{
+		selectApplicationTab(APPLICATION_TAB_NODE_LAB);
+		if (nodeLabPanel != null)
 		{
-			actualSchedulerPanel.refreshFromSimulator();
+			nodeLabPanel.show(page);
 		}
-		if (schedulerLabPanel != null)
+	}
+
+	/** Shows the Simulator tab (the Node Lab links here to load data and run). */
+	void showSimulator()
+	{
+		selectApplicationTab(APPLICATION_TAB_SIMULATOR);
+	}
+
+	private void refreshNodeLab()
+	{
+		if (nodeLabPanel != null)
 		{
-			schedulerLabPanel.refreshCapacityFromSimulator();
+			nodeLabPanel.refreshAll();
 		}
-		setPerformanceStatus(
-				"CAPACITY",
-				"Updated capacity-aware node assignment profile for scheduling and what-if analysis.",
-				StatusTone.READY);
 	}
 
 	private void updateNodeCapacitySummary()
 	{
 		if (nodeCapacitySummaryLabel != null)
 		{
-			nodeCapacitySummaryLabel.setText(NodeCapacityRegistry.summary());
-			nodeCapacitySummaryLabel.setToolTipText(NodeCapacityRegistry.summary());
+			String summary = NodeLabPanel.clusterSummary() + " · " + NodeLabPanel.planSummary();
+			nodeCapacitySummaryLabel.setText(summary);
+			nodeCapacitySummaryLabel.setToolTipText(summary);
 		}
 	}
 
@@ -5931,11 +5943,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		capacityText.setOpaque(false);
 		capacityText.setLayout(new BoxLayout(capacityText, BoxLayout.Y_AXIS));
 		JLabel capacityTitle = new TokenLabel(
-				"Node capacity contract",
+				"Cluster and scheduling",
 				NebulaDesign.fontMedium(11.5f),
 				NebulaDesign.TEXT_PRIMARY);
 		nodeCapacitySummaryLabel = new TokenLabel(
-				NodeCapacityRegistry.summary(),
+				NodeLabPanel.clusterSummary() + " · " + NodeLabPanel.planSummary(),
 				NebulaDesign.fontBody(10.5f),
 				NebulaDesign.TEXT_TERTIARY);
 		nodeCapacitySummaryLabel.setMinimumSize(new Dimension(70, 14));
@@ -5995,8 +6007,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		capacityConstraints.insets = new Insets(0, 0, 0, 0);
 		resourcesGrid.add(
 				createFieldBlock(
-						"Node capacity",
-						"Configure CPU, memory, queue, delay, and reliability for each node.",
+						"Nodes",
+						"The emulated cluster, scheduling policy and scenario of the next run, designed in the Node Lab.",
 						capacityPanel),
 				capacityConstraints);
 		return createSetupSection("Runtime resources", resourcesGrid);
@@ -6376,7 +6388,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 		else if (event.getSource() == nodeCapacityButton)
 		{
-			openNodeCapacityDialog();
+			showNodeLab(NodeLabPanel.CLUSTER);
 		}
 		else if (event.getSource() == initializeButton)
 		{
@@ -7479,10 +7491,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		if (simulatorHelpPanel != null)
 		{
 			simulatorHelpPanel.refreshFromSimulator();
-		}
-		if (experimentObservatoryPanel != null)
-		{
-			experimentObservatoryPanel.refreshFromSimulator();
 		}
 		refreshGraphInsightsPanel();
 	}

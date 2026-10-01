@@ -399,6 +399,10 @@ final class ExactPopulationSweepEngine
 			throws Exception
 	{
 		validateConfig(config);
+		//The benchmark sizes the shared node registry for its own workers; the
+		//simulator's cluster is put back when it ends.
+		final java.util.List<NodeCapacityProfile> savedProfiles = NodeCapacityRegistry.snapshot();
+		final int savedHeapMb = NodeCapacityRegistry.configuredHeapMb();
 		NodeCapacityRegistry.configureForNodeCount(
 				config.nodes,
 				RuntimeResourceSettings.currentMaxHeapMb());
@@ -532,6 +536,10 @@ final class ExactPopulationSweepEngine
 			{
 				RecommendationMemoryCoordinator.configureRequestedParallelism(
 						previousSchedulerParallelism);
+			}
+			if (!savedProfiles.isEmpty())
+			{
+				NodeCapacityRegistry.setProfiles(savedProfiles, savedHeapMb);
 			}
 		}
 	}
