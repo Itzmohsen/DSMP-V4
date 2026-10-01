@@ -32,9 +32,15 @@ import java.util.concurrent.locks.LockSupport;
  * speed exceeds the TDF runs at speed TDF, and the run is flagged.
  *
  * <b>Crashes.</b> While the node is down its threads block at the next
- * emulator call. Node-local work in progress when the node crashed is redone
- * after the repair (the node's state is durable, its progress is not); a work
- * unit in progress is revoked and restarts wherever the scheduler sends it.
+ * emulator call. A work unit in progress is revoked and restarts wherever the
+ * scheduler sends it. Node-local work is durable at every synchronization
+ * point (a collective, a message to the coordinator, the end of a unit): what
+ * a crash loses is the work since the thread's last durable point, which is
+ * redone from scratch after the repair. A second crash during that redo
+ * restarts it again (the unfinished redo is replaced, not added to). A step
+ * that is lost to {@link #MAX_CONSECUTIVE_LOSSES} crashes in a row, with no
+ * durable point in between, cannot finish between the node's crashes; the run
+ * fails with that diagnosis instead of retrying forever.
  *
  * Every emulated nanosecond is recorded in the node's {@link Ledger}. In an
  * unemulated run the emulator only measures.
@@ -49,6 +55,14 @@ final class NodeEmulator
 	private static final long RESIDUAL_NANOS = 150000L;
 	/** Longest single park, so aborts and revocations are noticed quickly. */
 	private static final long MAX_PARK_NANOS = 50000000L;
+	/**
+	 * Crashes in a row that may hit one node-local step before the run fails.
+	 * A step of duration T on a node crashing at rate 1/MTBF needs about
+	 * e^(T/MTBF) attempts; this many losses in a row means T is several MTBFs.
+	 */
+	static final int MAX_CONSECUTIVE_LOSSES = 200;
+	/** Lost CPU below this is bookkeeping at a durable point, not lost work. */
+	private static final long LOSS_EPSILON_NANOS = 200000L;
 
 	/** Per-node accounting of where wall time went. */
 	static final class Ledger
@@ -201,11 +215,26 @@ final class NodeEmulator
 		private long debt;
 		/** Wall nanoseconds this thread spent in emulator waits (never counted as work). */
 		private long excluded;
+		/** Thread CPU clock at the last durable point; MIN_VALUE before the first. */
+		private long durableCpu = Long.MIN_VALUE;
+		/** The part of the debt that redoes work lost in the last crash. */
+		private long redoOutstanding;
+		/** Crashes that lost this thread's work since its last durable point. */
+		private int lossesSinceDurable;
+		/** Counts the crashes that replaced this thread's debt (a sleep paying it stops). */
+		private int replacements;
+		/** True while {@link #pay} sleeps; a crash then leaves the replacement to it. */
+		private boolean paying;
+		/** The redo of the last crash that hit a payment, applied by {@link #pay}. */
+		private long pendingRedo;
 	}
 
 	private final SchedulingRunContext context;
 	private final int node;
 	private final Ledger ledger = new Ledger();
+	/** Threads of this node parked in an emulated sleep (a crash wakes them at once). */
+	private final java.util.Set<Thread> sleepers =
+			java.util.concurrent.ConcurrentHashMap.<Thread>newKeySet();
 	private final ThreadLocal<ThreadState> threads = new ThreadLocal<ThreadState>()
 	{
 		protected ThreadState initialValue()
@@ -293,6 +322,10 @@ final class NodeEmulator
 		try
 		{
 			pay(state, settle);
+			if (settle)
+			{
+				markDurable(state);
+			}
 		}
 		finally
 		{
@@ -320,6 +353,14 @@ final class NodeEmulator
 			accrue(state, state.top, 0L);
 		}
 		pay(state, true);
+		markDurable(state);
+	}
+
+	/** The thread's progress so far survives a crash from now on. */
+	private void markDurable(ThreadState state)
+	{
+		state.durableCpu = threadCpuNanos();
+		state.lossesSinceDurable = 0;
 	}
 
 	/**
@@ -401,31 +442,55 @@ final class NodeEmulator
 			state.debt = 0L;
 			return;
 		}
-		if (state.debt <= 0L || (!settle && state.debt < PAY_THRESHOLD_NANOS))
+		while (state.debt > 0L && (settle || state.debt >= PAY_THRESHOLD_NANOS))
 		{
+			long target = state.debt;
+			int replacements = state.replacements;
+			long slept;
+			state.paying = true;
+			try
+			{
+				slept = sleepPrecisely(state, target, "speed emulation", true);
+			}
+			finally
+			{
+				state.paying = false;
+			}
+			ledger.dilationNanos.addAndGet(slept);
+			if (state.replacements != replacements)
+			{
+				//A crash interrupted this payment: the slept part was spent on the
+				//lost attempt (redo first), the unpaid rest is discarded, and the
+				//redo of the lost work is owed instead. Pay it next.
+				ledger.redoNanos.addAndGet(Math.min(slept, state.redoOutstanding));
+				ledger.owedNanos.addAndGet(state.pendingRedo - (target - slept));
+				state.debt = state.pendingRedo;
+				state.redoOutstanding = state.pendingRedo;
+				continue;
+			}
+			long residual = target - slept;
+			if (settle && residual > 0L && residual <= RESIDUAL_NANOS)
+			{
+				//At a unit's end or a synchronization point the time must be right
+				//now, not on average: spin away the sub-timer residual.
+				long spinStart = System.nanoTime();
+				long deadline = spinStart + residual;
+				while (System.nanoTime() < deadline)
+				{
+					Thread.onSpinWait();
+				}
+				long spun = System.nanoTime() - spinStart;
+				state.excluded += spun;
+				slept += spun;
+				ledger.dilationNanos.addAndGet(spun);
+			}
+			ledger.sleepErrorNanos.addAndGet(Math.abs(slept - target));
+			ledger.sleeps.incrementAndGet();
+			ledger.redoNanos.addAndGet(Math.min(slept, state.redoOutstanding));
+			state.debt -= slept;
+			state.redoOutstanding = Math.max(0L, state.redoOutstanding - slept);
 			return;
 		}
-		long target = state.debt;
-		long slept = sleepPrecisely(state, target, "speed emulation");
-		long residual = target - slept;
-		if (settle && residual > 0L && residual <= RESIDUAL_NANOS)
-		{
-			//At a unit's end or a synchronization point the time must be right
-			//now, not on average: spin away the sub-timer residual.
-			long spinStart = System.nanoTime();
-			long deadline = spinStart + residual;
-			while (System.nanoTime() < deadline)
-			{
-				Thread.onSpinWait();
-			}
-			long spun = System.nanoTime() - spinStart;
-			state.excluded += spun;
-			slept += spun;
-		}
-		ledger.dilationNanos.addAndGet(slept);
-		ledger.sleepErrorNanos.addAndGet(Math.abs(slept - target));
-		ledger.sleeps.incrementAndGet();
-		state.debt -= slept;
 	}
 
 	/** Records {@code workNanos} of worker-process CPU outside any span and dilates it. */
@@ -464,11 +529,12 @@ final class NodeEmulator
 			accrue(state, state.top, 0L);
 		}
 		pay(state, true);
+		markDurable(state);
 		long deadline = context.clock().wallNanosAt(modelMs);
 		long remaining = deadline - System.nanoTime();
 		if (remaining > 0L)
 		{
-			long slept = sleepPrecisely(state, remaining, network ? "network emulation" : "waiting");
+			long slept = sleepPrecisely(state, remaining, network ? "network emulation" : "waiting", false);
 			if (network)
 			{
 				ledger.networkNanos.addAndGet(slept);
@@ -537,7 +603,7 @@ final class NodeEmulator
 		}
 		ThreadState state = threads.get();
 		long nanos = 1000000L * milliseconds;
-		long slept = sleepPrecisely(state, nanos, "interactive action window");
+		long slept = sleepPrecisely(state, nanos, "interactive action window", false);
 		ledger.pacingNanos.addAndGet(slept);
 	}
 
@@ -547,13 +613,16 @@ final class NodeEmulator
 	 * Sleeps about {@code nanos}: parks in shrinking steps until less than the
 	 * residual remains. Honors aborts, revocation of the current unit and node
 	 * crashes (a crashed node blocks until repaired; the time is downtime, not
-	 * sleep). Returns the wall nanoseconds slept (excluding downtime).
+	 * sleep). With {@code stopOnLoss} the sleep ends when a crash replaced the
+	 * debt it was paying. Returns the wall nanoseconds slept (excluding downtime).
 	 */
-	private long sleepPrecisely(ThreadState state, long nanos, String what)
+	private long sleepPrecisely(ThreadState state, long nanos, String what, boolean stopOnLoss)
 	{
 		long start = System.nanoTime();
 		long deadline = start + Math.max(0L, nanos);
 		long downtime = 0L;
+		Thread self = Thread.currentThread();
+		sleepers.add(self);
 		try
 		{
 			while (true)
@@ -569,9 +638,14 @@ final class NodeEmulator
 					context.requireActive();
 					if (context.isDown(node))
 					{
+						int replacements = state.replacements;
 						long blocked = awaitUp(state);
 						downtime += blocked;
 						deadline += blocked;
+						if (stopOnLoss && state.replacements != replacements)
+						{
+							break;
+						}
 						continue;
 					}
 				}
@@ -590,15 +664,27 @@ final class NodeEmulator
 		}
 		finally
 		{
+			sleepers.remove(self);
 			state.excluded += System.nanoTime() - start;
 		}
 		return System.nanoTime() - start - downtime;
 	}
 
+	/** The node crashed: its sleeping threads stop emulating work at once. */
+	void wakeSleepers()
+	{
+		for (Thread sleeper : sleepers)
+		{
+			LockSupport.unpark(sleeper);
+		}
+	}
+
 	/**
-	 * Blocks the current thread while the node is down. A node-local activity
-	 * in progress (no work unit) is redone after the repair: its work so far is
-	 * owed again. Returns the wall nanoseconds blocked.
+	 * Blocks the current thread while the node is down. Node-local work in
+	 * progress (no work unit) since the thread's last durable point is lost
+	 * and redone from scratch after the repair: the debt of the lost attempt
+	 * (its unpaid speed emulation and any unfinished earlier redo) is replaced
+	 * by the full redo of that work. Returns the wall nanoseconds blocked.
 	 */
 	private long awaitUp(ThreadState state)
 	{
@@ -615,13 +701,36 @@ final class NodeEmulator
 			{
 				root = root.parent;
 			}
-			long cpu = Math.max(0L, root.cpuMark - root.cpuStart);
+			long lostFrom = Math.max(root.cpuStart, state.durableCpu);
+			long cpu = Math.max(0L, threadCpuNanos() - lostFrom);
+			if (cpu <= LOSS_EPSILON_NANOS)
+			{
+				//The thread was at a durable point: nothing was lost.
+				return blocked;
+			}
+			state.lossesSinceDurable++;
+			if (state.lossesSinceDurable > MAX_CONSECUTIVE_LOSSES)
+			{
+				throw new IllegalStateException("Node " + node + " lost the same step to "
+						+ MAX_CONSECUTIVE_LOSSES + " crashes in a row: the step takes longer than"
+						+ " the time between the node's crashes, so it can never finish. Raise the"
+						+ " node's MTBF (or lower its crash rate) and run again.");
+			}
 			double dilation = context.clock().getDilation();
 			double effective = Math.min(context.speedOf(node), dilation);
 			long redo = (long)Math.round(cpu * dilation / effective);
-			ledger.redoNanos.addAndGet(redo);
-			ledger.owedNanos.addAndGet(redo);
-			state.debt += redo;
+			state.replacements++;
+			if (state.paying)
+			{
+				state.pendingRedo = redo;
+			}
+			else
+			{
+				//No payment in progress: the whole positive debt is the lost attempt's.
+				ledger.owedNanos.addAndGet(redo - Math.max(0L, state.debt));
+				state.debt = redo + Math.min(0L, state.debt);
+				state.redoOutstanding = redo;
+			}
 		}
 		return blocked;
 	}

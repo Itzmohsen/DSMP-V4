@@ -238,6 +238,13 @@ Every stochastic step is seeded, and the seed is printed in the run log.
   `DSMP_DOC2VEC_ALLOW_PARALLEL=1` to train in parallel instead, which is faster
   but no longer reproducible.
 - **SVM** keeps its existing stratified split seed and SMO model seed.
+- **Every simulated draw** (the simulated follow, artificial text, the
+  generated dataset, the choice among the top recommendations, the stratified
+  target sample) is seeded by names or a fixed seed. It does not depend on
+  thread order or the number of nodes.
+- **One corpus.** Doc2Vec and the temporal graph model read the run's
+  normalised corpus (`RunCorpus`), so every algorithm sees the same tweets
+  and words.
 - **Graph modularity** runs Gephi's Louvain with randomisation disabled, so the
   community assignment and the modularity value are stable across runs.
 
@@ -298,18 +305,53 @@ python build.py study Studies/my-study.study
 See `DSMP_V4_NODE_LAB.md` for the model, the measures, the record format,
 the statistics, the validation and the limitations.
 
+## Simulator
+
+The Simulator tab (the first entry in the navigation rail) runs a
+recommendation experiment as a guided flow:
+
+- **Overview**: what the next run will use, the next step, and the latest
+  run's quality against chance.
+- **1 Data**: the dataset, its date window (both days included), the newest-N
+  tweet limit, text processing, and the users with their community sizes.
+- **2 Model**: the nine algorithms, grouped as rankers (Similarity,
+  Common-Neighbors, K-Means, K-Means Euclidean, Doc2Vec, Temporal Graph
+  Foundation) and classifiers (SVM, Scalable Linear SVM, MLP), what they
+  recommend, and their parameters.
+- **3 Targets**: who gets recommendations (selected users, a seeded
+  stratified sample, or everyone) and the list length k. The evaluation
+  preview shows the chance level of the headline metrics before anything
+  runs.
+- **4 Run**: nodes and the Node Lab cluster, the heap, and the three run
+  steps with the live output.
+- **5 Results**: the run's ranking quality with 95% intervals, chance and
+  MostPop baselines, paired tests, the top-1 view with a confusion matrix,
+  and every target's numbers.
+
 ## Recommendation Quality
 
-Runs report ranking quality, not just classifier accuracy. After the last target
-reports, the results pane prints hit rate, precision, recall and NDCG at the
-requested top-N, plus MRR and MAP, scored against the followee each user already
-has in the dataset. Targets with no known followee are skipped and counted rather
-than averaged in as zeros.
+Every run is evaluated against the followee each user already has in the
+dataset. A recommended user is relevant when it follows the target's own
+account; a recommended account is relevant when the target follows it.
 
-The per-candidate number shown next to each recommendation is a **within-list
-relative rank score**: it is rescaled so the best candidate is exactly 100. It is
-not a similarity, a probability or a confidence, and it is not comparable between
-targets or between runs.
+The report gives hit rate, P@k, R@k, NDCG@k, MRR and MAP@k:
+- every mean has a 95% interval (Wilson for the hit rate);
+- every metric is shown next to its exact chance level and a most-popular
+  baseline, with a paired test against each;
+- diagnostics flag figures that are trivial (for example k covering every
+  account).
+
+Classifiers never train on the targets they score. A target that receives no
+list scores zero. Each run's record holds its lists and the evaluation
+(`recommendations.csv`, `quality.json`, `quality-targets.csv`).
+
+`DSMP_V4_EVALUATION.md` defines the protocol, the algorithms and the metrics,
+and lists what the October 2026 audit found and how each finding was fixed.
+
+The per-candidate number shown next to each recommendation is a
+**within-list relative rank score**: it is rescaled so the best candidate is
+exactly 100. It is not a similarity, a probability or a confidence, and it is
+not comparable between targets or between runs.
 
 ## Credentials
 

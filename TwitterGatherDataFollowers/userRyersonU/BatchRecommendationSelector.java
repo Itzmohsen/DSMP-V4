@@ -9,14 +9,20 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Random;
 
+/**
+ * The simulated user's follow choice: one of the top three recommendations,
+ * picked with probability proportional to its score. Every algorithm ranks by
+ * a score where higher is better and the target itself is never a candidate,
+ * so no algorithm needs its scores adjusted first. Negative or non-finite
+ * scores weigh nothing; if nothing has weight the top recommendation is chosen.
+ */
 final class BatchRecommendationSelector {
 	private static final int MAX_WEIGHTED_CHOICES = 3;
-	private static final double DOC2VEC_FIRST_WEIGHT_ADJUSTMENT = 50.0;
 
 	private BatchRecommendationSelector() {
 	}
 
-	static int selectIndex(List<Double> weights, boolean adjustDoc2VecFirstWeight, Random random) {
+	static int selectIndex(List<Double> weights, Random random) {
 		if (weights == null || weights.isEmpty()) {
 			return -1;
 		}
@@ -31,9 +37,6 @@ final class BatchRecommendationSelector {
 		for (int i = 0; i < choiceCount; i++) {
 			Double weightObject = weights.get(i);
 			double weight = weightObject == null ? 0.0 : weightObject.doubleValue();
-			if (i == 0 && adjustDoc2VecFirstWeight) {
-				weight -= DOC2VEC_FIRST_WEIGHT_ADJUSTMENT;
-			}
 			if (!Double.isFinite(weight) || weight < 0.0) {
 				weight = 0.0;
 			}

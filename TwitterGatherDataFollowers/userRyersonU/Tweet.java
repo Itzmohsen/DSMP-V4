@@ -35,10 +35,10 @@ public class Tweet implements Comparable<Tweet> {
 		tweetText = text;
 		tweetId = id;
 		try {
-			this.date = sdf.parse(date);
+			this.date = date == null ? null : sdf.parse(date);
 		} catch (ParseException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			//An undated tweet keeps its text; time-based features skip it.
+			this.date = null;
 		}
 		this.username = username;
 	}

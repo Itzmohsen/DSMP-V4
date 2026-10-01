@@ -118,6 +118,12 @@ final class WorkPhase
 		return outcome;
 	}
 
+	/**
+	 * Reports a failed execution. Unit work is deterministic, so only a failure
+	 * of the environment (an I/O error such as a crashed worker process, a
+	 * timeout, the JVM running out of memory) can succeed when retried; any
+	 * other error is the work itself failing and ends the phase at once.
+	 */
 	WorkDispatcher.Outcome fail(WorkDispatcher.Assignment assignment, Throwable cause)
 	{
 		WorkDispatcher.Outcome outcome;
@@ -126,12 +132,31 @@ final class WorkPhase
 			String reason = cause == null ? "failure"
 					: cause.getClass().getSimpleName()
 							+ (cause.getMessage() == null ? "" : ": " + cause.getMessage());
-			outcome = dispatcher.fail(assignment, now(), reason);
+			outcome = dispatcher.fail(assignment, now(), reason, isTransient(cause));
 			noteProgress();
 			notifyAll();
 		}
 		afterChange();
 		return outcome;
+	}
+
+	static boolean isTransient(Throwable cause)
+	{
+		if (cause == null)
+		{
+			return true;
+		}
+		for (Throwable link = cause; link != null; link = link.getCause() == link ? null : link.getCause())
+		{
+			if (link instanceof java.io.IOException
+					|| link instanceof java.io.UncheckedIOException
+					|| link instanceof java.util.concurrent.TimeoutException
+					|| link instanceof VirtualMachineError)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** A lane that stops for good must withdraw so nothing waits for it. */

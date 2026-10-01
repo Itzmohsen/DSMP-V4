@@ -123,8 +123,9 @@ final class GuiStudyDriver implements StudyRunner.Driver
 				}
 			});
 			await(initialized, failure, "initialization");
-			SchedulingRunContext context = SchedulingRuntime.latest();
-			String runId = context == null ? null : context.getRunId();
+			//The run this driver asked for, never a superseded one still winding down.
+			String runId = gui.getCurrentRunId();
+			SchedulingRunContext context = SchedulingRuntime.get(runId);
 			onEdt(new Runnable()
 			{
 				public void run()

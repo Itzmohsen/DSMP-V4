@@ -100,7 +100,8 @@ final class RunRecordWriter
 			writeMilestones(new File(directory, "milestones.csv"), recorder.milestones());
 			writeControls(new File(directory, "controls.csv"), recorder.controls());
 			writePhaseJoins(new File(directory, "phase-joins.csv"), recorder.allPhaseJoins());
-			appendIndex(name, context, metrics, resultsHash);
+			RecommendationQualityEvaluator.Report quality = writeQuality(directory, context.getRunId());
+			appendIndex(name, context, metrics, resultsHash, quality);
 			return directory;
 		}
 		catch (IOException failure)
@@ -502,6 +503,73 @@ final class RunRecordWriter
 		}
 	}
 
+	/**
+	 * Writes the run's merged lists (recommendations.csv) and, when the run was
+	 * prepared for evaluation, its quality (quality.json, quality-targets.csv).
+	 * Returns the quality, or null.
+	 */
+	private static RecommendationQualityEvaluator.Report writeQuality(File directory, String runId)
+			throws IOException
+	{
+		Map<String,List<RecommendationRunResults.Entry>> results = RecommendationRunResults.get(runId);
+		if (results == null)
+		{
+			return null;
+		}
+		RecommendationQualityEvaluator.Setup setup = RecommendationQualityEvaluator.setupOf(runId);
+		Writer out = open(new File(directory, "recommendations.csv"));
+		try
+		{
+			out.write(JsonText.csvLine("target", "target_followee", "rank", "candidate", "candidate_followee",
+					"score", "relevant"));
+			for (Map.Entry<String,List<RecommendationRunResults.Entry>> row
+					: new java.util.TreeMap<String,List<RecommendationRunResults.Entry>>(results).entrySet())
+			{
+				String followee = setup == null ? null : setup.labels.get(row.getKey());
+				int rank = 0;
+				for (RecommendationRunResults.Entry entry : row.getValue())
+				{
+					rank++;
+					boolean followeeMode = setup != null
+							&& setup.candidateType == RecommendationCandidateType.FOLLOWEE;
+					String candidateFollowee = setup == null ? null
+							: followeeMode ? entry.getCandidate() : setup.labels.get(entry.getCandidate());
+					Object relevant = followee == null || candidateFollowee == null ? ""
+							: Integer.valueOf(followee.equals(candidateFollowee)
+									&& !entry.getCandidate().equals(row.getKey()) ? 1 : 0);
+					out.write(JsonText.csvLine(row.getKey(), followee == null ? "" : followee,
+							Integer.valueOf(rank), entry.getCandidate(),
+							candidateFollowee == null ? "" : candidateFollowee,
+							Double.valueOf(entry.getScore()), relevant));
+				}
+			}
+		}
+		finally
+		{
+			out.close();
+		}
+		RecommendationQualityEvaluator.Report quality = RecommendationQualityEvaluator.reportFor(runId);
+		if (quality == null)
+		{
+			return null;
+		}
+		writeText(new File(directory, "quality.json"), JsonText.of(quality.toJson()));
+		out = open(new File(directory, "quality-targets.csv"));
+		try
+		{
+			out.write(JsonText.csvLine((Object[])RecommendationQualityEvaluator.Report.targetColumns()));
+			for (Object[] line : quality.targetLines())
+			{
+				out.write(JsonText.csvLine(line));
+			}
+		}
+		finally
+		{
+			out.close();
+		}
+		return quality;
+	}
+
 	/** Columns of runs-index.csv, one line per run. */
 	static final String[] INDEX_COLUMNS = {
 		"run_dir", "run_id", "status", "created", "algorithm", "dataset", "nodes", "mode", "policy",
@@ -510,11 +578,13 @@ final class RunRecordWriter
 		"phase_efficiency", "phase_imbalance", "phase_utilization", "phase_wasted_fraction", "imbalance",
 		"wasted_fraction", "bytes_total", "bytes_collectives", "crashes", "faults", "revocations",
 		"host_utilization", "mean_sleep_error_ms", "replay_abs_error", "replay_main_phase_error",
-		"replay_best_makespan_ms", "study", "cell", "repetition"
+		"replay_best_makespan_ms", "study", "cell", "repetition",
+		"quality_k", "quality_targets", "hit_rate", "precision_at_k", "recall_at_k", "ndcg_at_k", "mrr",
+		"map_at_k", "ndcg_random", "ndcg_lift", "ndcg_p_value", "top1_accuracy"
 	};
 
 	private static void appendIndex(String directory, SchedulingRunContext context, RunMetrics metrics,
-			String resultsHash) throws IOException
+			String resultsHash, RecommendationQualityEvaluator.Report quality) throws IOException
 	{
 		Map<String,String> properties = context.recorder().properties();
 		Map<String,Double> summary = metrics.summary();
@@ -532,11 +602,21 @@ final class RunRecordWriter
 			summary.get("host_utilization"), summary.get("mean_sleep_error_ms"),
 			summary.get("replay_abs_error"), summary.get("replay_main_phase_error"),
 			summary.get("replay_best_makespan_ms"), properties.get("study"),
-			properties.get("cell"), properties.get("repetition")
+			properties.get("cell"), properties.get("repetition"),
+			quality == null ? null : Integer.valueOf(quality.setup.cutoff),
+			quality == null ? null : Integer.valueOf(quality.evaluated()),
+			qualityMean(quality, "hit_rate"), qualityMean(quality, "precision"),
+			qualityMean(quality, "recall"), qualityMean(quality, "ndcg"), qualityMean(quality, "mrr"),
+			qualityMean(quality, "map"),
+			quality == null || quality.metric("ndcg") == null ? null : finite(quality.metric("ndcg").random),
+			quality == null || quality.metric("ndcg") == null ? null : finite(quality.metric("ndcg").lift()),
+			quality == null || quality.metric("ndcg") == null ? null : finite(quality.metric("ndcg").pValue),
+			quality == null ? null : finite(quality.accuracy)
 		};
 		synchronized (INDEX_LOCK)
 		{
 			File index = new File(runsDirectory(), "runs-index.csv");
+			migrateIndexHeader(index);
 			boolean header = !index.isFile() || index.length() == 0L;
 			Writer out = new BufferedWriter(new OutputStreamWriter(
 					new FileOutputStream(index, true), StandardCharsets.UTF_8));
@@ -553,6 +633,62 @@ final class RunRecordWriter
 				out.close();
 			}
 		}
+	}
+
+	private static Double qualityMean(RecommendationQualityEvaluator.Report quality, String metric)
+	{
+		if (quality == null || quality.metric(metric) == null)
+		{
+			return null;
+		}
+		return finite(quality.metric(metric).mean);
+	}
+
+	private static Double finite(double value)
+	{
+		return Double.isNaN(value) || Double.isInfinite(value) ? null : Double.valueOf(value);
+	}
+
+	/**
+	 * Rewrites an index written with older columns under the current header,
+	 * matching columns by name, so new columns are never appended under a
+	 * header that does not name them.
+	 */
+	private static void migrateIndexHeader(File index) throws IOException
+	{
+		if (!index.isFile() || index.length() == 0L)
+		{
+			return;
+		}
+		List<List<String>> rows = JsonText.parseCsv(new String(
+				java.nio.file.Files.readAllBytes(index.toPath()), StandardCharsets.UTF_8));
+		if (rows.isEmpty() || rows.get(0).equals(java.util.Arrays.asList(INDEX_COLUMNS)))
+		{
+			return;
+		}
+		List<Map<String,String>> table = JsonText.readCsv(index);
+		File migrated = new File(index.getParentFile(), index.getName() + ".migrating");
+		Writer out = open(migrated);
+		try
+		{
+			out.write(JsonText.csvLine((Object[])INDEX_COLUMNS));
+			for (Map<String,String> row : table)
+			{
+				Object[] fields = new Object[INDEX_COLUMNS.length];
+				for (int column = 0; column < INDEX_COLUMNS.length; column++)
+				{
+					String value = row.get(INDEX_COLUMNS[column]);
+					fields[column] = value == null ? "" : value;
+				}
+				out.write(JsonText.csvLine(fields));
+			}
+		}
+		finally
+		{
+			out.close();
+		}
+		java.nio.file.Files.move(migrated.toPath(), index.toPath(),
+				java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 	}
 
 	/** SHA-256 of the run's merged recommendations, or "" when it produced none. */

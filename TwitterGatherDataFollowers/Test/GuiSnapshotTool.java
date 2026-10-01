@@ -71,6 +71,12 @@ public final class GuiSnapshotTool
 			runAndSnapshot(gui, tabs, new File(runDataset), output, width, height);
 			System.exit(0);
 		}
+		String simulatorDataset = System.getProperty("snapshot.simulator", "");
+		if (simulatorDataset.length() > 0)
+		{
+			simulateAndSnapshot(gui, tabs, new File(simulatorDataset), output, width, height);
+			System.exit(0);
+		}
 		final List<String> written = new ArrayList<String>();
 		for (final boolean night : new boolean[] {false, true})
 		{
@@ -145,6 +151,10 @@ public final class GuiSnapshotTool
 				if (selected instanceof NodeLabPanel)
 				{
 					snapshotNodeLab((NodeLabPanel)selected, gui, output, index, night, width, height, written);
+				}
+				if (selected instanceof SimulatorPanel)
+				{
+					snapshotSimulator((SimulatorPanel)selected, gui, output, index, night, width, height, written);
 				}
 			}
 		}
@@ -459,6 +469,241 @@ public final class GuiSnapshotTool
 				ImageIO.write(images[1], "png", full);
 				written.add(full.getPath());
 			}
+		}
+	}
+
+	/** Renders every Simulator page: the window, and the whole scrollable page at full height. */
+	private static void snapshotSimulator(final SimulatorPanel simulator, final ControllerAgentGui gui, File output,
+			int index, boolean night, final int width, final int height, List<String> written) throws Exception
+	{
+		String[] keys = {SimulatorPanel.OVERVIEW, SimulatorPanel.DATA, SimulatorPanel.MODEL, SimulatorPanel.TARGETS,
+			SimulatorPanel.RUN, SimulatorPanel.RESULTS};
+		for (final String key : keys)
+		{
+			SwingUtilities.invokeAndWait(new Runnable()
+			{
+				public void run()
+				{
+					simulator.show(key);
+					gui.validate();
+				}
+			});
+			Thread.sleep(Long.getLong("snapshot.settle", 900L).longValue());
+			String base = String.format("%02d-simulator-%s-%s", index, key, night ? "night" : "day");
+			written.addAll(writeSimulator(simulator, key, gui, output, base, width, height));
+		}
+	}
+
+	/** The window and the Simulator page at full height; returns the files written. */
+	private static List<String> writeSimulator(final SimulatorPanel simulator, final String key,
+			final ControllerAgentGui gui, File output, String base, final int width, final int height)
+			throws Exception
+	{
+		final BufferedImage[] images = new BufferedImage[2];
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				//A hidden window's tab is never showing, so its refresh timer is idle.
+				simulator.show(key);
+				gui.validate();
+			}
+		});
+		Thread.sleep(300L);
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				gui.validate();
+				BufferedImage window = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+				Graphics2D g = window.createGraphics();
+				g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+				gui.getRootPane().paint(g);
+				g.dispose();
+				images[0] = window;
+				javax.swing.JScrollPane pane = findScroll(simulator.page(key));
+				if (pane != null && pane.getViewport().getView() != null)
+				{
+					Component view = pane.getViewport().getView();
+					int viewWidth = pane.getViewport().getWidth();
+					java.awt.Dimension original = view.getSize();
+					view.setSize(viewWidth, 10);
+					java.awt.Dimension preferred = view.getPreferredSize();
+					view.setSize(viewWidth, preferred.height);
+					layoutTree(view);
+					BufferedImage full = new BufferedImage(Math.max(1, viewWidth), Math.max(1, preferred.height),
+							BufferedImage.TYPE_INT_RGB);
+					Graphics2D fg = full.createGraphics();
+					fg.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+					fg.setPaint(new java.awt.GradientPaint(0, 0, NebulaDesign.CANVAS_TOP, 0, preferred.height,
+							NebulaDesign.CANVAS_BOTTOM));
+					fg.fillRect(0, 0, viewWidth, preferred.height);
+					view.paint(fg);
+					fg.dispose();
+					images[1] = full;
+					view.setSize(original);
+					pane.getViewport().doLayout();
+					pane.validate();
+				}
+			}
+		});
+		List<String> files = new ArrayList<String>();
+		File window = new File(output, base + ".png");
+		ImageIO.write(images[0], "png", window);
+		files.add(window.getPath());
+		if (images[1] != null)
+		{
+			File full = new File(output, base + "-full.png");
+			ImageIO.write(images[1], "png", full);
+			files.add(full.getPath());
+		}
+		for (String file : files)
+		{
+			System.out.println("[snapshot] " + file);
+		}
+		return files;
+	}
+
+	/**
+	 * End-to-end through the Simulator tab: loads a dataset, chooses the
+	 * algorithm and a stratified sample of targets, initializes and runs, and
+	 * renders the pages along the way and the Results page at the end.
+	 */
+	private static void simulateAndSnapshot(final ControllerAgentGui gui, final JTabbedPane tabs, final File dataset,
+			File output, final int width, final int height) throws Exception
+	{
+		final SimulatorPanel[] simulator = new SimulatorPanel[1];
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				gui.addNotify();
+				gui.setSize(width, height);
+				gui.validate();
+				for (int index = 0; index < tabs.getTabCount(); index++)
+				{
+					Component component = StudioNightTheme.unwrap(tabs.getComponentAt(index));
+					if (component instanceof SimulatorPanel)
+					{
+						simulator[0] = (SimulatorPanel)component;
+						tabs.setSelectedIndex(index);
+					}
+				}
+				gui.loadImportedDataset(dataset.getAbsoluteFile(), "snapshot");
+				gui.getUsers();
+				gui.simulatorAlgorithmBox().setSelectedIndex(
+						Integer.getInteger("snapshot.algorithm", ControllerAgent.COS_SIM).intValue());
+				gui.simulatorGraphOutput().setSelected(false);
+			}
+		});
+		long deadline = System.currentTimeMillis() + 600000L;
+		while (!(gui.isReadyToInitialize() && gui.loadedUserCount() > 0))
+		{
+			if (System.currentTimeMillis() > deadline)
+			{
+				throw new IllegalStateException("Users were not loaded in time.");
+			}
+			Thread.sleep(250L);
+		}
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				gui.setTargetSelection(TargetSelection.Mode.SAMPLE,
+						Integer.getInteger("snapshot.targets", 40).intValue(), TargetSelection.DEFAULT_SEED);
+				SimulatorPanel.write(gui.simulatorTopKField(), System.getProperty("snapshot.k", "10"));
+				simulator[0].show(SimulatorPanel.TARGETS);
+			}
+		});
+		Thread.sleep(900L);
+		writeSimulator(simulator[0], SimulatorPanel.TARGETS, gui, output, "sim-1-targets", width, height);
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				simulator[0].show(SimulatorPanel.DATA);
+			}
+		});
+		Thread.sleep(900L);
+		writeSimulator(simulator[0], SimulatorPanel.DATA, gui, output, "sim-0-data", width, height);
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				simulator[0].show(SimulatorPanel.RUN);
+				gui.initializeAgents();
+			}
+		});
+		deadline = System.currentTimeMillis() + 600000L;
+		while (!gui.simulatorInitialized())
+		{
+			if (System.currentTimeMillis() > deadline)
+			{
+				throw new IllegalStateException("Initialization did not finish in time.");
+			}
+			Thread.sleep(250L);
+		}
+		Thread.sleep(800L);
+		writeSimulator(simulator[0], SimulatorPanel.RUN, gui, output, "sim-2-run-initialized", width, height);
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				gui.startSimulation();
+			}
+		});
+		Thread.sleep(2500L);
+		writeSimulator(simulator[0], SimulatorPanel.RUN, gui, output, "sim-3-run-running", width, height);
+		deadline = System.currentTimeMillis() + 1800000L;
+		while (gui.getLatestQualityReport() == null)
+		{
+			if (System.currentTimeMillis() > deadline)
+			{
+				throw new IllegalStateException("No quality report in time.");
+			}
+			Thread.sleep(500L);
+		}
+		SchedulingRunContext context = SchedulingRuntime.get(gui.getCurrentRunId());
+		if (context != null)
+		{
+			context.awaitRecord(300000L);
+		}
+		Thread.sleep(2000L);
+		String[] keys = {SimulatorPanel.RESULTS, SimulatorPanel.OVERVIEW, SimulatorPanel.RUN};
+		for (int index = 0; index < keys.length; index++)
+		{
+			final String key = keys[index];
+			SwingUtilities.invokeAndWait(new Runnable()
+			{
+				public void run()
+				{
+					simulator[0].show(key);
+				}
+			});
+			Thread.sleep(1200L);
+			writeSimulator(simulator[0], key, gui, output, "sim-" + (4 + index) + "-" + key + "-after", width, height);
+		}
+		System.out.println("[snapshot] quality:\n" + gui.getLatestQualityReport().describe());
+		//Every other tab that shows this run (the TGF Studio, the evidence studio).
+		for (int index = 0; index < tabs.getTabCount(); index++)
+		{
+			final int tab = index;
+			final String title = tabs.getTitleAt(index);
+			if (!title.contains("TGF") && !title.contains("Evidence"))
+			{
+				continue;
+			}
+			SwingUtilities.invokeAndWait(new Runnable()
+			{
+				public void run()
+				{
+					tabs.setSelectedIndex(tab);
+					gui.validate();
+				}
+			});
+			Thread.sleep(1500L);
+			write(gui, output, "sim-9-" + title.replaceAll("[^A-Za-z0-9]+", "-").toLowerCase(java.util.Locale.US),
+					width, height);
 		}
 	}
 

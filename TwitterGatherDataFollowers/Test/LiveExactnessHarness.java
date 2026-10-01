@@ -475,8 +475,9 @@ public final class LiveExactnessHarness
 				}
 			});
 			await(initialized, failure, "initialization");
-			SchedulingRunContext context = SchedulingRuntime.latest();
-			String runId = context == null ? null : context.getRunId();
+			//The run this harness asked for, never a superseded one still winding down.
+			String runId = gui.getCurrentRunId();
+			SchedulingRunContext context = SchedulingRuntime.get(runId);
 			System.out.println("[harness] run " + runIndex + " (" + runId + "): "
 					+ (context == null ? "no scheduling context" : context.describe()));
 			LiveOperator operator = configuration.liveControls && runId != null

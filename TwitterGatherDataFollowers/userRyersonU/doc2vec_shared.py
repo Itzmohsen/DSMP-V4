@@ -59,7 +59,7 @@ MODEL_PARAM_ORDER = [
 # guarantee for speed.
 REPRODUCIBLE_TRAINING = os.environ.get(
     "DSMP_DOC2VEC_ALLOW_PARALLEL", "0").strip() not in ("1", "true", "TRUE", "yes")
-SCRIPT_VERSION = 4
+SCRIPT_VERSION = 5
 LOCK_POLL_SECONDS = 2
 
 
@@ -192,9 +192,28 @@ def dataset_signature(dataset_file, workers):
     return cache_key, signature
 
 
+def is_run_corpus(dataset_file):
+    """True for the simulator's canonical run corpus (RunCorpus.java).
+
+    Its rows are user, followee, timestamp, normalised text: the exact tokens
+    every other algorithm of the run sees, so they are not re-tokenised here.
+    """
+    name = os.path.basename(dataset_file)
+    return name.startswith("corpus-") and name.endswith(".tsv")
+
+
+def iter_run_corpus(dataset_file):
+    with open(dataset_file, "r", encoding="utf-8", errors="ignore", newline="") as input_file:
+        for line in input_file:
+            fields = line.rstrip("\n").split("\t", 3)
+            if len(fields) == 4 and fields[0] and fields[3]:
+                yield fields[3].split(" "), fields[0]
+
+
 def iter_dataset_rows(dataset_file):
     with open(dataset_file, "r", encoding="utf-8", errors="ignore", newline="") as input_file:
-        reader = csv.reader(input_file, delimiter="\t")
+        # Tweets may contain quote characters; they are data, never quoting.
+        reader = csv.reader(input_file, delimiter="\t", quoting=csv.QUOTE_NONE)
         for fields in reader:
             if len(fields) >= 6:
                 tweet_text = fields[5]
@@ -255,6 +274,10 @@ class TaggedDocumentCorpus:
         self.stop_words = make_stop_words()
 
     def __iter__(self):
+        if is_run_corpus(self.dataset_file):
+            for words, follower in iter_run_corpus(self.dataset_file):
+                yield TaggedDocument(words=words, tags=[str(follower)])
+            return
         stemmer = LancasterStemmer()
         for tweet_text, follower in iter_dataset_rows(self.dataset_file):
             words = preprocess_text(tweet_text, self.stop_words, stemmer)

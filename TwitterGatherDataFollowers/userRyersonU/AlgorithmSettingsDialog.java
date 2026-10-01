@@ -52,9 +52,14 @@ final class AlgorithmSettingsDialog extends JDialog
 	private static final Color BORDER = NebulaDesign.BORDER_SUBTLE;
 	private static final int NOTE_WIDTH = 552;
 	private static final String MLP_ENGINE_LEGACY_LABEL =
-			"Legacy Neuroph MLP (current default)";
+			"Neuroph MLP (V3, sigmoid outputs)";
 	private static final String MLP_ENGINE_SPARSE_LABEL =
-			"Sparse Federated MLP (experimental)";
+			"Softmax MLP (cross-entropy, early stopping)";
+	private static final String[] CN_VARIANTS = {
+			AlgorithmParameterSettings.CN_COMMON_NEIGHBOURS,
+			AlgorithmParameterSettings.CN_JACCARD,
+			AlgorithmParameterSettings.CN_ADAMIC_ADAR,
+			AlgorithmParameterSettings.CN_RESOURCE_ALLOCATION};
 
 	private final int algorithm;
 	private final AlgorithmParameterSettings draft;
@@ -75,6 +80,7 @@ final class AlgorithmSettingsDialog extends JDialog
 	private JSpinner scalableEpochsSpinner;
 	private JSpinner scalableAggressivenessSpinner;
 	private JComboBox<String> mlpEngineCombo;
+	private JComboBox<String> cnVariantCombo;
 	private JSpinner mlpHiddenSpinner;
 	private JSpinner mlpHiddenLayersSpinner;
 	private JSpinner mlpLearningRateSpinner;
@@ -277,6 +283,22 @@ final class AlgorithmSettingsDialog extends JDialog
 				case RecommendationModeSupport.COS_SIM:
 				case RecommendationModeSupport.COMMON_NEIGHBORS:
 				case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
+					if (algorithm == RecommendationModeSupport.COMMON_NEIGHBORS)
+					{
+						String[] labels = new String[CN_VARIANTS.length];
+						for (int index = 0; index < CN_VARIANTS.length; index++)
+						{
+							labels[index] = AlgorithmParameterSettings.cnVariantLabel(CN_VARIANTS[index]);
+						}
+						cnVariantCombo = new JComboBox<String>(labels);
+						styleCombo(cnVariantCombo);
+						row = addRow(grid, row,
+								"Link score",
+								"How shared terms score a pair of users: their count (ties by rarity),"
+										+ " Jaccard overlap, Adamic-Adar (1/ln degree) or resource allocation"
+										+ " (1/degree).",
+								cnVariantCombo);
+					}
 					similarityMultiplierSpinner = intSpinner(1, 100, 1);
 					similarityMinimumSpinner = intSpinner(1, 10000, 1);
 					row = addRow(grid, row,
@@ -324,11 +346,13 @@ final class AlgorithmSettingsDialog extends JDialog
 				scalableAggressivenessSpinner = doubleSpinner(0.0001, 10.0, 0.01);
 				row = addRow(grid, row,
 						"Training epochs",
-						"Number of deterministic passes over sparse training rows.",
+						"Passes over the shuffled training rows. The linear model is learned online"
+								+ " with Passive-Aggressive PA-I updates on the hinge loss"
+								+ " (Crammer et al., 2006), one-vs-rest.",
 						scalableEpochsSpinner);
 				addRow(grid, row,
-						"Aggressiveness",
-						"Passive-aggressive update size. Default is 0.1.",
+						"Aggressiveness C",
+						"PA-I's cap on each update (larger fits noise more). Default is 0.1.",
 						scalableAggressivenessSpinner);
 				break;
 			case RecommendationModeSupport.MLP:
@@ -341,16 +365,17 @@ final class AlgorithmSettingsDialog extends JDialog
 				mlpHiddenLayersSpinner = intSpinner(1, 8, 1);
 				mlpLearningRateSpinner = doubleSpinner(0.00001, 1.0, 0.01);
 				mlpMaxErrorSpinner = doubleSpinner(0.000001, 0.5, 0.001);
-				mlpSparseEpochsSpinner = intSpinner(1, 200, 1);
+				mlpSparseEpochsSpinner = intSpinner(1, 5000, 10);
 				mlpSparseL2Spinner = doubleSpinner(0.0, 1.0, 0.0001);
 				mlpFedProxMuSpinner = doubleSpinner(0.0, 10.0, 0.001);
 				row = addRow(grid, row,
 						"Execution engine",
-						"Legacy preserves current Neuroph behavior. Sparse is opt-in.",
+						"Softmax MLP (default) trains with cross-entropy and stops early on a held-out"
+								+ " validation split. Neuroph reproduces the V3 network.",
 						mlpEngineCombo);
 				row = addRow(grid, row,
 						"Hidden neurons",
-						"Default is 10, matching the current Neuroph architecture.",
+						"Neurons per hidden layer. Default is 10.",
 						mlpHiddenSpinner);
 				row = addRow(grid, row,
 						"Hidden layers",
@@ -361,22 +386,20 @@ final class AlgorithmSettingsDialog extends JDialog
 						"Backpropagation learning rate.",
 						mlpLearningRateSpinner);
 				row = addRow(grid, row,
-						"Max error",
-						"Training target error threshold (legacy engine stops at dsmp.mlp.maxEpochs, default 10000).",
+						"Max error (Neuroph)",
+						"Neuroph's mean squared error target; it also stops at dsmp.mlp.maxEpochs"
+								+ " (default 10000).",
 						mlpMaxErrorSpinner);
 				row = addRow(grid, row,
-						"Sparse epochs",
-						"Only used by Sparse Federated MLP.",
+						"Epoch limit (Softmax)",
+						"Upper bound on training passes. Training stops earlier when the validation"
+								+ " loss has not improved for " + AlgorithmParameterSettings.MLP_EARLY_STOPPING_PATIENCE
+								+ " epochs, and keeps the best epoch's weights.",
 						mlpSparseEpochsSpinner);
-				row = addRow(grid, row,
-						"Sparse L2",
-						"Optional L2 regularization for sparse SGD.",
-						mlpSparseL2Spinner);
 				addRow(grid, row,
-						"FedProx mu",
-						"Proximal pull toward the initial weights; 0.0 disables it. "
-								+ "The MLP now trains one model on the whole run.",
-						mlpFedProxMuSpinner);
+						"L2 (Softmax)",
+						"Weight decay of the softmax engine; 0 disables it.",
+						mlpSparseL2Spinner);
 				break;
 			case RecommendationModeSupport.DOC2VEC:
 				doc2VecDmSpinner = intSpinner(0, 1, 1);
@@ -634,6 +657,17 @@ final class AlgorithmSettingsDialog extends JDialog
 	private void setValuesFromSettings(AlgorithmParameterSettings settings)
 	{
 		customCheckBox.setSelected(settings.isCustomEnabled());
+		if (cnVariantCombo != null)
+		{
+			String variant = settings.getCommonNeighborsVariant();
+			for (int index = 0; index < CN_VARIANTS.length; index++)
+			{
+				if (CN_VARIANTS[index].equals(variant))
+				{
+					cnVariantCombo.setSelectedIndex(index);
+				}
+			}
+		}
 		if (similarityMultiplierSpinner != null)
 		{
 			similarityMultiplierSpinner.setValue(
@@ -755,6 +789,10 @@ final class AlgorithmSettingsDialog extends JDialog
 	private void readVisibleControlsIntoSettings(
 			AlgorithmParameterSettings settings)
 	{
+		if (cnVariantCombo != null && cnVariantCombo.getSelectedIndex() >= 0)
+		{
+			settings.setCommonNeighborsVariant(CN_VARIANTS[cnVariantCombo.getSelectedIndex()]);
+		}
 		if (similarityMultiplierSpinner != null)
 		{
 			settings.setSimilarityLocalTopMultiplier(

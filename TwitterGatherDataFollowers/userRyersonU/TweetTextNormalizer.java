@@ -24,8 +24,10 @@ import java.util.regex.Pattern;
  *   <li>replace punctuation with a space, so {@code cat,dog} yields two tokens</li>
  *   <li>optionally replace any non-letter with a space (hash-tag mode)</li>
  *   <li>replace every remaining non-letter with a space, so the token boundaries
- *       the stop-word pass sees are the final ones</li>
- *   <li>lower-case in {@link Locale#ENGLISH}, so the result cannot depend on the
+ *       the stop-word pass sees are the final ones; letters of every script
+ *       count (after Unicode NFC normalisation, so a composed and a decomposed
+ *       accent give the same token), digits and symbols do not</li>
+ *   <li>lower-case in {@link Locale#ROOT}, so the result cannot depend on the
  *       machine's locale</li>
  *   <li>collapse runs of spaces</li>
  *   <li>optionally drop stop words, token by token</li>
@@ -57,8 +59,8 @@ final class TweetTextNormalizer
 			Pattern.CASE_INSENSITIVE);
 
 	private static final Pattern SPECIAL_CHARACTER_PATTERN =
-			Pattern.compile("[^a-zA-Z\\p{Z}]");
-	private static final Pattern NON_ALPHA_PATTERN = Pattern.compile("[^a-zA-Z ]");
+			Pattern.compile("[^\\p{L}\\p{Z}]");
+	private static final Pattern NON_ALPHA_PATTERN = Pattern.compile("[^\\p{L} ]");
 	private static final Pattern MULTI_SPACE_PATTERN = Pattern.compile(" +");
 
 	/** Minimum tokens a normalised tweet needs to enter a document vector. */
@@ -100,7 +102,8 @@ final class TweetTextNormalizer
 			boolean removeStopWords,
 			Set<String> stopWords)
 	{
-		String currentText = tweetText == null ? "" : tweetText;
+		String currentText = tweetText == null ? ""
+				: java.text.Normalizer.normalize(tweetText, java.text.Normalizer.Form.NFC);
 
 		int photoIndex = currentText.indexOf("Photo:");
 		if (photoIndex >= 0)
@@ -136,7 +139,7 @@ final class TweetTextNormalizer
 		//the pipeline non-idempotent: a second pass would remove what the first
 		//could not see.
 		currentText = NON_ALPHA_PATTERN.matcher(currentText).replaceAll(" ");
-		currentText = currentText.toLowerCase(Locale.ENGLISH);
+		currentText = currentText.toLowerCase(Locale.ROOT);
 		currentText = MULTI_SPACE_PATTERN.matcher(currentText).replaceAll(" ");
 
 		if (removeStopWords)

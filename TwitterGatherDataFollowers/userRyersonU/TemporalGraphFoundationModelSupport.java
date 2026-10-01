@@ -6,7 +6,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.text.ParsePosition;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -17,65 +16,94 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.TreeMap;
 
+/**
+ * The Temporal Graph Foundation (TGF) recommender: a learned fusion of three
+ * label-free similarity signals between a target user and a candidate user.
+ *
+ * <ol>
+ * <li><b>Text</b>: cosine similarity of the users' TF-IDF vectors.</li>
+ * <li><b>Graph</b>: mass diffusion on the user-term bipartite graph (Zhou et
+ *     al., 2007): a unit of resource leaves the target, spreads over its terms in
+ *     proportion to their TF-IDF weight and from each term to the users that
+ *     use it in proportion to their weight on it; shared rare terms carry more
+ *     resource than shared common ones. Normalised by the target's best
+ *     candidate.</li>
+ * <li><b>Time</b>: temporal co-activity, the cosine similarity of the two
+ *     users' activity histograms over the corpus's dated span (UTC). Without
+ *     at least two distinct timestamps the signal is unavailable; row order in
+ *     a file is never used as a clock.</li>
+ * </ol>
+ *
+ * <b>Fusion.</b> P(candidate shares the target's community | signals) is
+ * modelled by an L2-regularised logistic regression fitted by iteratively
+ * reweighted least squares on pairs of labelled users that are <i>not</i>
+ * recommendation targets: for each sampled anchor, its same-followee users
+ * are positives and an equal number of other users negatives. The intercept is
+ * then corrected from the balanced sample to the true base rate of same-community
+ * pairs, so the fused score is a calibrated probability. A target's own
+ * followee is never read when it is scored: it only grades the result
+ * afterwards (relevant rank, NDCG, ablation lenses).
+ *
+ * <b>Uncertainty.</b> The model is refitted on bootstrap resamples of the
+ * anchors (a cluster bootstrap, since one anchor's pairs are correlated); each
+ * candidate gets the 5-95% interval of its probability and the share of
+ * refits that keep it in the target's top ten. A held-out 20% of the anchors
+ * gives the model's pair AUC.
+ *
+ * Everything is deterministic: anchors, pairs, bootstrap resamples and folds
+ * come from seeded generators, ties break by user name, and the prepared
+ * state is computed once per run from the whole corpus, so the result is the
+ * same for every node count.
+ */
 final class TemporalGraphFoundationModelSupport
 {
-	private static final int DATASET_SCAN_LIMIT = 2000000;
 	private static final int DETAIL_TERM_LIMIT = 4;
-	private static final int GRAPH_SAMPLE_LIMIT = 24;
 	private static final int TIMELINE_FRAME_COUNT = 12;
-	/**
-	 * Quantile used for the score-stability band.
-	 *
-	 * This is NOT a statistical confidence level. The band below is an arithmetic
-	 * function of the model's own component scores, and the "residual" it is
-	 * compared against is the gap between the final score and the same model's
-	 * mid-timeline score. No held-out labels are involved anywhere, so nothing
-	 * here estimates how often the model is right.
-	 */
-	private static final double STABILITY_QUANTILE = 0.90;
-	private static final double TEXT_WEIGHT = 0.34;
-	private static final double GRAPH_WEIGHT = 0.22;
-	private static final double TIME_WEIGHT = 0.18;
-	private static final double BRIDGE_WEIGHT = 0.14;
-	private static final double DEBIAS_WEIGHT = 0.07;
-	private static final double ROBUST_WEIGHT = 0.05;
-	private static final List<String> DATE_PATTERNS = Arrays.asList(
-			"yyyy-MM-dd HH:mm:ss",
-			"yyyy-MM-dd HH:mm",
-			"yyyy-MM-dd",
-			"EEE MMM dd HH:mm:ss Z yyyy",
-			"MM/dd/yyyy",
-			"yyyy/MM/dd");
+	private static final int ACTIVITY_BINS = 24;
+	private static final int MAX_ANCHORS = 200;
+	private static final int PAIRS_PER_CLASS = 10;
+	private static final int BOOTSTRAP_FITS = 30;
+	private static final int STABILITY_TOP = 10;
+	private static final double L2_PENALTY = 1.0;
+	private static final long SEED = 0x7E6F0A11L;
+	private static final String[] SIGNALS = {"text", "graph", "time"};
+	private static final int TEXT = 0;
+	private static final int GRAPH = 1;
+	private static final int TIME = 2;
 
 	private TemporalGraphFoundationModelSupport()
 	{
 	}
 
+	// =================================================================== state
+
 	/**
 	 * Everything the model needs that does not depend on the target: user
-	 * profiles, the temporal scan of the dataset and the graph context. It is
-	 * built once per run from the whole corpus and then only read, so targets
-	 * can be scored independently, in any order and on any node.
+	 * profiles, the diffusion index, activity histograms and the fitted
+	 * fusion. Built once per run from the whole corpus and then only read, so
+	 * targets can be scored independently, in any order and on any node.
 	 */
 	static final class Prepared implements PayloadSize.Sized
 	{
 		private final Input input;
+		private final List<UserProfile> users;
 		private final LinkedHashMap<String,UserProfile> profiles;
+		private final DiffusionIndex diffusion;
 		private final TemporalCorpus corpus;
-		private final GraphContext graph;
+		private final FusionModel model;
 		private volatile long payloadBytes = -1L;
 
 		/**
-		 * Wire size of the prepared state every node needs to score its targets:
-		 * each profile (name, followee, TF-IDF vector and temporal statistics)
-		 * and the graph context (followee groups and neighbour lists).
+		 * Wire size of the prepared state every node needs: each profile (name,
+		 * followee, TF-IDF vector, activity histogram) and the fitted model.
 		 */
 		public long payloadBytes()
 		{
@@ -85,46 +113,34 @@ final class TemporalGraphFoundationModelSupport
 				return cached;
 			}
 			long total = 64L;
-			for (UserProfile profile : profiles.values())
+			for (UserProfile profile : users)
 			{
 				total += PayloadSize.string(profile.name) + PayloadSize.string(profile.followee)
-						+ PayloadSize.sparseVector(profile.tfidf) + 7L * 8L;
+						+ PayloadSize.sparseVector(profile.tfidf) + 8L * ACTIVITY_BINS + 32L;
 			}
-			for (Map.Entry<String,LinkedHashSet<String>> group : graph.usersByFollowee.entrySet())
-			{
-				total += PayloadSize.string(group.getKey()) + 4L;
-				for (String user : group.getValue())
-				{
-					total += PayloadSize.string(user);
-				}
-			}
-			for (Map.Entry<String,LinkedHashSet<String>> neighbours : graph.graphNeighbors.entrySet())
-			{
-				total += PayloadSize.string(neighbours.getKey()) + 4L;
-				for (String user : neighbours.getValue())
-				{
-					total += PayloadSize.string(user);
-				}
-			}
+			total += 8L * 4L * (BOOTSTRAP_FITS + 1);
 			payloadBytes = total;
 			return total;
 		}
 
-		private Prepared(
-				Input input,
-				LinkedHashMap<String,UserProfile> profiles,
-				TemporalCorpus corpus,
-				GraphContext graph)
+		private Prepared(Input input, List<UserProfile> users, DiffusionIndex diffusion,
+				TemporalCorpus corpus, FusionModel model)
 		{
 			this.input = input;
-			this.profiles = profiles;
+			this.users = users;
+			this.profiles = new LinkedHashMap<String,UserProfile>();
+			for (UserProfile profile : users)
+			{
+				profiles.put(profile.name, profile);
+			}
+			this.diffusion = diffusion;
 			this.corpus = corpus;
-			this.graph = graph;
+			this.model = model;
 		}
 
 		boolean isEmpty()
 		{
-			return profiles.isEmpty();
+			return users.isEmpty();
 		}
 
 		boolean hasProfile(String user)
@@ -134,7 +150,7 @@ final class TemporalGraphFoundationModelSupport
 
 		int profileCount()
 		{
-			return profiles.size();
+			return users.size();
 		}
 	}
 
@@ -147,12 +163,8 @@ final class TemporalGraphFoundationModelSupport
 		private final TargetReport report;
 		private final int scoredPairs;
 
-		private TargetOutcome(
-				String target,
-				TreeMap<String,Double> scores,
-				TreeMap<String,String> details,
-				TargetReport report,
-				int scoredPairs)
+		private TargetOutcome(String target, TreeMap<String,Double> scores, TreeMap<String,String> details,
+				TargetReport report, int scoredPairs)
 		{
 			this.target = target;
 			this.scores = scores;
@@ -177,6 +189,8 @@ final class TemporalGraphFoundationModelSupport
 		}
 	}
 
+	// ================================================================ pipeline
+
 	static Result score(Input input)
 	{
 		Prepared prepared = prepare(input);
@@ -200,21 +214,18 @@ final class TemporalGraphFoundationModelSupport
 	static Prepared prepare(Input input)
 	{
 		Input safe = input == null ? Input.empty() : input;
-		LinkedHashMap<String,UserProfile> profiles = buildProfiles(safe);
-		if (profiles.isEmpty())
-		{
-			return new Prepared(safe, profiles, new TemporalCorpus(), new GraphContext());
-		}
-		TemporalCorpus corpus = readTemporalCorpus(safe.datasetFile, profiles);
-		applyTemporalNormalization(profiles, corpus);
-		GraphContext graph = buildGraphContext(safe, profiles);
-		return new Prepared(safe, profiles, corpus, graph);
+		List<UserProfile> users = buildProfiles(safe);
+		DiffusionIndex diffusion = new DiffusionIndex(users);
+		TemporalCorpus corpus = readActivity(safe.datasetFile, users);
+		HashSet<String> targets = new HashSet<String>(safe.targetUsers);
+		FusionModel model = FusionModel.fit(users, targets, diffusion, corpus);
+		return new Prepared(safe, users, diffusion, corpus, model);
 	}
 
 	/**
-	 * Scores {@code targetUser} against every candidate this input may score
-	 * and keeps the top {@code localResultLimit}. Returns null when the target
-	 * has no profile. Reads the prepared state only.
+	 * Scores {@code targetUser} against every other user and keeps the top
+	 * {@code localResultLimit}. Returns null when the target has no profile.
+	 * Reads the prepared state only; the target's followee is not used.
 	 */
 	static TargetOutcome scoreTarget(Prepared prepared, String targetUser)
 	{
@@ -223,60 +234,56 @@ final class TemporalGraphFoundationModelSupport
 		{
 			return null;
 		}
-		int scoredPairs = 0;
-		int visited = 0;
-		ArrayList<CandidateScore> candidateScores = new ArrayList<CandidateScore>();
-		for (UserProfile candidate : prepared.profiles.values())
+		double[][] features = prepared.model.features(target, prepared.users, prepared.diffusion, prepared.corpus);
+		List<CandidateScore> all = new ArrayList<CandidateScore>();
+		for (int index = 0; index < prepared.users.size(); index++)
 		{
-			if ((++visited & 63) == 0)
+			if ((index & 63) == 0)
 			{
 				//A revoked unit (drain, crash) stops here.
 				UnitCancellation.check();
 			}
-			if (candidate == null || target.name.equals(candidate.name)
-					|| !belongsToThisNode(candidate, prepared.input))
+			UserProfile candidate = prepared.users.get(index);
+			if (candidate == target)
 			{
 				continue;
 			}
-			CandidateScore score = scoreCandidate(target, candidate, prepared.graph);
-			if (score.finalScore > 0.0 && Double.isFinite(score.finalScore))
-			{
-				candidateScores.add(score);
-				scoredPairs++;
-			}
+			CandidateScore score = new CandidateScore(target, candidate);
+			score.text = features[index][TEXT];
+			score.graph = features[index][GRAPH];
+			score.time = features[index][TIME];
+			score.finalScore = prepared.model.probability(features[index]);
+			all.add(score);
 		}
-		assignRanks(candidateScores);
-		attachResearchEvidence(target, candidateScores, prepared.graph, prepared.corpus);
-		assignTimelineRanks(candidateScores);
-		Collections.sort(candidateScores, CandidateScore.FINAL_ORDER);
+		Collections.sort(all, CandidateScore.FINAL_ORDER);
+		for (int i = 0; i < all.size(); i++)
+		{
+			all.get(i).rank = i + 1;
+		}
+		List<BenchmarkRow> lenses = benchmarkRows(target, all, prepared.corpus.available);
 		int keep = prepared.input.localResultLimit <= 0
-				? candidateScores.size()
-				: Math.min(prepared.input.localResultLimit, candidateScores.size());
+				? all.size() : Math.min(prepared.input.localResultLimit, all.size());
+		List<CandidateScore> kept = new ArrayList<CandidateScore>(all.subList(0, keep));
+		explain(target, kept, all, prepared);
 		TreeMap<String,Double> rowScores = new TreeMap<String,Double>();
 		TreeMap<String,String> rowDetails = new TreeMap<String,String>();
-		ArrayList<CandidateScore> keptScores = new ArrayList<CandidateScore>();
-		for (int i = 0; i < keep; i++)
+		for (CandidateScore score : kept)
 		{
-			CandidateScore score = candidateScores.get(i);
-			rowScores.put(score.candidate.name, score.finalScore);
-			rowDetails.put(score.candidate.name, detailFor(score));
-			keptScores.add(score);
+			if (score.finalScore > 0.0 && Double.isFinite(score.finalScore))
+			{
+				rowScores.put(score.candidate.name, score.finalScore);
+				rowDetails.put(score.candidate.name, detailFor(score));
+			}
 		}
-		return new TargetOutcome(
-				target.name,
-				rowScores,
-				rowDetails,
-				TargetReport.from(target, keptScores, prepared.graph, prepared.corpus),
-				scoredPairs);
+		return new TargetOutcome(target.name, rowScores, rowDetails,
+				TargetReport.from(target, kept, all, lenses, prepared.corpus), all.size());
 	}
 
 	/** The run's result from the outcomes of its targets, in target order. */
 	static Result assemble(Prepared prepared, List<TargetOutcome> outcomes)
 	{
-		TreeMap<String,TreeMap<String,Double>> scoreRows =
-				new TreeMap<String,TreeMap<String,Double>>();
-		TreeMap<String,TreeMap<String,String>> detailRows =
-				new TreeMap<String,TreeMap<String,String>>();
+		TreeMap<String,TreeMap<String,Double>> scoreRows = new TreeMap<String,TreeMap<String,Double>>();
+		TreeMap<String,TreeMap<String,String>> detailRows = new TreeMap<String,TreeMap<String,String>>();
 		LinkedHashMap<String,TargetReport> reports = new LinkedHashMap<String,TargetReport>();
 		int scoredPairs = 0;
 		for (TargetOutcome outcome : outcomes)
@@ -291,32 +298,23 @@ final class TemporalGraphFoundationModelSupport
 			scoredPairs += outcome.scoredPairs;
 		}
 		String summary = "Temporal Graph Foundation scored " + scoredPairs
-				+ " target-candidate pairs using text, graph, time, bridge, "
-				+ "popularity-debias, and ablation signals.";
-		ResearchSummary researchSummary =
-				ResearchSummary.from(reports.values(), scoredPairs, prepared.corpus, prepared.graph);
-		return new Result(
-				prepared.input.runId,
-				prepared.input.datasetFile,
-				summary,
-				prepared.corpus.rowsScanned,
-				prepared.corpus.datedRows,
-				prepared.graph.graphArtifactEdges,
-				scoreRows,
-				detailRows,
-				reports,
-				researchSummary);
+				+ " target-candidate pairs. " + prepared.model.describe();
+		ResearchSummary research = ResearchSummary.from(reports.values(), scoredPairs, prepared.corpus,
+				prepared.model);
+		return new Result(prepared.input.runId, prepared.input.datasetFile, summary,
+				prepared.corpus.rowsScanned, prepared.corpus.datedRows, 0,
+				scoreRows, detailRows, reports, research);
 	}
 
-	private static LinkedHashMap<String,UserProfile> buildProfiles(Input input)
+	// ================================================================ profiles
+
+	private static List<UserProfile> buildProfiles(Input input)
 	{
-		LinkedHashMap<String,UserProfile> profiles =
-				new LinkedHashMap<String,UserProfile>();
-		for (Map.Entry<String,? extends Map<String,Double>> entry
-				: input.tfidfDocuments.entrySet())
+		ArrayList<UserProfile> users = new ArrayList<UserProfile>();
+		for (Map.Entry<String,? extends Map<String,Double>> entry : new TreeMap<String,Map<String,Double>>(
+				castVectors(input.tfidfDocuments)).entrySet())
 		{
-			if (entry.getKey() == null || entry.getValue() == null
-					|| entry.getValue().isEmpty())
+			if (entry.getKey() == null || entry.getValue() == null || entry.getValue().isEmpty())
 			{
 				continue;
 			}
@@ -326,1306 +324,1257 @@ final class TemporalGraphFoundationModelSupport
 			{
 				followee = input.userFollowees.get(user);
 			}
-			profiles.put(user, new UserProfile(user, followee, entry.getValue()));
+			users.add(new UserProfile(users.size(), user, followee, entry.getValue()));
 		}
-		return profiles;
+		return users;
 	}
 
-	private static TemporalCorpus readTemporalCorpus(
-			File datasetFile,
-			Map<String,UserProfile> profiles)
+	@SuppressWarnings("unchecked")
+	private static Map<String,Map<String,Double>> castVectors(Map<String,? extends Map<String,Double>> vectors)
 	{
-		TemporalCorpus corpus = new TemporalCorpus();
-		if (datasetFile == null || !datasetFile.isFile())
+		return (Map<String,Map<String,Double>>)vectors;
+	}
+
+	/**
+	 * Reads each user's activity: from the run corpus (RunCorpus: user,
+	 * followee, epoch millis, text) or a raw dataset file (followee, id, date,
+	 * user id, user, text), timestamps in UTC. Users outside the profiles are
+	 * ignored.
+	 */
+	private static TemporalCorpus readActivity(File file, List<UserProfile> users)
+	{
+		final TemporalCorpus corpus = new TemporalCorpus();
+		final HashMap<String,UserProfile> byName = new HashMap<String,UserProfile>();
+		for (UserProfile profile : users)
 		{
-			corpus.warning = "No dataset file was available for temporal row scanning.";
+			byName.put(profile.name, profile);
+		}
+		final HashMap<UserProfile,List<Long>> times = new HashMap<UserProfile,List<Long>>();
+		if (file == null || !file.isFile())
+		{
+			corpus.warning = "No corpus file was available, so the temporal signal is off.";
 			return corpus;
 		}
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-				new FileInputStream(datasetFile), StandardCharsets.UTF_8), 128 * 1024))
+		try
 		{
-			String line;
-			long lineNumber = 0L;
-			while ((line = reader.readLine()) != null)
+			if (file.getName().startsWith("corpus-") && file.getName().endsWith(".tsv"))
 			{
-				lineNumber++;
-				if (lineNumber > DATASET_SCAN_LIMIT)
+				RunCorpus.read(file, new RunCorpus.RowConsumer()
 				{
-					corpus.limitReached = true;
-					break;
-				}
-				if (lineNumber == 1 && line.startsWith("\uFEFF"))
-				{
-					line = line.substring(1);
-				}
-				String[] fields = line.split("\t", 6);
-				if (fields.length != 6)
-				{
-					continue;
-				}
-				corpus.rowsScanned++;
-				String followee = fields[0].trim();
-				String dateText = fields[2].trim();
-				String user = fields[4].trim();
-				UserProfile profile = profiles.get(user);
-				if (profile == null)
-				{
-					continue;
-				}
-				if (profile.followee == null || profile.followee.length() == 0)
-				{
-					profile.followee = followee;
-				}
-				long time = parseDateMillis(dateText);
-				if (time != Long.MIN_VALUE)
-				{
-					corpus.datedRows++;
-				profile.observeTime(time);
-				corpus.minTime = Math.min(corpus.minTime, time);
-				corpus.maxTime = Math.max(corpus.maxTime, time);
+					public void accept(RunCorpus.Row row)
+					{
+						observe(corpus, byName.get(row.user), row.time, times);
+					}
+				});
 			}
-			profile.observeLine(lineNumber);
-				corpus.minLine = Math.min(corpus.minLine, lineNumber);
-				corpus.maxLine = Math.max(corpus.maxLine, lineNumber);
+			else
+			{
+				try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+						new FileInputStream(file), StandardCharsets.UTF_8), 128 * 1024))
+				{
+					String line;
+					boolean first = true;
+					while ((line = reader.readLine()) != null)
+					{
+						if (first && line.startsWith("﻿"))
+						{
+							line = line.substring(1);
+						}
+						first = false;
+						String[] fields = line.split("\t", 6);
+						if (fields.length != 6)
+						{
+							continue;
+						}
+						observe(corpus, byName.get(fields[4].trim()), RunCorpus.parseTimestamp(fields[2]), times);
+					}
+				}
 			}
 		}
 		catch (IOException exception)
 		{
-			corpus.warning = "Temporal dataset scan failed: " + exception.getMessage();
+			corpus.warning = "The temporal scan failed: " + exception.getMessage();
+			return corpus;
+		}
+		corpus.available = corpus.datedRows > 0 && corpus.maxTime > corpus.minTime;
+		if (!corpus.available)
+		{
+			corpus.warning = "Fewer than two distinct timestamps: the temporal signal is off.";
+			return corpus;
+		}
+		double span = corpus.maxTime - corpus.minTime;
+		for (Map.Entry<UserProfile,List<Long>> entry : times.entrySet())
+		{
+			double[] histogram = new double[ACTIVITY_BINS];
+			for (Long time : entry.getValue())
+			{
+				int bin = (int)Math.min(ACTIVITY_BINS - 1, Math.floor((time - corpus.minTime) / span * ACTIVITY_BINS));
+				histogram[bin] += 1.0;
+			}
+			entry.getKey().activity = histogram;
 		}
 		return corpus;
 	}
 
-	private static long parseDateMillis(String value)
+	private static void observe(TemporalCorpus corpus, UserProfile profile, long time,
+			Map<UserProfile,List<Long>> times)
 	{
-		if (value == null || value.trim().length() == 0)
-		{
-			return Long.MIN_VALUE;
-		}
-		String trimmed = value.trim();
-		for (String pattern : DATE_PATTERNS)
-		{
-			SimpleDateFormat format = new SimpleDateFormat(pattern, Locale.US);
-			format.setLenient(false);
-			ParsePosition position = new ParsePosition(0);
-			Date parsed = format.parse(trimmed, position);
-			if (parsed != null && position.getIndex() == trimmed.length())
-			{
-				return parsed.getTime();
-			}
-		}
-		return Long.MIN_VALUE;
-	}
-
-	private static void applyTemporalNormalization(
-			Map<String,UserProfile> profiles,
-			TemporalCorpus corpus)
-	{
-		boolean hasDates = corpus.datedRows > 0 && corpus.maxTime > corpus.minTime;
-		boolean hasLines = corpus.maxLine > corpus.minLine;
-		for (UserProfile profile : profiles.values())
-		{
-			double normalized;
-			if (hasDates && profile.latestTime != Long.MIN_VALUE)
-			{
-				normalized = (profile.latestTime - corpus.minTime)
-						/ (double) Math.max(1L, corpus.maxTime - corpus.minTime);
-			}
-			else if (hasLines && profile.latestLine > 0L)
-			{
-				normalized = (profile.latestLine - corpus.minLine)
-						/ (double) Math.max(1L, corpus.maxLine - corpus.minLine);
-			}
-				else
-				{
-					normalized = 0.50;
-				}
-				profile.recency = clamp01(0.15 + 0.85 * normalized);
-				profile.firstPosition = normalizedPosition(profile, corpus, true);
-				profile.latestPosition = normalizedPosition(profile, corpus, false);
-			}
-		}
-
-		private static double normalizedPosition(
-				UserProfile profile,
-				TemporalCorpus corpus,
-				boolean first)
-		{
-			if (corpus.datedRows > 0 && corpus.maxTime > corpus.minTime)
-			{
-				long value = first ? profile.firstTime : profile.latestTime;
-				if (value != Long.MAX_VALUE && value != Long.MIN_VALUE)
-				{
-					return clamp01((value - corpus.minTime)
-							/ (double)Math.max(1L, corpus.maxTime - corpus.minTime));
-				}
-			}
-			if (corpus.maxLine > corpus.minLine)
-			{
-				long value = first ? profile.firstLine : profile.latestLine;
-				if (value != Long.MAX_VALUE && value > 0L)
-				{
-					return clamp01((value - corpus.minLine)
-							/ (double)Math.max(1L, corpus.maxLine - corpus.minLine));
-				}
-			}
-			return first ? 0.0 : 0.50;
-		}
-
-	private static GraphContext buildGraphContext(
-			Input input,
-			Map<String,UserProfile> profiles)
-	{
-		GraphContext graph = new GraphContext();
-		for (UserProfile profile : profiles.values())
-		{
-			String followee = safe(profile.followee);
-			if (followee.length() == 0)
-			{
-				continue;
-			}
-			LinkedHashSet<String> users = graph.usersByFollowee.get(followee);
-			if (users == null)
-			{
-				users = new LinkedHashSet<String>();
-				graph.usersByFollowee.put(followee, users);
-			}
-			users.add(profile.name);
-		}
-		graph.maxFolloweeSize = 1;
-		for (Set<String> users : graph.usersByFollowee.values())
-		{
-			graph.maxFolloweeSize = Math.max(graph.maxFolloweeSize, users.size());
-		}
-		readGraphArtifacts(input.datasetFile, profiles, graph);
-		return graph;
-	}
-
-	private static void readGraphArtifacts(
-			File datasetFile,
-			Map<String,UserProfile> profiles,
-			GraphContext graph)
-	{
-		if (datasetFile == null)
+		corpus.rowsScanned++;
+		if (profile == null)
 		{
 			return;
 		}
-		File importantStuff = new File("important-stuff");
-		File mappingFile = GraphAnalysisEngine.mappingFile(
-				importantStuff,
-				datasetFile.getName());
-		if (!mappingFile.isFile())
+		profile.observedRows++;
+		if (time == Long.MIN_VALUE)
 		{
 			return;
 		}
-		Map<Integer,String> namesById = readMapping(mappingFile);
-		if (namesById.isEmpty())
+		corpus.datedRows++;
+		corpus.minTime = Math.min(corpus.minTime, time);
+		corpus.maxTime = Math.max(corpus.maxTime, time);
+		profile.firstTime = Math.min(profile.firstTime, time);
+		profile.latestTime = Math.max(profile.latestTime, time);
+		List<Long> list = times.get(profile);
+		if (list == null)
 		{
-			return;
+			list = new ArrayList<Long>();
+			times.put(profile, list);
 		}
-		String base = GraphAnalysisEngine.graphEdgesBaseName(
-				datasetFile.getName(),
-				"");
-		File[] files = importantStuff.listFiles();
-		if (files == null)
-		{
-			return;
-		}
-		for (File file : files)
-		{
-			if (file == null || !file.isFile()
-					|| !file.getName().startsWith(base)
-					|| !file.getName().endsWith(".txt"))
-			{
-				continue;
-			}
-			readEdgeFile(file, namesById, profiles, graph);
-		}
+		list.add(Long.valueOf(time));
 	}
 
-	private static Map<Integer,String> readMapping(File mappingFile)
-	{
-		HashMap<Integer,String> namesById = new HashMap<Integer,String>();
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-				new FileInputStream(mappingFile), StandardCharsets.UTF_8), 64 * 1024))
-		{
-			String line;
-			while ((line = reader.readLine()) != null)
-			{
-				String[] parts = line.trim().split("\\s+");
-				if (parts.length != 2)
-				{
-					continue;
-				}
-				recordMapping(namesById, parts[0], parts[1]);
-			}
-		}
-		catch (IOException ignored)
-		{
-		}
-		return namesById;
-	}
+	// =============================================================== signals
 
-	private static void recordMapping(
-			Map<Integer,String> namesById,
-			String first,
-			String second)
+	/** Postings of the user-term bipartite graph for mass diffusion. */
+	private static final class DiffusionIndex
 	{
-		try
-		{
-			namesById.put(Integer.valueOf(Integer.parseInt(first)), second);
-			return;
-		}
-		catch (NumberFormatException ignored)
-		{
-		}
-		try
-		{
-			namesById.put(Integer.valueOf(Integer.parseInt(second)), first);
-		}
-		catch (NumberFormatException ignored)
-		{
-		}
-	}
+		private final HashMap<String,int[]> postingsUsers = new HashMap<String,int[]>();
+		private final HashMap<String,double[]> postingsWeights = new HashMap<String,double[]>();
+		private final HashMap<String,Double> termTotals = new HashMap<String,Double>();
+		private final double[] userTotals;
 
-	private static void readEdgeFile(
-			File edgeFile,
-			Map<Integer,String> namesById,
-			Map<String,UserProfile> profiles,
-			GraphContext graph)
-	{
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-				new FileInputStream(edgeFile), StandardCharsets.UTF_8), 64 * 1024))
+		DiffusionIndex(List<UserProfile> users)
 		{
-			String line;
-			int sampled = 0;
-			while ((line = reader.readLine()) != null)
+			userTotals = new double[users.size()];
+			TreeMap<String,List<double[]>> postings = new TreeMap<String,List<double[]>>();
+			for (UserProfile user : users)
 			{
-				String[] parts = line.trim().split("\\s+");
-				if (parts.length < 2)
+				for (Map.Entry<String,Double> entry : user.tfidf.entrySet())
 				{
-					continue;
-				}
-				try
-				{
-					String source = namesById.get(Integer.valueOf(Integer.parseInt(parts[0])));
-					String target = namesById.get(Integer.valueOf(Integer.parseInt(parts[1])));
-					if (source == null || target == null
-							|| !profiles.containsKey(source)
-							|| !profiles.containsKey(target)
-							|| source.equals(target))
+					double weight = finite(entry.getValue());
+					if (weight <= 0.0)
 					{
 						continue;
 					}
-					graph.connect(source, target);
-					graph.graphArtifactEdges++;
-					if (sampled < GRAPH_SAMPLE_LIMIT)
+					userTotals[user.index] += weight;
+					List<double[]> list = postings.get(entry.getKey());
+					if (list == null)
 					{
-						graph.sampleEdges.add(source + " -> " + target);
-						sampled++;
+						list = new ArrayList<double[]>();
+						postings.put(entry.getKey(), list);
 					}
+					list.add(new double[] {user.index, weight});
 				}
-				catch (NumberFormatException ignored)
+			}
+			for (Map.Entry<String,List<double[]>> entry : postings.entrySet())
+			{
+				int[] userIds = new int[entry.getValue().size()];
+				double[] weights = new double[userIds.length];
+				double total = 0.0;
+				for (int i = 0; i < userIds.length; i++)
 				{
+					userIds[i] = (int)entry.getValue().get(i)[0];
+					weights[i] = entry.getValue().get(i)[1];
+					total += weights[i];
 				}
+				postingsUsers.put(entry.getKey(), userIds);
+				postingsWeights.put(entry.getKey(), weights);
+				termTotals.put(entry.getKey(), Double.valueOf(total));
 			}
 		}
-		catch (IOException ignored)
-		{
-		}
-	}
 
-	private static boolean belongsToThisNode(UserProfile candidate, Input input)
-	{
-		if (input.numRecAgents <= 1 || input.currentNode <= 0)
+		/** Resource each user receives from {@code source}, normalised by the best other user. */
+		double[] spread(UserProfile source, int userCount, String excludedTerm)
 		{
-			return true;
-		}
-		Integer primary = input.userPrimaryRecServer.get(candidate.name);
-		return primary == null || primary.intValue() == input.currentNode;
-	}
-
-	private static CandidateScore scoreCandidate(
-			UserProfile target,
-			UserProfile candidate,
-			GraphContext graph)
-	{
-		double text = cosine(target.tfidf, candidate.tfidf);
-		GraphSignal graphSignal = graphSignal(target, candidate, graph);
-		double time = temporalAffinity(target, candidate);
-		double bridge = bridgeValue(target, candidate, graph, text, graphSignal.value);
-			double debias = popularityDebias(candidate, graph);
-			double robust = robustness(text, graphSignal.value, time, bridge);
-			double finalScore = fusedScore(
-					text,
-					graphSignal.value,
-					time,
-					bridge,
-					debias,
-					robust);
-			if (text <= 0.0 && graphSignal.value <= 0.0)
+			double[] received = new double[userCount];
+			double total = userTotals[source.index];
+			if (total <= 0.0)
 			{
-				finalScore *= 0.35;
+				return received;
 			}
-			CandidateScore score = new CandidateScore(target, candidate);
-				score.text = text;
-				score.graph = graphSignal.value;
-				score.time = time;
-				score.bridge = bridge;
-				score.debias = debias;
-				score.robust = robust;
-				score.finalScore = finalScore;
-				score.textContribution = TEXT_WEIGHT * text;
-				score.graphContribution = GRAPH_WEIGHT * graphSignal.value;
-				score.timeContribution = TIME_WEIGHT * time;
-				score.bridgeContribution = BRIDGE_WEIGHT * bridge;
-				score.debiasContribution = DEBIAS_WEIGHT * debias;
-				score.robustContribution = ROBUST_WEIGHT * robust;
-				score.path = graphSignal.path;
-				score.sharedTerms = sharedTerms(target.tfidf, candidate.tfidf, DETAIL_TERM_LIMIT);
-			score.withoutTextScore = finalScore - TEXT_WEIGHT * text;
-			score.withoutGraphScore = finalScore - GRAPH_WEIGHT * graphSignal.value;
-			score.withoutTimeScore = finalScore - TIME_WEIGHT * time;
-			score.withoutBridgeScore = fusedScore(
-					text,
-					graphSignal.value,
-					time,
-					0.0,
-					debias,
-					robustness(text, graphSignal.value, time, 0.0));
-			score.withoutDebiasScore = fusedScore(
-					text,
-					graphSignal.value,
-					time,
-					bridge,
-					0.0,
-					robust);
-			score.withoutTopTermText = textWithoutTopTerm(target, candidate, score);
-			double bridgeWithoutTerm = bridgeValue(
-					target,
-					candidate,
-					graph,
-					score.withoutTopTermText,
-					graphSignal.value);
-			score.withoutTopTermScore = fusedScore(
-					score.withoutTopTermText,
-					graphSignal.value,
-					time,
-					bridgeWithoutTerm,
-					debias,
-					robustness(
-							score.withoutTopTermText,
-							graphSignal.value,
-							time,
-							bridgeWithoutTerm));
-			return score;
-		}
-
-	static String weightsDescription()
-	{
-		return "text=" + fmt(TEXT_WEIGHT)
-				+ ", graph=" + fmt(GRAPH_WEIGHT)
-				+ ", time=" + fmt(TIME_WEIGHT)
-				+ ", bridge=" + fmt(BRIDGE_WEIGHT)
-				+ ", debias=" + fmt(DEBIAS_WEIGHT)
-				+ ", robust=" + fmt(ROBUST_WEIGHT);
-	}
-
-	static String methodologySummary()
-	{
-		return "TGF is an evidence-fusion recommender, not a pretrained graph "
-				+ "foundation model. It combines text similarity, graph evidence, "
-				+ "temporal alignment, bridge agreement, popularity debiasing, and "
-				+ "robustness checks, then reports counterfactual probes, "
-				+ "time-split calibration diagnostics, and baseline-lens comparisons.";
-	}
-
-		private static double fusedScore(
-				double text,
-				double graph,
-				double time,
-				double bridge,
-				double debias,
-				double robust)
-		{
-			return TEXT_WEIGHT * text
-					+ GRAPH_WEIGHT * graph
-					+ TIME_WEIGHT * time
-					+ BRIDGE_WEIGHT * bridge
-					+ DEBIAS_WEIGHT * debias
-					+ ROBUST_WEIGHT * robust;
-		}
-
-		private static double textWithoutTopTerm(
-				UserProfile target,
-				UserProfile candidate,
-				CandidateScore score)
-		{
-			if (score.sharedTerms == null || score.sharedTerms.isEmpty())
+			for (Map.Entry<String,Double> entry : source.tfidf.entrySet())
 			{
-				return score.text;
-			}
-			return cosineExcluding(target.tfidf, candidate.tfidf, score.sharedTerms.get(0));
-		}
-
-	private static GraphSignal graphSignal(
-			UserProfile target,
-			UserProfile candidate,
-			GraphContext graph)
-	{
-		double value = 0.0;
-		String path = "No graph path found";
-		if (sameLabel(target, candidate))
-		{
-			value = Math.max(value, 0.72);
-			path = target.name + " -> " + safe(target.followee) + " -> "
-					+ candidate.name;
-		}
-		if (graph.areConnected(target.name, candidate.name))
-		{
-			value = Math.max(value, 0.95);
-			path = target.name + " -> prior graph edge -> " + candidate.name;
-		}
-		int common = graph.commonNeighborCount(target.name, candidate.name);
-		if (common > 0)
-		{
-			double commonScore = Math.min(1.0, Math.log(1.0 + common) / Math.log(6.0));
-			if (commonScore > value)
-			{
-				value = commonScore;
-				path = target.name + " -> " + common + " shared graph neighbor"
-						+ (common == 1 ? "" : "s") + " -> " + candidate.name;
-			}
-		}
-		return new GraphSignal(clamp01(value), path);
-	}
-
-	private static double temporalAffinity(UserProfile target, UserProfile candidate)
-	{
-		double alignment = 1.0 - Math.abs(target.recency - candidate.recency);
-		return clamp01(0.58 * candidate.recency + 0.42 * alignment);
-	}
-
-	private static double bridgeValue(
-			UserProfile target,
-			UserProfile candidate,
-			GraphContext graph,
-			double text,
-			double graphScore)
-	{
-		if (sameLabel(target, candidate))
-		{
-			return clamp01(0.15 + 0.35 * graphScore);
-		}
-		double candidateLongTail = popularityDebias(candidate, graph);
-		double targetCommunity = followeeSize(target, graph);
-		double candidateCommunity = followeeSize(candidate, graph);
-		double sizeBalance = targetCommunity <= 0.0 || candidateCommunity <= 0.0
-				? 0.50
-				: 1.0 - Math.abs(targetCommunity - candidateCommunity)
-						/ Math.max(targetCommunity, candidateCommunity);
-		return clamp01(0.45 * text
-				+ 0.25 * graphScore
-				+ 0.20 * candidateLongTail
-				+ 0.10 * sizeBalance);
-	}
-
-	private static double popularityDebias(UserProfile candidate, GraphContext graph)
-	{
-		double size = followeeSize(candidate, graph);
-		if (size <= 0.0)
-		{
-			return 0.50;
-		}
-		return clamp01(1.0 - (size / Math.max(1.0, graph.maxFolloweeSize)));
-	}
-
-	private static double followeeSize(UserProfile profile, GraphContext graph)
-	{
-		Set<String> users = graph.usersByFollowee.get(safe(profile.followee));
-		return users == null ? 0.0 : users.size();
-	}
-
-	private static double robustness(
-			double text,
-			double graph,
-			double time,
-			double bridge)
-	{
-		double sum = text + graph + time + bridge;
-		if (sum <= 0.0)
-		{
-			return 0.0;
-		}
-		double max = Math.max(Math.max(text, graph), Math.max(time, bridge));
-		double balance = 1.0 - (max / sum);
-		return clamp01(balance * 1.35);
-	}
-
-	private static void assignRanks(List<CandidateScore> scores)
-	{
-		assignRank(scores, CandidateScore.FINAL_ORDER, RankType.FINAL);
-		assignRank(scores, CandidateScore.WITHOUT_TEXT_ORDER, RankType.WITHOUT_TEXT);
-		assignRank(scores, CandidateScore.WITHOUT_GRAPH_ORDER, RankType.WITHOUT_GRAPH);
-		assignRank(scores, CandidateScore.WITHOUT_TIME_ORDER, RankType.WITHOUT_TIME);
-		assignRank(scores, CandidateScore.WITHOUT_BRIDGE_ORDER, RankType.WITHOUT_BRIDGE);
-		assignRank(scores, CandidateScore.WITHOUT_DEBIAS_ORDER, RankType.WITHOUT_DEBIAS);
-		assignRank(scores, CandidateScore.WITHOUT_TOP_TERM_ORDER, RankType.WITHOUT_TOP_TERM);
-	}
-
-	private static void assignRank(
-			List<CandidateScore> scores,
-			Comparator<CandidateScore> comparator,
-			RankType type)
-	{
-		ArrayList<CandidateScore> sorted = new ArrayList<CandidateScore>(scores);
-		Collections.sort(sorted, comparator);
-		for (int i = 0; i < sorted.size(); i++)
-		{
-			CandidateScore score = sorted.get(i);
-			int rank = i + 1;
-			if (type == RankType.FINAL)
-			{
-				score.rank = rank;
-			}
-			else if (type == RankType.WITHOUT_TEXT)
-			{
-				score.withoutTextRank = rank;
-			}
-			else if (type == RankType.WITHOUT_GRAPH)
-			{
-				score.withoutGraphRank = rank;
-			}
-			else if (type == RankType.WITHOUT_TIME)
-			{
-				score.withoutTimeRank = rank;
-			}
-			else if (type == RankType.WITHOUT_BRIDGE)
-			{
-				score.withoutBridgeRank = rank;
-			}
-			else if (type == RankType.WITHOUT_DEBIAS)
-			{
-				score.withoutDebiasRank = rank;
-			}
-			else if (type == RankType.WITHOUT_TOP_TERM)
-			{
-				score.withoutTopTermRank = rank;
-			}
-		}
-	}
-
-	private static void assignTimelineRanks(List<CandidateScore> scores)
-	{
-		if (scores == null || scores.isEmpty())
-		{
-			return;
-		}
-		for (int frameIndex = 0; frameIndex < TIMELINE_FRAME_COUNT; frameIndex++)
-		{
-			ArrayList<CandidateScore> frameScores =
-					new ArrayList<CandidateScore>(scores);
-			final int index = frameIndex;
-			Collections.sort(frameScores, new Comparator<CandidateScore>() {
-				public int compare(CandidateScore first, CandidateScore second)
-				{
-					return CandidateScore.compareScore(
-							first,
-							second,
-							frameScore(first, index),
-							frameScore(second, index));
-				}
-			});
-			for (int i = 0; i < frameScores.size(); i++)
-			{
-				CandidateScore score = frameScores.get(i);
-				if (score.timeline == null || score.timeline.size() <= frameIndex)
+				double weight = finite(entry.getValue());
+				if (weight <= 0.0 || entry.getKey().equals(excludedTerm))
 				{
 					continue;
 				}
-				TimelineFrame frame = score.timeline.get(frameIndex);
-				frame.rank = i + 1;
-				frame.previousRank = frameIndex == 0
-						? frame.rank
-						: previousFrameRank(score, frameIndex);
+				int[] userIds = postingsUsers.get(entry.getKey());
+				double[] weights = postingsWeights.get(entry.getKey());
+				double termTotal = termTotals.get(entry.getKey()).doubleValue();
+				double share = weight / total;
+				for (int i = 0; i < userIds.length; i++)
+				{
+					received[userIds[i]] += share * weights[i] / termTotal;
+				}
 			}
+			received[source.index] = 0.0;
+			double max = 0.0;
+			for (double value : received)
+			{
+				max = Math.max(max, value);
+			}
+			if (max > 0.0)
+			{
+				for (int i = 0; i < received.length; i++)
+				{
+					received[i] /= max;
+				}
+			}
+			return received;
 		}
 	}
 
-	private static double frameScore(CandidateScore score, int frameIndex)
+	private static double coActivity(double[] first, double[] second)
 	{
-		if (score == null || score.timeline == null
-				|| score.timeline.size() <= frameIndex)
+		if (first == null || second == null)
 		{
 			return 0.0;
 		}
-		return score.timeline.get(frameIndex).score;
+		double dot = 0.0;
+		double a = 0.0;
+		double b = 0.0;
+		for (int i = 0; i < first.length; i++)
+		{
+			dot += first[i] * second[i];
+			a += first[i] * first[i];
+			b += second[i] * second[i];
+		}
+		return a <= 0.0 || b <= 0.0 ? 0.0 : clamp01(dot / Math.sqrt(a * b));
 	}
 
-	private static int previousFrameRank(CandidateScore score, int frameIndex)
+	/** The share of a histogram up to (and including) {@code bins} bins. */
+	private static double[] prefix(double[] histogram, int bins)
 	{
-		if (score == null || score.timeline == null || frameIndex <= 0
-				|| score.timeline.size() < frameIndex)
+		if (histogram == null)
 		{
-			return 0;
+			return null;
 		}
-		return score.timeline.get(frameIndex - 1).rank;
+		double[] cut = new double[histogram.length];
+		for (int i = 0; i < Math.min(bins, histogram.length); i++)
+		{
+			cut[i] = histogram[i];
+		}
+		return cut;
 	}
 
-	private static void attachResearchEvidence(
-			UserProfile target,
-			List<CandidateScore> scores,
-			GraphContext graph,
-			TemporalCorpus corpus)
+	// ================================================================ fusion
+
+	/** The fitted logistic fusion and its bootstrap refits. */
+	private static final class FusionModel
 	{
-		if (scores == null || scores.isEmpty())
+		/** Coefficients on standardised features: intercept, text, graph, time. */
+		private final double[] coefficients;
+		private final double[][] bootstrap;
+		private final double[] means;
+		private final double[] scales;
+		private final boolean[] active;
+		private final boolean supervised;
+		private final int trainingPairs;
+		private final int anchors;
+		private final double heldOutAuc;
+		private final double baseRate;
+		private final String note;
+
+		private FusionModel(double[] coefficients, double[][] bootstrap, double[] means, double[] scales,
+				boolean[] active, boolean supervised, int trainingPairs, int anchors, double heldOutAuc,
+				double baseRate, String note)
 		{
-			return;
-		}
-		ArrayList<CandidateScore> sorted = new ArrayList<CandidateScore>(scores);
-		Collections.sort(sorted, CandidateScore.FINAL_ORDER);
-		for (int i = 0; i < sorted.size(); i++)
-		{
-			CandidateScore score = sorted.get(i);
-			double nextScore = i + 1 < sorted.size()
-					? sorted.get(i + 1).finalScore : 0.0;
-			score.marginToNext = Math.max(0.0, score.finalScore - nextScore);
-			score.confidenceRadius = confidenceRadius(score);
-			score.confidenceLower = clamp01(score.finalScore - score.confidenceRadius);
-			score.confidenceUpper = clamp01(score.finalScore + score.confidenceRadius);
-				score.stability = stability(score);
-				score.timeline = buildTimeline(target, score, graph, corpus);
-				score.counterfactuals = buildCounterfactuals(score);
-				score.counterfactualFragility = counterfactualFragility(score);
-				score.evidenceCoverage = evidenceCoverage(score);
-				attachChallenger(score, i == 0
-						? (sorted.size() > 1 ? sorted.get(1) : null)
-						: sorted.get(0));
-				score.evidenceAtoms = buildEvidenceAtoms(score);
-			}
-			double calibrationThreshold = calibrationThreshold(sorted);
-			for (CandidateScore score : sorted)
-			{
-				attachCalibration(score, sorted, calibrationThreshold);
-				score.riskFlags = buildRiskFlags(score, corpus, graph);
-				score.reliabilityBand = reliabilityBand(score);
-				score.whyThis = whyThis(score);
-				score.whyNotChallenger = whyNotChallenger(score);
-				score.researchVerdict = verdict(score);
-			}
+			this.coefficients = coefficients;
+			this.bootstrap = bootstrap;
+			this.means = means;
+			this.scales = scales;
+			this.active = active;
+			this.supervised = supervised;
+			this.trainingPairs = trainingPairs;
+			this.anchors = anchors;
+			this.heldOutAuc = heldOutAuc;
+			this.baseRate = baseRate;
+			this.note = note;
 		}
 
-		private static void attachCalibration(
-				CandidateScore score,
-				List<CandidateScore> calibrationSet,
-				double threshold)
+		/** Features of the target against every user: [index][text, graph, time]. */
+		double[][] features(UserProfile target, List<UserProfile> users, DiffusionIndex diffusion,
+				TemporalCorpus corpus)
 		{
-			if (score == null)
+			double[] graph = diffusion.spread(target, users.size(), null);
+			double[][] features = new double[users.size()][3];
+			for (UserProfile candidate : users)
 			{
-				return;
-			}
-			double residual = calibrationResidual(score);
-			int denominator = calibrationSet == null ? 0 : calibrationSet.size();
-			int atLeastAsWide = 0;
-			if (calibrationSet != null)
-			{
-				for (CandidateScore candidate : calibrationSet)
+				if (candidate == target)
 				{
-					if (calibrationResidual(candidate) >= residual)
+					continue;
+				}
+				features[candidate.index][TEXT] = cosine(target.tfidf, candidate.tfidf);
+				features[candidate.index][GRAPH] = graph[candidate.index];
+				features[candidate.index][TIME] = corpus.available
+						? coActivity(target.activity, candidate.activity) : 0.0;
+			}
+			return features;
+		}
+
+		double probability(double[] x)
+		{
+			return probability(coefficients, x);
+		}
+
+		double probability(double[] beta, double[] x)
+		{
+			double z = beta[0];
+			for (int signal = 0; signal < 3; signal++)
+			{
+				if (active[signal])
+				{
+					z += beta[signal + 1] * (x[signal] - means[signal]) / scales[signal];
+				}
+			}
+			return sigmoid(z);
+		}
+
+		/** The additive contribution of one signal to the log-odds (relative to the mean pair). */
+		double contribution(int signal, double value)
+		{
+			return active[signal] ? coefficients[signal + 1] * (value - means[signal]) / scales[signal] : 0.0;
+		}
+
+		/** The probability with some signals replaced by their mean (removed). */
+		double probabilityWithout(double[] x, boolean[] removed)
+		{
+			double[] copy = x.clone();
+			for (int signal = 0; signal < 3; signal++)
+			{
+				if (removed[signal])
+				{
+					copy[signal] = means[signal];
+				}
+			}
+			return probability(copy);
+		}
+
+		String weights()
+		{
+			StringBuilder text = new StringBuilder();
+			for (int signal = 0; signal < 3; signal++)
+			{
+				if (text.length() > 0)
+				{
+					text.append(", ");
+				}
+				text.append(SIGNALS[signal]).append('=');
+				text.append(active[signal] ? String.format(Locale.US, "%+.3f", coefficients[signal + 1]) : "off");
+			}
+			return text.toString();
+		}
+
+		String describe()
+		{
+			return note;
+		}
+
+		static FusionModel fit(List<UserProfile> users, Set<String> targets, DiffusionIndex diffusion,
+				TemporalCorpus corpus)
+		{
+			boolean[] active = {true, true, corpus.available};
+			//Anchors: labelled users that are not targets, in a seeded order.
+			ArrayList<UserProfile> labelled = new ArrayList<UserProfile>();
+			TreeMap<String,Integer> classSizes = new TreeMap<String,Integer>();
+			for (UserProfile user : users)
+			{
+				if (user.followee.length() > 0 && !targets.contains(user.name))
+				{
+					labelled.add(user);
+					Integer size = classSizes.get(user.followee);
+					classSizes.put(user.followee, Integer.valueOf(size == null ? 1 : size.intValue() + 1));
+				}
+			}
+			double baseRate = baseRate(classSizes, labelled.size());
+			if (classSizes.size() < 2 || labelled.size() < 4)
+			{
+				return unsupervised(active, "Fewer than two labelled communities outside the targets: the"
+						+ " signals are averaged with equal weights (no learned fusion).");
+			}
+			ArrayList<UserProfile> anchors = new ArrayList<UserProfile>(labelled);
+			Collections.shuffle(anchors, new Random(SEED));
+			if (anchors.size() > MAX_ANCHORS)
+			{
+				anchors = new ArrayList<UserProfile>(anchors.subList(0, MAX_ANCHORS));
+			}
+			//Pairs per anchor: up to PAIRS_PER_CLASS same-community users and as
+			//many others, both drawn without replacement from labelled non-targets.
+			ArrayList<double[]> rows = new ArrayList<double[]>();
+			ArrayList<Integer> rowAnchor = new ArrayList<Integer>();
+			Random random = new Random(SEED + 1);
+			for (int a = 0; a < anchors.size(); a++)
+			{
+				UserProfile anchor = anchors.get(a);
+				ArrayList<UserProfile> positives = new ArrayList<UserProfile>();
+				ArrayList<UserProfile> negatives = new ArrayList<UserProfile>();
+				for (UserProfile other : labelled)
+				{
+					if (other == anchor)
 					{
-						atLeastAsWide++;
+						continue;
+					}
+					(other.followee.equals(anchor.followee) ? positives : negatives).add(other);
+				}
+				if (positives.isEmpty() || negatives.isEmpty())
+				{
+					continue;
+				}
+				Collections.shuffle(positives, random);
+				Collections.shuffle(negatives, random);
+				int count = Math.min(PAIRS_PER_CLASS, Math.min(positives.size(), negatives.size()));
+				double[] graph = diffusion.spread(anchor, users.size(), null);
+				for (int i = 0; i < count; i++)
+				{
+					rows.add(pair(anchor, positives.get(i), graph, corpus, 1.0));
+					rowAnchor.add(Integer.valueOf(a));
+					rows.add(pair(anchor, negatives.get(i), graph, corpus, 0.0));
+					rowAnchor.add(Integer.valueOf(a));
+				}
+			}
+			if (rows.size() < 8)
+			{
+				return unsupervised(active, "Too few labelled pairs outside the targets to learn the fusion:"
+						+ " the signals are averaged with equal weights.");
+			}
+			double[] means = new double[3];
+			double[] scales = new double[3];
+			for (int signal = 0; signal < 3; signal++)
+			{
+				double sum = 0.0;
+				for (double[] row : rows)
+				{
+					sum += row[signal];
+				}
+				means[signal] = sum / rows.size();
+				double squares = 0.0;
+				for (double[] row : rows)
+				{
+					squares += (row[signal] - means[signal]) * (row[signal] - means[signal]);
+				}
+				scales[signal] = Math.sqrt(squares / rows.size());
+				if (!(scales[signal] > 1e-12))
+				{
+					active[signal] = false;
+					scales[signal] = 1.0;
+				}
+			}
+			int anchorCount = anchors.size();
+			//Held-out quality: fit on 80% of the anchors, AUC on the other 20%.
+			boolean[] heldOut = new boolean[anchorCount];
+			Integer[] order = new Integer[anchorCount];
+			for (int i = 0; i < anchorCount; i++)
+			{
+				order[i] = Integer.valueOf(i);
+			}
+			Collections.shuffle(Arrays.asList(order), new Random(SEED + 2));
+			for (int i = 0; i < anchorCount / 5; i++)
+			{
+				heldOut[order[i].intValue()] = true;
+			}
+			ArrayList<double[]> fitRows = new ArrayList<double[]>();
+			ArrayList<double[]> testRows = new ArrayList<double[]>();
+			for (int i = 0; i < rows.size(); i++)
+			{
+				(heldOut[rowAnchor.get(i).intValue()] ? testRows : fitRows).add(rows.get(i));
+			}
+			double heldOutAuc = Double.NaN;
+			if (!fitRows.isEmpty() && !testRows.isEmpty())
+			{
+				double[] partial = irls(fitRows, means, scales, active);
+				heldOutAuc = auc(testRows, partial, means, scales, active);
+			}
+			double[] coefficients = irls(rows, means, scales, active);
+			//Bootstrap over anchors (clusters of pairs).
+			double[][] bootstrap = new double[BOOTSTRAP_FITS][];
+			Random resample = new Random(SEED + 3);
+			ArrayList<List<double[]>> byAnchor = new ArrayList<List<double[]>>();
+			for (int a = 0; a < anchorCount; a++)
+			{
+				byAnchor.add(new ArrayList<double[]>());
+			}
+			for (int i = 0; i < rows.size(); i++)
+			{
+				byAnchor.get(rowAnchor.get(i).intValue()).add(rows.get(i));
+			}
+			for (int b = 0; b < BOOTSTRAP_FITS; b++)
+			{
+				ArrayList<double[]> sample = new ArrayList<double[]>();
+				for (int draw = 0; draw < anchorCount; draw++)
+				{
+					sample.addAll(byAnchor.get(resample.nextInt(anchorCount)));
+				}
+				bootstrap[b] = irls(sample.isEmpty() ? rows : sample, means, scales, active);
+			}
+			//From the balanced sample to the population base rate of same-community pairs.
+			double correction = Math.log(baseRate / (1.0 - baseRate));
+			coefficients[0] += correction;
+			for (double[] beta : bootstrap)
+			{
+				beta[0] += correction;
+			}
+			FusionModel model = new FusionModel(coefficients, bootstrap, means, scales, active, true,
+					rows.size(), anchorCount, heldOutAuc, baseRate, "");
+			String note = "Learned fusion (logistic regression, " + rows.size() + " labelled pairs from "
+					+ anchorCount + " non-target anchors; standardised weights " + model.weights()
+					+ "; held-out pair AUC " + (Double.isNaN(heldOutAuc) ? "n/a"
+							: String.format(Locale.US, "%.3f", heldOutAuc))
+					+ "; base rate " + String.format(Locale.US, "%.3f", baseRate)
+					+ (corpus.available ? "" : "; temporal signal off: " + corpus.warning) + ").";
+			return new FusionModel(coefficients, bootstrap, means, scales, active, true, rows.size(),
+					anchorCount, heldOutAuc, baseRate, note);
+		}
+
+		private static FusionModel unsupervised(boolean[] active, String note)
+		{
+			int signals = 0;
+			for (boolean on : active)
+			{
+				signals += on ? 1 : 0;
+			}
+			double[] coefficients = new double[4];
+			double[] means = new double[3];
+			double[] scales = {1.0, 1.0, 1.0};
+			//With equal unit weights on raw signals the score is a monotone
+			//transform of their mean; the intercept centres it on 0.5.
+			for (int signal = 0; signal < 3; signal++)
+			{
+				coefficients[signal + 1] = active[signal] ? 4.0 / Math.max(1, signals) : 0.0;
+			}
+			double[][] bootstrap = new double[BOOTSTRAP_FITS][];
+			for (int b = 0; b < BOOTSTRAP_FITS; b++)
+			{
+				bootstrap[b] = coefficients.clone();
+			}
+			return new FusionModel(coefficients, bootstrap, means, scales, active, false, 0, 0, Double.NaN,
+					Double.NaN, "Unsupervised fusion: " + note);
+		}
+
+		private static double[] pair(UserProfile anchor, UserProfile other, double[] graph,
+				TemporalCorpus corpus, double label)
+		{
+			return new double[] {
+					cosine(anchor.tfidf, other.tfidf),
+					graph[other.index],
+					corpus.available ? coActivity(anchor.activity, other.activity) : 0.0,
+					label};
+		}
+
+		/** Probability that two random distinct labelled users share a community. */
+		private static double baseRate(Map<String,Integer> classSizes, int users)
+		{
+			if (users < 2)
+			{
+				return 0.5;
+			}
+			double same = 0.0;
+			for (Integer size : classSizes.values())
+			{
+				same += (double)size.intValue() * (size.intValue() - 1);
+			}
+			double rate = same / ((double)users * (users - 1));
+			return Math.max(1e-6, Math.min(1.0 - 1e-6, rate));
+		}
+
+		/**
+		 * L2-regularised logistic regression by Newton's method (IRLS) on
+		 * standardised features; the intercept is not penalised.
+		 */
+		private static double[] irls(List<double[]> rows, double[] means, double[] scales, boolean[] active)
+		{
+			int dimension = 4;
+			double[] beta = new double[dimension];
+			for (int iteration = 0; iteration < 50; iteration++)
+			{
+				double[] gradient = new double[dimension];
+				double[][] hessian = new double[dimension][dimension];
+				for (double[] row : rows)
+				{
+					double[] x = design(row, means, scales, active);
+					double z = 0.0;
+					for (int j = 0; j < dimension; j++)
+					{
+						z += beta[j] * x[j];
+					}
+					double p = sigmoid(z);
+					double w = Math.max(p * (1.0 - p), 1e-10);
+					for (int j = 0; j < dimension; j++)
+					{
+						gradient[j] += (row[3] - p) * x[j];
+						for (int k = 0; k < dimension; k++)
+						{
+							hessian[j][k] += w * x[j] * x[k];
+						}
+					}
+				}
+				for (int j = 1; j < dimension; j++)
+				{
+					gradient[j] -= L2_PENALTY * beta[j];
+					hessian[j][j] += L2_PENALTY;
+					if (!active[j - 1])
+					{
+						//Inactive signals stay at zero.
+						Arrays.fill(hessian[j], 0.0);
+						for (int k = 0; k < dimension; k++)
+						{
+							hessian[k][j] = 0.0;
+						}
+						hessian[j][j] = 1.0;
+						gradient[j] = -beta[j];
+					}
+				}
+				double[] step = solve(hessian, gradient);
+				double change = 0.0;
+				for (int j = 0; j < dimension; j++)
+				{
+					beta[j] += step[j];
+					change = Math.max(change, Math.abs(step[j]));
+				}
+				if (change < 1e-10)
+				{
+					break;
+				}
+			}
+			return beta;
+		}
+
+		private static double[] design(double[] row, double[] means, double[] scales, boolean[] active)
+		{
+			return new double[] {
+					1.0,
+					active[0] ? (row[0] - means[0]) / scales[0] : 0.0,
+					active[1] ? (row[1] - means[1]) / scales[1] : 0.0,
+					active[2] ? (row[2] - means[2]) / scales[2] : 0.0};
+		}
+
+		/** Area under the ROC curve (Mann-Whitney, ties counted half). */
+		private static double auc(List<double[]> rows, double[] beta, double[] means, double[] scales,
+				boolean[] active)
+		{
+			ArrayList<Double> positives = new ArrayList<Double>();
+			ArrayList<Double> negatives = new ArrayList<Double>();
+			for (double[] row : rows)
+			{
+				double[] x = design(row, means, scales, active);
+				double z = 0.0;
+				for (int j = 0; j < 4; j++)
+				{
+					z += beta[j] * x[j];
+				}
+				(row[3] > 0.5 ? positives : negatives).add(Double.valueOf(z));
+			}
+			if (positives.isEmpty() || negatives.isEmpty())
+			{
+				return Double.NaN;
+			}
+			double wins = 0.0;
+			for (Double positive : positives)
+			{
+				for (Double negative : negatives)
+				{
+					int compare = Double.compare(positive, negative);
+					wins += compare > 0 ? 1.0 : compare == 0 ? 0.5 : 0.0;
+				}
+			}
+			return wins / ((double)positives.size() * negatives.size());
+		}
+
+		/** Gaussian elimination with partial pivoting on a small system. */
+		private static double[] solve(double[][] matrix, double[] vector)
+		{
+			int n = vector.length;
+			double[][] a = new double[n][n + 1];
+			for (int i = 0; i < n; i++)
+			{
+				System.arraycopy(matrix[i], 0, a[i], 0, n);
+				a[i][n] = vector[i];
+			}
+			for (int column = 0; column < n; column++)
+			{
+				int pivot = column;
+				for (int row = column + 1; row < n; row++)
+				{
+					if (Math.abs(a[row][column]) > Math.abs(a[pivot][column]))
+					{
+						pivot = row;
+					}
+				}
+				double[] swap = a[column];
+				a[column] = a[pivot];
+				a[pivot] = swap;
+				double divisor = a[column][column];
+				if (Math.abs(divisor) < 1e-15)
+				{
+					continue;
+				}
+				for (int row = 0; row < n; row++)
+				{
+					if (row == column)
+					{
+						continue;
+					}
+					double factor = a[row][column] / divisor;
+					for (int k = column; k <= n; k++)
+					{
+						a[row][k] -= factor * a[column][k];
 					}
 				}
 			}
-			score.calibrationResidual = residual;
-			score.calibrationThreshold = threshold;
-			score.calibrationPValue = denominator <= 0
-					? 0.0
-					: clamp01((atLeastAsWide + 1.0) / (denominator + 1.0));
-			score.calibratedConfidence = clamp01(1.0 - residual
-					/ Math.max(0.001, threshold + 0.001));
-			boolean covered = residual <= threshold + 1.0e-9;
-			if (covered && score.calibrationPValue >= 0.30
-					&& score.confidenceLower >= 0.25)
+			double[] result = new double[n];
+			for (int i = 0; i < n; i++)
 			{
-				score.calibrationVerdict = "within the q"
-						+ Integer.toString((int)Math.round(STABILITY_QUANTILE * 100.0))
-						+ " self-consistency band";
+				result[i] = Math.abs(a[i][i]) < 1e-15 ? 0.0 : a[i][n] / a[i][i];
 			}
-			else if (covered)
-			{
-				score.calibrationVerdict = "inside the q"
-						+ Integer.toString((int)Math.round(STABILITY_QUANTILE * 100.0))
-						+ " band, review";
-			}
-			else
-			{
-				score.calibrationVerdict = "abstain: outside the self-consistency band";
-			}
-			score.calibrationNote = "self-consistency gap " + fmt(residual)
-					+ " vs q" + Integer.toString(
-							(int)Math.round(STABILITY_QUANTILE * 100.0))
-					+ " " + fmt(threshold)
-					+ ", rank fraction ~" + fmt(score.calibrationPValue)
-					+ " (self-consistency only; no held-out labels)";
+			return result;
 		}
+	}
 
-		private static double calibrationThreshold(List<CandidateScore> scores)
+	private static double sigmoid(double z)
+	{
+		if (z >= 0)
 		{
-			if (scores == null || scores.isEmpty())
-			{
-				return 0.0;
-			}
-			ArrayList<Double> residuals = new ArrayList<Double>();
-			for (CandidateScore score : scores)
-			{
-				residuals.add(Double.valueOf(calibrationResidual(score)));
-			}
-			Collections.sort(residuals);
-			int index = (int)Math.ceil((residuals.size() + 1)
-					* STABILITY_QUANTILE) - 1;
-			index = Math.max(0, Math.min(residuals.size() - 1, index));
-			return residuals.get(index).doubleValue();
+			double e = Math.exp(-z);
+			return 1.0 / (1.0 + e);
 		}
+		double e = Math.exp(z);
+		return e / (1.0 + e);
+	}
 
-		private static double calibrationResidual(CandidateScore score)
+	// ============================================================ explanation
+
+	/**
+	 * Fills the kept candidates' evidence: additive contributions, bootstrap
+	 * interval and rank stability, counterfactual ranks, the timeline and the
+	 * plain-language summaries. Ranks under counterfactuals are among all
+	 * candidates.
+	 */
+	private static void explain(UserProfile target, List<CandidateScore> kept, List<CandidateScore> all,
+			Prepared prepared)
+	{
+		FusionModel model = prepared.model;
+		//Ranks of every candidate under each bootstrap refit.
+		int n = all.size();
+		double[][] features = new double[n][];
+		for (int i = 0; i < n; i++)
 		{
-			if (score == null || score.timeline == null || score.timeline.isEmpty())
-			{
-				return 0.0;
-			}
-			int mid = Math.max(0, Math.min(score.timeline.size() - 1,
-					score.timeline.size() / 2));
-			double midScore = score.timeline.get(mid).score;
-			return clamp01(Math.abs(score.finalScore - midScore));
+			CandidateScore score = all.get(i);
+			features[i] = new double[] {score.text, score.graph, score.time};
 		}
-
-		private static void attachChallenger(
-				CandidateScore score,
-				CandidateScore challenger)
+		HashMap<CandidateScore,Integer> inTop = new HashMap<CandidateScore,Integer>();
+		HashMap<CandidateScore,double[]> samples = new HashMap<CandidateScore,double[]>();
+		java.util.IdentityHashMap<CandidateScore,Integer> positions = new java.util.IdentityHashMap<CandidateScore,Integer>();
+		for (int i = 0; i < n; i++)
 		{
-			if (score == null || challenger == null)
-			{
-				return;
-			}
-			score.challengerName = challenger.candidate.name;
-			score.challengerFollowee = challenger.candidate.followee;
-			score.challengerScore = challenger.finalScore;
-			score.challengerText = challenger.text;
-			score.challengerGraph = challenger.graph;
-			score.challengerTime = challenger.time;
-			score.challengerBridge = challenger.bridge;
-			score.challengerDebias = challenger.debias;
-			score.challengerRobust = challenger.robust;
-			score.challengerGap = score.finalScore - challenger.finalScore;
-			score.bestContrastSignal = bestContrastSignal(score, challenger);
+			positions.put(all.get(i), Integer.valueOf(i));
 		}
-
-		private static String bestContrastSignal(
-				CandidateScore score,
-				CandidateScore challenger)
+		for (CandidateScore score : kept)
 		{
-			double[] deltas = {
-					score.textContribution - challenger.textContribution,
-					score.graphContribution - challenger.graphContribution,
-					score.timeContribution - challenger.timeContribution,
-					score.bridgeContribution - challenger.bridgeContribution,
-					score.debiasContribution - challenger.debiasContribution,
-					score.robustContribution - challenger.robustContribution
-			};
-			String[] labels = {"text", "graph", "time", "bridge", "debias", "robust"};
-			int best = 0;
-			for (int i = 1; i < deltas.length; i++)
+			inTop.put(score, Integer.valueOf(0));
+			samples.put(score, new double[model.bootstrap.length]);
+		}
+		for (int b = 0; b < model.bootstrap.length; b++)
+		{
+			final double[] probabilities = new double[n];
+			Integer[] order = new Integer[n];
+			for (int i = 0; i < n; i++)
 			{
-				if (Math.abs(deltas[i]) > Math.abs(deltas[best]))
+				probabilities[i] = model.probability(model.bootstrap[b], features[i]);
+				order[i] = Integer.valueOf(i);
+			}
+			final List<CandidateScore> candidates = all;
+			Arrays.sort(order, new Comparator<Integer>()
+			{
+				public int compare(Integer first, Integer second)
 				{
-					best = i;
+					int byScore = Double.compare(probabilities[second.intValue()], probabilities[first.intValue()]);
+					return byScore != 0 ? byScore : candidates.get(first.intValue()).candidate.name
+							.compareTo(candidates.get(second.intValue()).candidate.name);
+				}
+			});
+			for (int position = 0; position < Math.min(STABILITY_TOP, n); position++)
+			{
+				CandidateScore score = all.get(order[position].intValue());
+				Integer count = inTop.get(score);
+				if (count != null)
+				{
+					inTop.put(score, Integer.valueOf(count.intValue() + 1));
 				}
 			}
-			return labels[best] + " "
-					+ (deltas[best] >= 0.0 ? "+" : "")
-					+ String.format(Locale.US, "%.3f", deltas[best]);
+			for (CandidateScore score : kept)
+			{
+				samples.get(score)[b] = probabilities[positions.get(score).intValue()];
+			}
 		}
-
-		private static double counterfactualFragility(CandidateScore score)
+		//Counterfactual ranks: each signal removed (set to its mean), and the top shared term removed.
+		int[][] counterfactualRanks = new int[4][];
+		double[][] counterfactualScores = new double[4][n];
+		for (int signal = 0; signal < 3; signal++)
 		{
-			if (score == null || score.counterfactuals == null
-					|| score.counterfactuals.isEmpty() || score.finalScore <= 0.0)
+			boolean[] removed = new boolean[3];
+			removed[signal] = true;
+			for (int i = 0; i < n; i++)
 			{
-				return 0.0;
+				counterfactualScores[signal][i] = model.probabilityWithout(features[i], removed);
 			}
-			double worst = 0.0;
-			for (CounterfactualProbe probe : score.counterfactuals)
-			{
-				double drop = probe.scoreDrop / Math.max(0.001, score.finalScore);
-				double shift = Math.min(1.0, probe.rankShift / 6.0);
-				worst = Math.max(worst, 0.74 * drop + 0.26 * shift);
-			}
-			return clamp01(worst);
+			counterfactualRanks[signal] = ranks(all, counterfactualScores[signal]);
 		}
-
-		private static double evidenceCoverage(CandidateScore score)
+		for (CandidateScore score : kept)
 		{
-			if (score == null)
-			{
-				return 0.0;
-			}
-			double present = 0.0;
-			present += score.text > 0.04 ? 1.0 : score.text * 12.5;
-			present += score.graph > 0.04 ? 1.0 : score.graph * 12.5;
-			present += score.time > 0.20 ? 1.0 : score.time * 2.5;
-			present += score.bridge > 0.04 ? 1.0 : score.bridge * 12.5;
-			present += score.debias > 0.20 ? 1.0 : score.debias * 2.5;
-			present += score.robust > 0.20 ? 1.0 : score.robust * 2.5;
-			return clamp01(present / 6.0);
+			score.sharedTerms = sharedTerms(target.tfidf, score.candidate.tfidf, DETAIL_TERM_LIMIT);
 		}
-
-		private static List<EvidenceAtom> buildEvidenceAtoms(CandidateScore score)
+		String topTerm = kept.isEmpty() || kept.get(0).sharedTerms.isEmpty() ? null : kept.get(0).sharedTerms.get(0);
+		double[] graphWithoutTerm = prepared.diffusion.spread(target, prepared.users.size(), topTerm);
+		for (int i = 0; i < n; i++)
 		{
-			ArrayList<EvidenceAtom> atoms = new ArrayList<EvidenceAtom>();
-			atoms.add(new EvidenceAtom(
-					"Text overlap",
-					score.text,
-					score.textContribution,
-					"shared terms: " + joinTerms(score.sharedTerms)));
-			atoms.add(new EvidenceAtom(
-					"Graph path",
-					score.graph,
-					score.graphContribution,
-					score.path));
-			atoms.add(new EvidenceAtom(
-					"Temporal alignment",
-					score.time,
-					score.timeContribution,
-					"target/candidate evidence is synchronized in the replay"));
-			atoms.add(new EvidenceAtom(
-					"Bridge",
-					score.bridge,
-					score.bridgeContribution,
-					"text, graph, and community-size evidence agree"));
-			atoms.add(new EvidenceAtom(
-					"Debias",
-					score.debias,
-					score.debiasContribution,
-					"discounts popularity-dominated followee communities"));
-			atoms.add(new EvidenceAtom(
-					"Robustness",
-					score.robust,
-					score.robustContribution,
-					"checks whether one signal is carrying the whole decision"));
-			return Collections.unmodifiableList(atoms);
+			CandidateScore score = all.get(i);
+			double[] x = features[i].clone();
+			if (topTerm != null)
+			{
+				x[TEXT] = cosineExcluding(target.tfidf, score.candidate.tfidf, topTerm);
+				x[GRAPH] = graphWithoutTerm[score.candidate.index];
+			}
+			counterfactualScores[3][i] = model.probability(x);
+			score.withoutTopTermText = x[TEXT];
 		}
-
-		private static List<String> buildRiskFlags(
-				CandidateScore score,
-				TemporalCorpus corpus,
-				GraphContext graph)
+		counterfactualRanks[3] = ranks(all, counterfactualScores[3]);
+		for (int i = 0; i < n; i++)
 		{
-			ArrayList<String> flags = new ArrayList<String>();
-			if (score.marginToNext < 0.025 && score.rank == 1)
-			{
-				flags.add("thin top-2 score margin");
-			}
-			if (score.confidenceRadius > 0.085)
-			{
-				flags.add("wide score band");
-			}
-			if (score.graph <= 0.04)
-			{
-				flags.add("no usable graph path");
-			}
-			if (score.robust < 0.34)
-			{
-				flags.add("single-signal heavy");
-			}
-			if (score.stability < 0.56)
-			{
-				flags.add("rank unstable under ablation");
-			}
-			if (score.counterfactualFragility > 0.52)
-			{
-				flags.add("high counterfactual fragility");
-			}
-			if (score.calibrationVerdict != null
-					&& score.calibrationVerdict.startsWith("abstain"))
-			{
-				flags.add("outside time-split calibration band");
-			}
-			if (corpus == null || corpus.datedRows <= 0)
-			{
-				flags.add("date coverage unavailable");
-			}
-			if (graph == null || graph.graphArtifactEdges <= 0)
-			{
-				flags.add("graph artifact edge file is sparse/empty");
-			}
-			if (flags.isEmpty())
-			{
-				flags.add("no critical evidence-limit flags");
-			}
-			return Collections.unmodifiableList(flags);
+			CandidateScore score = all.get(i);
+			score.withoutTextScore = counterfactualScores[TEXT][i];
+			score.withoutGraphScore = counterfactualScores[GRAPH][i];
+			score.withoutTimeScore = counterfactualScores[TIME][i];
+			score.withoutTopTermScore = counterfactualScores[3][i];
+			score.withoutBridgeScore = score.finalScore;
+			score.withoutDebiasScore = score.finalScore;
+			score.withoutTextRank = counterfactualRanks[TEXT][i];
+			score.withoutGraphRank = counterfactualRanks[GRAPH][i];
+			score.withoutTimeRank = counterfactualRanks[TIME][i];
+			score.withoutTopTermRank = counterfactualRanks[3][i];
+			score.withoutBridgeRank = score.rank;
+			score.withoutDebiasRank = score.rank;
 		}
-
-		private static String reliabilityBand(CandidateScore score)
+		for (int k = 0; k < kept.size(); k++)
 		{
-			if (score.stability >= 0.78 && score.counterfactualFragility <= 0.34
-					&& score.confidenceRadius <= 0.075)
-			{
-				return "strong evidence";
-			}
-			if (score.stability >= 0.58 && score.counterfactualFragility <= 0.55)
-			{
-				return "reviewable";
-			}
-			return "fragile";
+			CandidateScore score = kept.get(k);
+			score.textContribution = model.contribution(TEXT, score.text);
+			score.graphContribution = model.contribution(GRAPH, score.graph);
+			score.timeContribution = model.contribution(TIME, score.time);
+			score.model = model;
+			double[] draws = samples.get(score);
+			double[] sorted = draws.clone();
+			Arrays.sort(sorted);
+			score.confidenceLower = percentile(sorted, 0.05);
+			score.confidenceUpper = percentile(sorted, 0.95);
+			score.confidenceRadius = (score.confidenceUpper - score.confidenceLower) / 2.0;
+			score.stability = inTop.get(score).intValue() / (double)Math.max(1, model.bootstrap.length);
+			score.calibrationPValue = score.stability;
+			score.calibratedConfidence = score.finalScore;
+			score.marginToNext = k + 1 < all.size() ? Math.max(0.0, score.finalScore - all.get(k + 1).finalScore) : 0.0;
+			score.evidenceCoverage = coverage(score, prepared.corpus.available);
+			score.path = graphPath(score);
+			score.counterfactuals = counterfactuals(score, topTerm);
+			score.counterfactualFragility = fragility(score);
+			score.evidenceAtoms = atoms(score, prepared.corpus.available);
+			score.timeline = timeline(target, score, model, prepared.corpus);
+			CandidateScore challenger = k == 0 ? (all.size() > 1 ? all.get(1) : null) : all.get(0);
+			attachChallenger(score, challenger, model);
+			score.riskFlags = riskFlags(score, prepared.corpus, model);
+			score.reliabilityBand = score.stability >= 0.8 ? "stable" : score.stability >= 0.5 ? "reviewable" : "unstable";
+			score.calibrationVerdict = "in the top " + STABILITY_TOP + " under "
+					+ pct(score.stability) + " of " + model.bootstrap.length + " bootstrap refits";
+			score.calibrationNote = "90% bootstrap interval of the probability: "
+					+ fmt(score.confidenceLower) + " to " + fmt(score.confidenceUpper)
+					+ (model.supervised ? "" : " (unsupervised fusion: no sampling uncertainty)");
+			score.whyThis = whyThis(score);
+			score.whyNotChallenger = whyNotChallenger(score);
+			score.researchVerdict = score.reliabilityBand + " recommendation, led by " + leadingSignal(score);
 		}
-
-		private static String whyThis(CandidateScore score)
-		{
-			EvidenceAtom strongest = strongestAtom(score.evidenceAtoms);
-			String lead = strongest == null ? "multi-signal evidence"
-					: strongest.label.toLowerCase(Locale.US);
-			return "Rank " + rankText(score.rank) + " is driven most by " + lead
-					+ "; weighted score " + String.format(Locale.US, "%.4f", score.finalScore)
-					+ ", evidence coverage " + pct(score.evidenceCoverage)
-					+ ", stability " + pct(score.stability) + ".";
-		}
-
-		private static String whyNotChallenger(CandidateScore score)
-		{
-			if (score.challengerName == null || score.challengerName.length() == 0)
-			{
-				return "No close challenger was retained for contrast.";
-			}
-			String direction = score.challengerGap >= 0.0 ? "leads" : "trails";
-			return score.candidate.name + " " + direction + " "
-					+ score.challengerName + " by "
-					+ String.format(Locale.US, "%.4f", Math.abs(score.challengerGap))
-					+ "; largest contrast: " + score.bestContrastSignal + ".";
-		}
-
-		private static EvidenceAtom strongestAtom(List<EvidenceAtom> atoms)
-		{
-			if (atoms == null || atoms.isEmpty())
-			{
-				return null;
-			}
-			EvidenceAtom best = atoms.get(0);
-			for (EvidenceAtom atom : atoms)
-			{
-				if (atom.contribution > best.contribution)
-				{
-					best = atom;
-				}
-			}
-			return best;
-		}
-
-	private static double confidenceRadius(CandidateScore score)
-	{
-		double evidenceBalance = score.robust;
-		double temporalRisk = 1.0 - score.time;
-		double marginCredit = Math.min(0.05, score.marginToNext);
-		return clamp01(0.035 + 0.075 * (1.0 - evidenceBalance)
-				+ 0.035 * temporalRisk - marginCredit);
+		assignTimelineRanks(kept);
 	}
 
-	private static double stability(CandidateScore score)
+	private static int[] ranks(List<CandidateScore> all, final double[] scores)
 	{
-		double worstRankShift = Math.max(
-				Math.max(rankShift(score.rank, score.withoutTextRank),
-						rankShift(score.rank, score.withoutGraphRank)),
-				Math.max(rankShift(score.rank, score.withoutBridgeRank),
-						rankShift(score.rank, score.withoutTopTermRank)));
-		double rankPenalty = Math.min(0.65, worstRankShift / 10.0);
-		double intervalPenalty = Math.min(0.25, score.confidenceRadius * 2.0);
-		return clamp01(1.0 - rankPenalty - intervalPenalty);
-	}
-
-	private static int rankShift(int original, int alternative)
-	{
-		if (original <= 0 || alternative <= 0)
+		int n = all.size();
+		Integer[] order = new Integer[n];
+		for (int i = 0; i < n; i++)
 		{
-			return 0;
+			order[i] = Integer.valueOf(i);
 		}
-		return Math.abs(alternative - original);
+		final List<CandidateScore> candidates = all;
+		Arrays.sort(order, new Comparator<Integer>()
+		{
+			public int compare(Integer first, Integer second)
+			{
+				int byScore = Double.compare(scores[second.intValue()], scores[first.intValue()]);
+				return byScore != 0 ? byScore : candidates.get(first.intValue()).candidate.name
+						.compareTo(candidates.get(second.intValue()).candidate.name);
+			}
+		});
+		int[] ranks = new int[n];
+		for (int position = 0; position < n; position++)
+		{
+			ranks[order[position].intValue()] = position + 1;
+		}
+		return ranks;
 	}
 
-	private static List<TimelineFrame> buildTimeline(
-			UserProfile target,
-			CandidateScore score,
-			GraphContext graph,
+	private static double percentile(double[] sorted, double quantile)
+	{
+		if (sorted.length == 0)
+		{
+			return 0.0;
+		}
+		double position = quantile * (sorted.length - 1);
+		int low = (int)Math.floor(position);
+		int high = (int)Math.ceil(position);
+		return sorted[low] + (sorted[high] - sorted[low]) * (position - low);
+	}
+
+	private static double coverage(CandidateScore score, boolean timeAvailable)
+	{
+		int available = timeAvailable ? 3 : 2;
+		int present = (score.text > 0.0 ? 1 : 0) + (score.graph > 0.0 ? 1 : 0)
+				+ (timeAvailable && score.time > 0.0 ? 1 : 0);
+		return present / (double)available;
+	}
+
+	private static String graphPath(CandidateScore score)
+	{
+		if (score.graph <= 0.0)
+		{
+			return "no shared terms in the user-term graph";
+		}
+		return score.target.name + " -> " + (score.sharedTerms.isEmpty() ? "shared terms"
+				: joinTerms(score.sharedTerms)) + " -> " + score.candidate.name
+				+ " (diffusion " + pct(score.graph) + " of the target's best)";
+	}
+
+	private static List<CounterfactualProbe> counterfactuals(CandidateScore score, String topTerm)
+	{
+		ArrayList<CounterfactualProbe> probes = new ArrayList<CounterfactualProbe>();
+		probes.add(CounterfactualProbe.from("Remove text", score.withoutTextScore, score.withoutTextRank,
+				score.finalScore, score.rank));
+		probes.add(CounterfactualProbe.from("Remove graph", score.withoutGraphScore, score.withoutGraphRank,
+				score.finalScore, score.rank));
+		probes.add(CounterfactualProbe.from("Remove time", score.withoutTimeScore, score.withoutTimeRank,
+				score.finalScore, score.rank));
+		probes.add(CounterfactualProbe.from(topTerm == null ? "Remove top term"
+				: "Remove '" + topTerm + "' from the target",
+				score.withoutTopTermScore, score.withoutTopTermRank, score.finalScore, score.rank));
+		return Collections.unmodifiableList(probes);
+	}
+
+	/** The largest relative probability drop under any single counterfactual. */
+	private static double fragility(CandidateScore score)
+	{
+		if (score.finalScore <= 0.0)
+		{
+			return 0.0;
+		}
+		double worst = 0.0;
+		for (CounterfactualProbe probe : score.counterfactuals)
+		{
+			worst = Math.max(worst, probe.scoreDrop / score.finalScore);
+		}
+		return clamp01(worst);
+	}
+
+	private static List<EvidenceAtom> atoms(CandidateScore score, boolean timeAvailable)
+	{
+		ArrayList<EvidenceAtom> atoms = new ArrayList<EvidenceAtom>();
+		atoms.add(new EvidenceAtom("Text similarity", score.text, score.textContribution,
+				"TF-IDF cosine; shared terms: " + joinTerms(score.sharedTerms)));
+		atoms.add(new EvidenceAtom("Graph diffusion", score.graph, score.graphContribution, score.path));
+		atoms.add(new EvidenceAtom("Temporal co-activity", score.time, score.timeContribution,
+				timeAvailable ? "cosine of the two users' activity histograms over the dated span"
+						: "unavailable: the corpus has fewer than two distinct timestamps"));
+		return Collections.unmodifiableList(atoms);
+	}
+
+	/**
+	 * The probability recomputed with the temporal signal measured on activity
+	 * up to each frame's date (text and graph are this run's values).
+	 */
+	private static List<TimelineFrame> timeline(UserProfile target, CandidateScore score, FusionModel model,
 			TemporalCorpus corpus)
 	{
 		ArrayList<TimelineFrame> frames = new ArrayList<TimelineFrame>();
-		double previousScore = 0.0;
-		double graphArrival = graph.areConnected(target.name, score.candidate.name)
-				? Math.min(target.latestPosition, score.candidate.latestPosition)
-				: Math.max(target.latestPosition, score.candidate.latestPosition);
-		for (int i = 0; i < TIMELINE_FRAME_COUNT; i++)
+		if (!corpus.available)
 		{
-			double progress = TIMELINE_FRAME_COUNT <= 1 ? 1.0
-					: i / (double)(TIMELINE_FRAME_COUNT - 1);
-			double targetReady = profileReadiness(target, progress);
-			double candidateReady = profileReadiness(score.candidate, progress);
-			double pairReady = Math.sqrt(targetReady * candidateReady);
-			double graphReady = progress < graphArrival
-					? score.graph * 0.24 * pairReady
-					: score.graph * Math.min(1.0, 0.44 + pairReady);
-			double textReady = score.text * pairReady;
-			double timeReady = clamp01(score.time
-					* (0.35 + 0.65 * candidateReady)
-					* (0.72 + 0.28 * targetReady));
-			double bridgeReady = score.bridge * Math.min(1.0,
-					0.30 + 0.42 * pairReady + 0.28 * graphReady);
-			double debiasReady = score.debias * (0.50 + 0.50 * candidateReady);
-			double robustReady = robustness(textReady, graphReady, timeReady, bridgeReady);
-			double frameScore = fusedScore(
-					textReady,
-					graphReady,
-					timeReady,
-					bridgeReady,
-					debiasReady,
-					robustReady);
-			String label = progressLabel(progress, corpus);
-			String dominantSignal = dominantSignal(
-					textReady,
-					graphReady,
-					timeReady,
-					bridgeReady,
-					debiasReady,
-					robustReady);
-			String evidence = frameEvidence(
-					progress,
-					target,
-					score,
-					graphReady,
-					textReady);
-			String auditNote = dominantSignal + " led this frame; score delta "
-					+ signedFmt(i == 0 ? frameScore : frameScore - previousScore)
-					+ ".";
-			frames.add(new TimelineFrame(
-					i,
-					progress,
-					label,
-					frameScore,
-					textReady,
-					graphReady,
-					timeReady,
-					bridgeReady,
-					debiasReady,
-					robustReady,
-					evidence,
-					i == 0 ? frameScore : frameScore - previousScore,
-					dominantSignal,
-					auditNote));
-			previousScore = frameScore;
+			return Collections.unmodifiableList(frames);
+		}
+		double previous = 0.0;
+		for (int frame = 0; frame < TIMELINE_FRAME_COUNT; frame++)
+		{
+			double progress = (frame + 1) / (double)TIMELINE_FRAME_COUNT;
+			int bins = (int)Math.round(progress * ACTIVITY_BINS);
+			double time = coActivity(prefix(target.activity, bins), prefix(score.candidate.activity, bins));
+			double probability = model.probability(new double[] {score.text, score.graph, time});
+			long cutoff = corpus.minTime + Math.round(progress * (corpus.maxTime - corpus.minTime));
+			String label = date(cutoff);
+			String evidence = "co-activity up to " + label + ": " + pct(time);
+			frames.add(new TimelineFrame(frame, progress, label, probability, score.text, score.graph, time,
+					0.0, 0.0, 0.0, evidence, frame == 0 ? probability : probability - previous,
+					strongest(model, score.text, score.graph, time),
+					"probability " + fmt(probability) + " with activity observed up to " + label + "."));
+			previous = probability;
 		}
 		return Collections.unmodifiableList(frames);
 	}
 
-	private static String dominantSignal(
-			double text,
-			double graph,
-			double time,
-			double bridge,
-			double debias,
-			double robust)
+	private static String strongest(FusionModel model, double text, double graph, double time)
 	{
-		double[] values = {
-				TEXT_WEIGHT * text,
-				GRAPH_WEIGHT * graph,
-				TIME_WEIGHT * time,
-				BRIDGE_WEIGHT * bridge,
-				DEBIAS_WEIGHT * debias,
-				ROBUST_WEIGHT * robust
-		};
-		String[] labels = {"text", "graph", "time", "bridge", "debias", "robust"};
+		double[] contributions = {
+				model.contribution(TEXT, text), model.contribution(GRAPH, graph), model.contribution(TIME, time)};
 		int best = 0;
-		for (int i = 1; i < values.length; i++)
+		for (int i = 1; i < 3; i++)
 		{
-			if (values[i] > values[best])
+			if (contributions[i] > contributions[best])
 			{
 				best = i;
 			}
 		}
-		return labels[best];
+		return SIGNALS[best];
 	}
 
-	private static double profileReadiness(UserProfile profile, double progress)
+	private static void assignTimelineRanks(List<CandidateScore> scores)
 	{
-		if (profile.latestPosition <= profile.firstPosition)
+		if (scores.isEmpty() || scores.get(0).timeline.isEmpty())
 		{
-			return progress >= profile.latestPosition ? 1.0 : 0.0;
+			return;
 		}
-		return clamp01((progress - profile.firstPosition)
-				/ Math.max(0.001, profile.latestPosition - profile.firstPosition));
-	}
-
-	private static String progressLabel(double progress, TemporalCorpus corpus)
-	{
-		if (corpus.datedRows > 0 && corpus.maxTime > corpus.minTime)
+		int frames = scores.get(0).timeline.size();
+		for (int frame = 0; frame < frames; frame++)
 		{
-			long time = corpus.minTime
-					+ Math.round(progress * (corpus.maxTime - corpus.minTime));
-			return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(time));
-		}
-		if (corpus.maxLine > corpus.minLine)
-		{
-			long line = corpus.minLine
-					+ Math.round(progress * (corpus.maxLine - corpus.minLine));
-			return "line " + line;
-		}
-		return Integer.toString((int)Math.round(progress * 100.0)) + "%";
-	}
-
-	private static String frameEvidence(
-			double progress,
-			UserProfile target,
-			CandidateScore score,
-			double graphReady,
-			double textReady)
-	{
-		if (progress < Math.min(target.firstPosition, score.candidate.firstPosition))
-		{
-			return "before paired evidence appears";
-		}
-		if (textReady >= graphReady && textReady > 0.0)
-		{
-			return "text evidence leads with " + joinTerms(score.sharedTerms);
-		}
-		if (graphReady > 0.0)
-		{
-			return score.path;
-		}
-		return "temporal activity is warming up";
-	}
-
-	private static List<CounterfactualProbe> buildCounterfactuals(
-			CandidateScore score)
-	{
-		ArrayList<CounterfactualProbe> probes =
-				new ArrayList<CounterfactualProbe>();
-		probes.add(CounterfactualProbe.from(
-				"Remove text",
-				score.withoutTextScore,
-				score.withoutTextRank,
-				score.finalScore,
-				score.rank));
-		probes.add(CounterfactualProbe.from(
-				"Remove graph",
-				score.withoutGraphScore,
-				score.withoutGraphRank,
-				score.finalScore,
-				score.rank));
-		probes.add(CounterfactualProbe.from(
-				"Delay time",
-				score.withoutTimeScore,
-				score.withoutTimeRank,
-				score.finalScore,
-				score.rank));
-		probes.add(CounterfactualProbe.from(
-				"Remove bridge",
-				score.withoutBridgeScore,
-				score.withoutBridgeRank,
-				score.finalScore,
-				score.rank));
-		probes.add(CounterfactualProbe.from(
-				"Remove debias",
-				score.withoutDebiasScore,
-				score.withoutDebiasRank,
-				score.finalScore,
-				score.rank));
-		String term = score.sharedTerms == null || score.sharedTerms.isEmpty()
-				? "Remove top term" : "Remove '" + score.sharedTerms.get(0) + "'";
-		probes.add(CounterfactualProbe.from(
-				term,
-				score.withoutTopTermScore,
-				score.withoutTopTermRank,
-				score.finalScore,
-				score.rank));
-		return Collections.unmodifiableList(probes);
-	}
-
-	private static String verdict(CandidateScore score)
-	{
-			if (score.stability >= 0.78 && score.confidenceLower >= 0.30)
+			final int index = frame;
+			ArrayList<CandidateScore> ordered = new ArrayList<CandidateScore>(scores);
+			Collections.sort(ordered, new Comparator<CandidateScore>()
 			{
-				return score.reliabilityBand + " multi-signal recommendation";
+				public int compare(CandidateScore first, CandidateScore second)
+				{
+					return CandidateScore.compareScore(first, second,
+							first.timeline.get(index).score, second.timeline.get(index).score);
+				}
+			});
+			for (int i = 0; i < ordered.size(); i++)
+			{
+				TimelineFrame current = ordered.get(i).timeline.get(frame);
+				current.rank = i + 1;
+				current.previousRank = frame == 0 ? current.rank : ordered.get(i).timeline.get(frame - 1).rank;
 			}
-			if (score.withoutGraphRank > score.rank + 2)
+		}
+	}
+
+	private static void attachChallenger(CandidateScore score, CandidateScore challenger, FusionModel model)
+	{
+		if (challenger == null)
+		{
+			return;
+		}
+		score.challengerName = challenger.candidate.name;
+		score.challengerFollowee = challenger.candidate.followee;
+		score.challengerScore = challenger.finalScore;
+		score.challengerText = challenger.text;
+		score.challengerGraph = challenger.graph;
+		score.challengerTime = challenger.time;
+		score.challengerGap = score.finalScore - challenger.finalScore;
+		double[] deltas = {
+				model.contribution(TEXT, score.text) - model.contribution(TEXT, challenger.text),
+				model.contribution(GRAPH, score.graph) - model.contribution(GRAPH, challenger.graph),
+				model.contribution(TIME, score.time) - model.contribution(TIME, challenger.time)};
+		int best = 0;
+		for (int i = 1; i < 3; i++)
+		{
+			if (Math.abs(deltas[i]) > Math.abs(deltas[best]))
 			{
-				return "graph-sensitive recommendation";
+				best = i;
+			}
 		}
-		if (score.withoutTextRank > score.rank + 2)
+		score.bestContrastSignal = SIGNALS[best] + " " + String.format(Locale.US, "%+.3f", deltas[best])
+				+ " log-odds";
+	}
+
+	private static List<String> riskFlags(CandidateScore score, TemporalCorpus corpus, FusionModel model)
+	{
+		ArrayList<String> flags = new ArrayList<String>();
+		if (score.rank == 1 && score.marginToNext < score.confidenceRadius)
 		{
-			return "text-sensitive recommendation";
+			flags.add("the lead over the next candidate is inside the bootstrap interval");
 		}
-		if (score.withoutTimeRank > score.rank + 2)
+		if (score.stability < 0.5)
 		{
-			return "time-sensitive recommendation";
+			flags.add("in the top " + STABILITY_TOP + " under fewer than half of the bootstrap refits");
 		}
-		return "inspect counterfactual probes";
+		if (!corpus.available)
+		{
+			flags.add("temporal signal unavailable");
+		}
+		if (!model.supervised)
+		{
+			flags.add("unsupervised fusion (no labelled pairs to learn from)");
+		}
+		double total = Math.abs(score.textContribution) + Math.abs(score.graphContribution)
+				+ Math.abs(score.timeContribution);
+		double largest = Math.max(Math.abs(score.textContribution),
+				Math.max(Math.abs(score.graphContribution), Math.abs(score.timeContribution)));
+		if (total > 0.0 && largest / total > 0.85)
+		{
+			flags.add("one signal carries over 85% of the evidence");
+		}
+		if (flags.isEmpty())
+		{
+			flags.add("no evidence-limit flags");
+		}
+		return Collections.unmodifiableList(flags);
+	}
+
+	private static String leadingSignal(CandidateScore score)
+	{
+		double[] contributions = {score.textContribution, score.graphContribution, score.timeContribution};
+		int best = 0;
+		for (int i = 1; i < 3; i++)
+		{
+			if (contributions[i] > contributions[best])
+			{
+				best = i;
+			}
+		}
+		return SIGNALS[best];
+	}
+
+	private static String whyThis(CandidateScore score)
+	{
+		return "Rank " + rankText(score.rank) + ": probability " + fmt(score.finalScore)
+				+ " (90% bootstrap " + fmt(score.confidenceLower) + "-" + fmt(score.confidenceUpper)
+				+ ") of sharing the target's community, led by " + leadingSignal(score)
+				+ "; log-odds contributions text " + signedFmt(score.textContribution)
+				+ ", graph " + signedFmt(score.graphContribution)
+				+ ", time " + signedFmt(score.timeContribution) + ".";
+	}
+
+	private static String whyNotChallenger(CandidateScore score)
+	{
+		if (score.challengerName == null || score.challengerName.length() == 0)
+		{
+			return "No other candidate to contrast.";
+		}
+		return score.candidate.name + (score.challengerGap >= 0.0 ? " leads " : " trails ")
+				+ score.challengerName + " by " + String.format(Locale.US, "%.4f", Math.abs(score.challengerGap))
+				+ "; largest difference: " + score.bestContrastSignal + ".";
 	}
 
 	private static String detailFor(CandidateScore score)
 	{
-		return "TGF text " + pct(score.text)
-				+ ", graph " + pct(score.graph)
-				+ ", time " + pct(score.time)
-				+ ", bridge " + pct(score.bridge)
-				+ "; " + score.path
-				+ "; no-text rank " + rankText(score.withoutTextRank)
-				+ ", no-graph rank " + rankText(score.withoutGraphRank)
-				+ "; " + score.calibrationVerdict
-				+ "; shared " + joinTerms(score.sharedTerms);
+		return "TGF probability " + fmt(score.finalScore)
+				+ " (text " + pct(score.text) + ", graph " + pct(score.graph) + ", time " + pct(score.time)
+				+ "); " + score.calibrationVerdict + "; shared " + joinTerms(score.sharedTerms);
 	}
 
-	private static String rankText(int rank)
-	{
-		return rank <= 0 ? "n/a" : "#" + rank;
-	}
+	// ============================================================= evaluation
 
-	private static String pct(double value)
+	/**
+	 * Ablation lenses over all candidates: the fusion and each signal alone,
+	 * graded against the target's followee (Hit@1, Hit@3, MRR, NDCG@5).
+	 */
+	private static List<BenchmarkRow> benchmarkRows(UserProfile target, List<CandidateScore> all,
+			boolean timeAvailable)
 	{
-		return Integer.toString((int) Math.round(clamp01(value) * 100.0)) + "%";
-	}
-
-	private static String fmt(double value)
-	{
-		return String.format(Locale.US, "%.3f", Double.isFinite(value) ? value : 0.0);
-	}
-
-	private static String signedFmt(double value)
-	{
-		double safe = Double.isFinite(value) ? value : 0.0;
-		return (safe >= 0.0 ? "+" : "") + String.format(Locale.US, "%.3f", safe);
-	}
-
-	private static String joinTerms(List<String> terms)
-	{
-		if (terms == null || terms.isEmpty())
+		ArrayList<BenchmarkRow> rows = new ArrayList<BenchmarkRow>();
+		if (all.isEmpty() || target.followee.length() == 0)
 		{
-			return "no top shared terms";
+			return rows;
 		}
-		StringBuilder builder = new StringBuilder();
-		for (int i = 0; i < terms.size(); i++)
+		rows.add(lens("TGF fusion", "learned fusion of text, graph and time", target, all, -1));
+		rows.add(lens("Text only", "TF-IDF cosine (the Similarity algorithm)", target, all, TEXT));
+		rows.add(lens("Graph only", "mass diffusion on the user-term graph", target, all, GRAPH));
+		if (timeAvailable)
 		{
-			if (i > 0)
+			rows.add(lens("Time only", "temporal co-activity", target, all, TIME));
+		}
+		return Collections.unmodifiableList(rows);
+	}
+
+	private static BenchmarkRow lens(String label, String note, UserProfile target, List<CandidateScore> all,
+			final int signal)
+	{
+		ArrayList<CandidateScore> ordered = new ArrayList<CandidateScore>(all);
+		Collections.sort(ordered, new Comparator<CandidateScore>()
+		{
+			public int compare(CandidateScore first, CandidateScore second)
 			{
-				builder.append(", ");
+				return CandidateScore.compareScore(first, second, value(first, signal), value(second, signal));
 			}
-			builder.append(terms.get(i));
+		});
+		int relevant = 0;
+		for (CandidateScore score : all)
+		{
+			relevant += sameCommunity(target, score.candidate) ? 1 : 0;
 		}
-		return builder.toString();
+		int firstRelevant = 0;
+		double dcg = 0.0;
+		for (int i = 0; i < ordered.size(); i++)
+		{
+			if (sameCommunity(target, ordered.get(i).candidate))
+			{
+				if (firstRelevant == 0)
+				{
+					firstRelevant = i + 1;
+				}
+				if (i < 5)
+				{
+					dcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
+				}
+			}
+		}
+		double idcg = 0.0;
+		for (int i = 0; i < Math.min(5, relevant); i++)
+		{
+			idcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
+		}
+		CandidateScore top = ordered.get(0);
+		return new BenchmarkRow(label, top.candidate.name, value(top, signal), firstRelevant,
+				firstRelevant == 1 ? 1.0 : 0.0, firstRelevant > 0 && firstRelevant <= 3 ? 1.0 : 0.0,
+				firstRelevant > 0 ? 1.0 / firstRelevant : 0.0, idcg > 0.0 ? dcg / idcg : 0.0, note);
 	}
 
-	private static boolean sameLabel(UserProfile first, UserProfile second)
+	private static double value(CandidateScore score, int signal)
 	{
-		String a = safe(first.followee);
-		String b = safe(second.followee);
-		return a.length() > 0 && a.equals(b);
+		return signal == TEXT ? score.text : signal == GRAPH ? score.graph : signal == TIME ? score.time
+				: score.finalScore;
 	}
+
+	/** Grading only: whether a candidate follows the target's followee. */
+	private static boolean sameCommunity(UserProfile target, UserProfile candidate)
+	{
+		return target.followee.length() > 0 && target.followee.equals(candidate.followee);
+	}
+
+	static String weightsDescription()
+	{
+		return "learned per run by logistic regression on labelled non-target pairs (see the run summary)";
+	}
+
+	static String methodologySummary()
+	{
+		return "TGF ranks candidates by the probability that they share the target's community, from a "
+				+ "logistic fusion of three label-free signals: TF-IDF cosine, mass diffusion on the user-term "
+				+ "graph and temporal co-activity. The fusion is learned on labelled users that are not targets, "
+				+ "with bootstrap intervals and rank stability; the target's own followee is used only to grade "
+				+ "the result.";
+	}
+
+	// ================================================================= helpers
 
 	private static double cosine(Map<String,Double> first, Map<String,Double> second)
 	{
@@ -1644,93 +1593,68 @@ final class TemporalGraphFoundationModelSupport
 				dot += finite(entry.getValue()) * finite(other);
 			}
 		}
-		double norm = vectorNorm(first) * vectorNorm(second);
+		double norm = vectorNorm(first, null) * vectorNorm(second, null);
 		return norm <= 0.0 ? 0.0 : clamp01(dot / norm);
 	}
 
-	private static double cosineExcluding(
-			Map<String,Double> first,
-			Map<String,Double> second,
-			String excludedTerm)
+	private static double cosineExcluding(Map<String,Double> first, Map<String,Double> second, String excluded)
 	{
 		if (first == null || second == null || first.isEmpty() || second.isEmpty())
 		{
 			return 0.0;
 		}
-		Map<String,Double> smaller = first.size() <= second.size() ? first : second;
-		Map<String,Double> larger = smaller == first ? second : first;
 		double dot = 0.0;
-		for (Map.Entry<String,Double> entry : smaller.entrySet())
+		for (Map.Entry<String,Double> entry : first.entrySet())
 		{
-			if (entry.getKey().equals(excludedTerm))
+			if (entry.getKey().equals(excluded))
 			{
 				continue;
 			}
-			Double other = larger.get(entry.getKey());
+			Double other = second.get(entry.getKey());
 			if (other != null)
 			{
 				dot += finite(entry.getValue()) * finite(other);
 			}
 		}
-		double norm = vectorNormExcluding(first, excludedTerm)
-				* vectorNormExcluding(second, excludedTerm);
+		double norm = vectorNorm(first, excluded) * vectorNorm(second, excluded);
 		return norm <= 0.0 ? 0.0 : clamp01(dot / norm);
 	}
 
-	private static double vectorNorm(Map<String,Double> vector)
-	{
-		double total = 0.0;
-		for (Double value : vector.values())
-		{
-			double safe = finite(value);
-			total += safe * safe;
-		}
-		return Math.sqrt(total);
-	}
-
-	private static double vectorNormExcluding(
-			Map<String,Double> vector,
-			String excludedTerm)
+	private static double vectorNorm(Map<String,Double> vector, String excluded)
 	{
 		double total = 0.0;
 		for (Map.Entry<String,Double> entry : vector.entrySet())
 		{
-			if (entry.getKey().equals(excludedTerm))
+			if (entry.getKey().equals(excluded))
 			{
 				continue;
 			}
-			double safe = finite(entry.getValue());
-			total += safe * safe;
+			double value = finite(entry.getValue());
+			total += value * value;
 		}
 		return Math.sqrt(total);
 	}
 
-	private static List<String> sharedTerms(
-			Map<String,Double> first,
-			Map<String,Double> second,
-			int limit)
+	/** Shared terms by their contribution to the cosine (product of weights), ties by name. */
+	private static List<String> sharedTerms(Map<String,Double> first, Map<String,Double> second, int limit)
 	{
-		ArrayList<Map.Entry<String,Double>> shared =
-				new ArrayList<Map.Entry<String,Double>>();
-		if (first == null || second == null)
-		{
-			return Collections.emptyList();
-		}
+		ArrayList<Map.Entry<String,Double>> shared = new ArrayList<Map.Entry<String,Double>>();
 		for (Map.Entry<String,Double> entry : first.entrySet())
 		{
 			Double other = second.get(entry.getKey());
-			if (other != null)
+			double product = finite(entry.getValue()) * finite(other);
+			if (other != null && product > 0.0)
 			{
-				double weight = finite(entry.getValue()) + finite(other);
 				shared.add(new java.util.AbstractMap.SimpleImmutableEntry<String,Double>(
-						entry.getKey(), Double.valueOf(weight)));
+						entry.getKey(), Double.valueOf(product)));
 			}
 		}
-		Collections.sort(shared, new Comparator<Map.Entry<String,Double>>() {
-			public int compare(Map.Entry<String,Double> first, Map.Entry<String,Double> second)
+		Collections.sort(shared, new Comparator<Map.Entry<String,Double>>()
+		{
+			public int compare(Map.Entry<String,Double> a, Map.Entry<String,Double> b)
 			{
-				int score = Double.compare(second.getValue(), first.getValue());
-				return score != 0 ? score : first.getKey().compareTo(second.getKey());
+				int byWeight = Double.compare(b.getValue(), a.getValue());
+				return byWeight != 0 ? byWeight : a.getKey().compareTo(b.getKey());
 			}
 		});
 		ArrayList<String> terms = new ArrayList<String>();
@@ -1739,6 +1663,52 @@ final class TemporalGraphFoundationModelSupport
 			terms.add(shared.get(i).getKey());
 		}
 		return terms;
+	}
+
+	private static String date(long millis)
+	{
+		SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+		format.setTimeZone(TimeZone.getTimeZone("UTC"));
+		return format.format(new Date(millis));
+	}
+
+	private static String rankText(int rank)
+	{
+		return rank <= 0 ? "n/a" : "#" + rank;
+	}
+
+	private static String pct(double value)
+	{
+		return Integer.toString((int)Math.round(clamp01(value) * 100.0)) + "%";
+	}
+
+	private static String fmt(double value)
+	{
+		return String.format(Locale.US, "%.3f", Double.isFinite(value) ? value : 0.0);
+	}
+
+	private static String signedFmt(double value)
+	{
+		double safe = Double.isFinite(value) ? value : 0.0;
+		return String.format(Locale.US, "%+.3f", safe);
+	}
+
+	private static String joinTerms(List<String> terms)
+	{
+		if (terms == null || terms.isEmpty())
+		{
+			return "no shared terms";
+		}
+		StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < terms.size(); i++)
+		{
+			if (i > 0)
+			{
+				builder.append(", ");
+			}
+			builder.append(terms.get(i));
+		}
+		return builder.toString();
 	}
 
 	private static double finite(Double value)
@@ -1755,25 +1725,12 @@ final class TemporalGraphFoundationModelSupport
 		return value > 1.0 ? 1.0 : value;
 	}
 
-	private static String safe(String value)
-	{
-		return value == null ? "" : value.trim();
-	}
-
-	enum RankType
-	{
-		FINAL,
-		WITHOUT_TEXT,
-		WITHOUT_GRAPH,
-		WITHOUT_TIME,
-		WITHOUT_BRIDGE,
-		WITHOUT_DEBIAS,
-		WITHOUT_TOP_TERM
-	}
+	// ================================================================ records
 
 	static final class Input
 	{
 		final String runId;
+		/** The run corpus (RunCorpus) or a raw dataset file; read for timestamps only. */
 		final File datasetFile;
 		final Map<String,? extends Map<String,Double>> tfidfDocuments;
 		final Map<String,String> userFollowees;
@@ -1799,18 +1756,14 @@ final class TemporalGraphFoundationModelSupport
 			this.runId = runId == null ? "" : runId;
 			this.datasetFile = datasetFile;
 			this.tfidfDocuments = tfidfDocuments == null
-					? Collections.<String,Map<String,Double>>emptyMap()
-					: tfidfDocuments;
-			this.userFollowees = userFollowees == null
-					? Collections.<String,String>emptyMap() : userFollowees;
+					? Collections.<String,Map<String,Double>>emptyMap() : tfidfDocuments;
+			this.userFollowees = userFollowees == null ? Collections.<String,String>emptyMap() : userFollowees;
 			this.datasetUserFollowees = datasetUserFollowees == null
 					? Collections.<String,String>emptyMap() : datasetUserFollowees;
-			this.targetUsers = targetUsers == null
-					? Collections.<String>emptyList()
+			this.targetUsers = targetUsers == null ? Collections.<String>emptyList()
 					: new ArrayList<String>(targetUsers);
 			this.userPrimaryRecServer = userPrimaryRecServer == null
-					? Collections.<String,Integer>emptyMap()
-					: userPrimaryRecServer;
+					? Collections.<String,Integer>emptyMap() : userPrimaryRecServer;
 			this.currentNode = currentNode;
 			this.numRecAgents = Math.max(1, numRecAgents);
 			this.localResultLimit = Math.max(0, localResultLimit);
@@ -1818,17 +1771,9 @@ final class TemporalGraphFoundationModelSupport
 
 		static Input empty()
 		{
-			return new Input(
-					"",
-					null,
-					Collections.<String,Map<String,Double>>emptyMap(),
-					Collections.<String,String>emptyMap(),
-					Collections.<String,String>emptyMap(),
-					Collections.<String>emptyList(),
-					Collections.<String,Integer>emptyMap(),
-					1,
-					1,
-					0);
+			return new Input("", null, Collections.<String,Map<String,Double>>emptyMap(),
+					Collections.<String,String>emptyMap(), Collections.<String,String>emptyMap(),
+					Collections.<String>emptyList(), Collections.<String,Integer>emptyMap(), 1, 1, 0);
 		}
 	}
 
@@ -1845,16 +1790,9 @@ final class TemporalGraphFoundationModelSupport
 		private final LinkedHashMap<String,TargetReport> reports;
 		private final ResearchSummary researchSummary;
 
-		private Result(
-				String runId,
-				File datasetFile,
-				String summary,
-				long rowsScanned,
-				long datedRows,
-				int graphArtifactEdges,
-				Map<String,TreeMap<String,Double>> scores,
-				Map<String,TreeMap<String,String>> details,
-				Map<String,TargetReport> reports,
+		private Result(String runId, File datasetFile, String summary, long rowsScanned, long datedRows,
+				int graphArtifactEdges, Map<String,TreeMap<String,Double>> scores,
+				Map<String,TreeMap<String,String>> details, Map<String,TargetReport> reports,
 				ResearchSummary researchSummary)
 		{
 			this.runId = runId == null ? "" : runId;
@@ -1870,24 +1808,16 @@ final class TemporalGraphFoundationModelSupport
 			{
 				this.reports.putAll(reports);
 			}
-			this.researchSummary = researchSummary == null
-					? ResearchSummary.empty() : researchSummary;
+			this.researchSummary = researchSummary == null ? ResearchSummary.empty() : researchSummary;
 		}
 
 		static Result empty(String runId, File datasetFile, String summary)
 		{
-			return new Result(
-					runId,
-					datasetFile,
-					summary,
-					0L,
-					0L,
-					0,
+			return new Result(runId, datasetFile, summary, 0L, 0L, 0,
 					Collections.<String,TreeMap<String,Double>>emptyMap(),
 					Collections.<String,TreeMap<String,String>>emptyMap(),
-					Collections.<String,TargetReport>emptyMap(),
-					ResearchSummary.empty());
-			}
+					Collections.<String,TargetReport>emptyMap(), ResearchSummary.empty());
+		}
 
 		TreeMap<String,TreeMap<String,Double>> getScores()
 		{
@@ -1924,6 +1854,7 @@ final class TemporalGraphFoundationModelSupport
 			return datedRows;
 		}
 
+		/** Always 0: TGF reads no graph files; its graph is built from the run's own text. */
 		int getGraphArtifactEdges()
 		{
 			return graphArtifactEdges;
@@ -1943,297 +1874,57 @@ final class TemporalGraphFoundationModelSupport
 	static final class TargetReport
 	{
 		final String targetUser;
+		/** The target's actual followee, used only to grade the ranking. */
 		final String targetFollowee;
 		final List<CandidateScore> topCandidates;
 		final String headline;
+		/** Rank of the first same-community candidate among all candidates (0: none). */
 		final int relevantRank;
+		/** NDCG@5 against same-community relevance, ideal over min(|relevant|, 5). */
 		final double ndcgAtFive;
 		final int observedRows;
 		final String temporalCoverage;
 		final List<BenchmarkRow> benchmarkRows;
 
-		private TargetReport(
-				String targetUser,
-				String targetFollowee,
-				List<CandidateScore> topCandidates,
-				String headline,
-				int relevantRank,
-				double ndcgAtFive,
-				int observedRows,
-				String temporalCoverage,
+		private TargetReport(String targetUser, String targetFollowee, List<CandidateScore> topCandidates,
+				String headline, int relevantRank, double ndcgAtFive, int observedRows, String temporalCoverage,
 				List<BenchmarkRow> benchmarkRows)
 		{
 			this.targetUser = targetUser;
 			this.targetFollowee = targetFollowee;
-			this.topCandidates = Collections.unmodifiableList(
-					new ArrayList<CandidateScore>(topCandidates));
+			this.topCandidates = Collections.unmodifiableList(new ArrayList<CandidateScore>(topCandidates));
 			this.headline = headline;
 			this.relevantRank = relevantRank;
 			this.ndcgAtFive = ndcgAtFive;
 			this.observedRows = observedRows;
 			this.temporalCoverage = temporalCoverage;
-			this.benchmarkRows = Collections.unmodifiableList(
-					new ArrayList<BenchmarkRow>(benchmarkRows == null
-							? Collections.<BenchmarkRow>emptyList()
-							: benchmarkRows));
+			this.benchmarkRows = Collections.unmodifiableList(new ArrayList<BenchmarkRow>(
+					benchmarkRows == null ? Collections.<BenchmarkRow>emptyList() : benchmarkRows));
 		}
 
-		static TargetReport from(
-				UserProfile target,
-				List<CandidateScore> keptScores,
-				GraphContext graph,
-				TemporalCorpus corpus)
+		static TargetReport from(UserProfile target, List<CandidateScore> kept, List<CandidateScore> all,
+				List<BenchmarkRow> lenses, TemporalCorpus corpus)
 		{
 			String headline;
-			if (keptScores == null || keptScores.isEmpty())
+			if (kept.isEmpty())
 			{
-				headline = "No positive temporal graph candidates were found.";
+				headline = "No candidate received a positive probability.";
 			}
 			else
 			{
-				CandidateScore top = keptScores.get(0);
-				headline = top.candidate.name + " leads because "
-						+ "text=" + pct(top.text)
-						+ ", graph=" + pct(top.graph)
-						+ ", time=" + pct(top.time)
-							+ ", bridge=" + pct(top.bridge) + ".";
+				CandidateScore top = kept.get(0);
+				headline = top.candidate.name + " leads with probability " + fmt(top.finalScore)
+						+ " (text " + pct(top.text) + ", graph " + pct(top.graph) + ", time " + pct(top.time) + ").";
 			}
-			int relevantRank = firstRelevantRank(target, keptScores);
-			double ndcgAtFive = ndcgAtFive(target, keptScores);
-			return new TargetReport(
-					target.name,
-					target.followee,
-					keptScores == null
-							? Collections.<CandidateScore>emptyList()
-							: keptScores,
-					headline,
-					relevantRank,
-					ndcgAtFive,
-					target.observedRows,
-					coverageLabel(target, corpus),
-					benchmarkRows(target, keptScores));
+			BenchmarkRow fused = lenses.isEmpty() ? null : lenses.get(0);
+			String coverage = target.observedRows <= 0 ? "no rows in the corpus"
+					: corpus.available && target.latestTime != Long.MIN_VALUE
+							? target.observedRows + " rows from " + date(target.firstTime) + " to " + date(target.latestTime)
+							: target.observedRows + " rows, undated";
+			return new TargetReport(target.name, target.followee, kept, headline,
+					fused == null ? 0 : fused.relevantRank, fused == null ? 0.0 : fused.ndcgAtFive,
+					target.observedRows, coverage, lenses);
 		}
-
-		private static int firstRelevantRank(
-				UserProfile target,
-				List<CandidateScore> keptScores)
-		{
-			if (keptScores == null)
-			{
-				return 0;
-			}
-			for (int i = 0; i < keptScores.size(); i++)
-			{
-				if (sameLabel(target, keptScores.get(i).candidate))
-				{
-					return i + 1;
-				}
-			}
-			return 0;
-		}
-
-		private static double ndcgAtFive(
-				UserProfile target,
-				List<CandidateScore> keptScores)
-		{
-			if (keptScores == null || keptScores.isEmpty())
-			{
-				return 0.0;
-			}
-			double dcg = 0.0;
-			int relevant = 0;
-			for (int i = 0; i < keptScores.size() && i < 5; i++)
-			{
-				if (sameLabel(target, keptScores.get(i).candidate))
-				{
-					dcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
-					relevant++;
-				}
-			}
-			if (relevant == 0)
-			{
-				return 0.0;
-			}
-			double idcg = 0.0;
-			for (int i = 0; i < relevant; i++)
-			{
-				idcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
-			}
-			return idcg <= 0.0 ? 0.0 : clamp01(dcg / idcg);
-		}
-
-		private static String coverageLabel(UserProfile target, TemporalCorpus corpus)
-		{
-			if (target.observedRows <= 0)
-			{
-				return "no observed rows";
-			}
-			if (corpus.datedRows > 0 && target.latestTime != Long.MIN_VALUE)
-			{
-				return target.observedRows + " rows, temporal span "
-						+ pct(Math.max(0.0, target.latestPosition - target.firstPosition));
-			}
-			return target.observedRows + " rows, line-order span "
-					+ pct(Math.max(0.0, target.latestPosition - target.firstPosition));
-		}
-	}
-
-	private interface ScoreLens
-	{
-		double score(CandidateScore score);
-	}
-
-	private static List<BenchmarkRow> benchmarkRows(
-			UserProfile target,
-			List<CandidateScore> keptScores)
-	{
-		ArrayList<BenchmarkRow> rows = new ArrayList<BenchmarkRow>();
-		if (keptScores == null || keptScores.isEmpty())
-		{
-			return rows;
-		}
-		rows.add(benchmarkRow(
-				"TGF",
-				"observed fused evidence model",
-				target,
-				keptScores,
-				new ScoreLens() {
-					public double score(CandidateScore score)
-					{
-						return score.finalScore;
-					}
-				}));
-		rows.add(benchmarkRow(
-				"Similarity",
-				"text cosine lens",
-				target,
-				keptScores,
-				new ScoreLens() {
-					public double score(CandidateScore score)
-					{
-						return score.text;
-					}
-				}));
-		rows.add(benchmarkRow(
-				"Common Neighbors",
-				"graph-neighborhood lens",
-				target,
-				keptScores,
-				new ScoreLens() {
-					public double score(CandidateScore score)
-					{
-						return score.graph;
-					}
-				}));
-		rows.add(benchmarkRow(
-				"SVM margin proxy",
-				"class-separation lens, not a rerun SVM",
-				target,
-				keptScores,
-				new ScoreLens() {
-					public double score(CandidateScore score)
-					{
-						return clamp01(0.42 * score.text
-								+ 0.34 * score.graph
-								+ 0.16 * score.bridge
-								+ 0.08 * score.debias);
-					}
-				}));
-		rows.add(benchmarkRow(
-				"Doc2Vec proxy",
-				"semantic-temporal lens, not a Python rerun",
-				target,
-				keptScores,
-				new ScoreLens() {
-					public double score(CandidateScore score)
-					{
-						return clamp01(0.70 * score.text
-								+ 0.20 * score.time
-								+ 0.10 * score.robust);
-					}
-				}));
-		return Collections.unmodifiableList(rows);
-	}
-
-	private static BenchmarkRow benchmarkRow(
-			String label,
-			String note,
-			UserProfile target,
-			List<CandidateScore> keptScores,
-			ScoreLens lens)
-	{
-		ArrayList<CandidateScore> ordered = new ArrayList<CandidateScore>(keptScores);
-		Collections.sort(ordered, new Comparator<CandidateScore>() {
-			public int compare(CandidateScore first, CandidateScore second)
-			{
-				return CandidateScore.compareScore(
-						first,
-						second,
-						lens.score(first),
-						lens.score(second));
-			}
-		});
-		int relevantRank = firstRelevantRank(target, ordered);
-		double ndcg = ndcgAtFive(target, ordered);
-		CandidateScore top = ordered.isEmpty() ? null : ordered.get(0);
-		return new BenchmarkRow(
-				label,
-				top == null ? "" : top.candidate.name,
-				top == null ? 0.0 : lens.score(top),
-				relevantRank,
-				relevantRank == 1 ? 1.0 : 0.0,
-				relevantRank > 0 && relevantRank <= 3 ? 1.0 : 0.0,
-				relevantRank > 0 ? 1.0 / relevantRank : 0.0,
-				ndcg,
-				note);
-	}
-
-	private static int firstRelevantRank(
-			UserProfile target,
-			List<CandidateScore> orderedScores)
-	{
-		if (orderedScores == null)
-		{
-			return 0;
-		}
-		for (int i = 0; i < orderedScores.size(); i++)
-		{
-			if (sameLabel(target, orderedScores.get(i).candidate))
-			{
-				return i + 1;
-			}
-		}
-		return 0;
-	}
-
-	private static double ndcgAtFive(
-			UserProfile target,
-			List<CandidateScore> orderedScores)
-	{
-		if (orderedScores == null || orderedScores.isEmpty())
-		{
-			return 0.0;
-		}
-		double dcg = 0.0;
-		int relevant = 0;
-		for (int i = 0; i < orderedScores.size() && i < 5; i++)
-		{
-			if (sameLabel(target, orderedScores.get(i).candidate))
-			{
-				dcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
-				relevant++;
-			}
-		}
-		if (relevant == 0)
-		{
-			return 0.0;
-		}
-		double idcg = 0.0;
-		for (int i = 0; i < relevant; i++)
-		{
-			idcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
-		}
-		return idcg <= 0.0 ? 0.0 : clamp01(dcg / idcg);
 	}
 
 	static final class BenchmarkRow
@@ -2248,16 +1939,8 @@ final class TemporalGraphFoundationModelSupport
 		final double ndcgAtFive;
 		final String note;
 
-		private BenchmarkRow(
-				String label,
-				String topCandidate,
-				double topScore,
-				int relevantRank,
-				double hitAtOne,
-				double hitAtThree,
-				double mrr,
-				double ndcgAtFive,
-				String note)
+		private BenchmarkRow(String label, String topCandidate, double topScore, int relevantRank,
+				double hitAtOne, double hitAtThree, double mrr, double ndcgAtFive, String note)
 		{
 			this.label = label == null ? "" : label;
 			this.topCandidate = topCandidate == null ? "" : topCandidate;
@@ -2273,67 +1956,21 @@ final class TemporalGraphFoundationModelSupport
 
 	static final class CandidateScore
 	{
-		static final Comparator<CandidateScore> FINAL_ORDER =
-				new Comparator<CandidateScore>() {
-					public int compare(CandidateScore first, CandidateScore second)
-					{
-						return compareScore(first, second, first.finalScore, second.finalScore);
-					}
-				};
-		static final Comparator<CandidateScore> WITHOUT_TEXT_ORDER =
-				new Comparator<CandidateScore>() {
-					public int compare(CandidateScore first, CandidateScore second)
-					{
-						return compareScore(first, second,
-								first.withoutTextScore, second.withoutTextScore);
-					}
-				};
-		static final Comparator<CandidateScore> WITHOUT_GRAPH_ORDER =
-				new Comparator<CandidateScore>() {
-					public int compare(CandidateScore first, CandidateScore second)
-					{
-						return compareScore(first, second,
-								first.withoutGraphScore, second.withoutGraphScore);
-					}
-				};
-		static final Comparator<CandidateScore> WITHOUT_TIME_ORDER =
-				new Comparator<CandidateScore>() {
-					public int compare(CandidateScore first, CandidateScore second)
-					{
-						return compareScore(first, second,
-								first.withoutTimeScore, second.withoutTimeScore);
-					}
-				};
-		static final Comparator<CandidateScore> WITHOUT_BRIDGE_ORDER =
-				new Comparator<CandidateScore>() {
-					public int compare(CandidateScore first, CandidateScore second)
-					{
-						return compareScore(first, second,
-								first.withoutBridgeScore, second.withoutBridgeScore);
-					}
-				};
-		static final Comparator<CandidateScore> WITHOUT_DEBIAS_ORDER =
-				new Comparator<CandidateScore>() {
-					public int compare(CandidateScore first, CandidateScore second)
-					{
-						return compareScore(first, second,
-								first.withoutDebiasScore, second.withoutDebiasScore);
-					}
-				};
-		static final Comparator<CandidateScore> WITHOUT_TOP_TERM_ORDER =
-				new Comparator<CandidateScore>() {
-					public int compare(CandidateScore first, CandidateScore second)
-					{
-						return compareScore(first, second,
-								first.withoutTopTermScore, second.withoutTopTermScore);
-					}
-				};
+		static final Comparator<CandidateScore> FINAL_ORDER = new Comparator<CandidateScore>()
+		{
+			public int compare(CandidateScore first, CandidateScore second)
+			{
+				return compareScore(first, second, first.finalScore, second.finalScore);
+			}
+		};
 
 		final UserProfile target;
 		final UserProfile candidate;
+		private FusionModel model;
 		double text;
 		double graph;
 		double time;
+		/** Retired signals of the earlier heuristic model; always 0. */
 		double bridge;
 		double debias;
 		double robust;
@@ -2343,55 +1980,57 @@ final class TemporalGraphFoundationModelSupport
 		double withoutTimeScore;
 		double withoutBridgeScore;
 		double withoutDebiasScore;
-			double withoutTopTermScore;
-			double withoutTopTermText;
-			double textContribution;
-			double graphContribution;
-			double timeContribution;
-			double bridgeContribution;
-			double debiasContribution;
-			double robustContribution;
-			double marginToNext;
-			double confidenceRadius;
-			double confidenceLower;
-			double confidenceUpper;
-			double stability;
-			double evidenceCoverage;
+		double withoutTopTermScore;
+		double withoutTopTermText;
+		/** Additive log-odds contributions relative to the mean training pair. */
+		double textContribution;
+		double graphContribution;
+		double timeContribution;
+		double bridgeContribution;
+		double debiasContribution;
+		double robustContribution;
+		double marginToNext;
+		double confidenceRadius;
+		double confidenceLower;
+		double confidenceUpper;
+		/** Share of bootstrap refits that keep the candidate in the top ten. */
+		double stability;
+		double evidenceCoverage;
 		double counterfactualFragility;
 		double calibrationResidual;
 		double calibrationThreshold;
 		double calibrationPValue;
 		double calibratedConfidence;
 		double challengerScore;
-			double challengerGap;
-			double challengerText;
-			double challengerGraph;
-			double challengerTime;
-			double challengerBridge;
-			double challengerDebias;
-			double challengerRobust;
-			int rank;
-			int withoutTextRank;
-			int withoutGraphRank;
-			int withoutTimeRank;
-			int withoutBridgeRank;
-			int withoutDebiasRank;
-			int withoutTopTermRank;
-			String path;
-			String challengerName = "";
-			String challengerFollowee = "";
-			String bestContrastSignal = "n/a";
-			String reliabilityBand = "pending";
-			String calibrationVerdict = "calibration pending";
-			String calibrationNote = "";
-			String whyThis = "";
-			String whyNotChallenger = "";
-			List<String> sharedTerms = Collections.emptyList();
-			List<TimelineFrame> timeline = Collections.emptyList();
-			List<CounterfactualProbe> counterfactuals = Collections.emptyList();
-			List<EvidenceAtom> evidenceAtoms = Collections.emptyList();
-			List<String> riskFlags = Collections.emptyList();
-			String researchVerdict = "research evidence pending";
+		double challengerGap;
+		double challengerText;
+		double challengerGraph;
+		double challengerTime;
+		double challengerBridge;
+		double challengerDebias;
+		double challengerRobust;
+		int rank;
+		int withoutTextRank;
+		int withoutGraphRank;
+		int withoutTimeRank;
+		int withoutBridgeRank;
+		int withoutDebiasRank;
+		int withoutTopTermRank;
+		String path = "";
+		String challengerName = "";
+		String challengerFollowee = "";
+		String bestContrastSignal = "n/a";
+		String reliabilityBand = "pending";
+		String calibrationVerdict = "";
+		String calibrationNote = "";
+		String whyThis = "";
+		String whyNotChallenger = "";
+		List<String> sharedTerms = Collections.emptyList();
+		List<TimelineFrame> timeline = Collections.emptyList();
+		List<CounterfactualProbe> counterfactuals = Collections.emptyList();
+		List<EvidenceAtom> evidenceAtoms = Collections.emptyList();
+		List<String> riskFlags = Collections.emptyList();
+		String researchVerdict = "";
 
 		private CandidateScore(UserProfile target, UserProfile candidate)
 		{
@@ -2409,73 +2048,55 @@ final class TemporalGraphFoundationModelSupport
 			return candidate.followee;
 		}
 
-			String impactSummary()
-			{
-				return whyThis + " " + whyNotChallenger
-						+ " Removing text evidence rank "
-						+ rankText(withoutTextRank)
-						+ "; removing graph evidence rank "
-						+ rankText(withoutGraphRank)
-					+ "; removing bridge rank "
-					+ rankText(withoutBridgeRank)
-					+ "; stability " + pct(stability) + ".";
-		}
-
-		double counterfactualScore(
-				boolean removeGraph,
-				boolean removeTime,
-				boolean removeBridge,
-				boolean removeDebias,
-				boolean removeTopTerm)
+		String impactSummary()
 		{
-			double textValue = removeTopTerm ? withoutTopTermText : text;
-			double graphValue = removeGraph ? 0.0 : graph;
-			double timeValue = removeTime ? 0.0 : time;
-			double bridgeValue = removeBridge ? 0.0 : bridge;
-			double debiasValue = removeDebias ? 0.0 : debias;
-			return clamp01(fusedScore(
-					textValue,
-					graphValue,
-					timeValue,
-					bridgeValue,
-					debiasValue,
-					robustness(textValue, graphValue, timeValue, bridgeValue)));
+			return whyThis + " " + whyNotChallenger + " Without text: rank " + rankText(withoutTextRank)
+					+ "; without graph: rank " + rankText(withoutGraphRank) + "; without time: rank "
+					+ rankText(withoutTimeRank) + "; stability " + pct(stability) + ".";
 		}
 
-		private static int compareScore(
-				CandidateScore first,
-				CandidateScore second,
-				double firstScore,
+		/**
+		 * The probability with the chosen signals removed (set to the mean
+		 * training pair); the bridge and debias switches are ignored (those
+		 * signals were retired).
+		 */
+		double counterfactualScore(boolean removeGraph, boolean removeTime, boolean removeBridge,
+				boolean removeDebias, boolean removeTopTerm)
+		{
+			if (model == null)
+			{
+				return finalScore;
+			}
+			double[] x = {removeTopTerm ? withoutTopTermText : text, graph, time};
+			return model.probabilityWithout(x, new boolean[] {false, removeGraph, removeTime});
+		}
+
+		private static int compareScore(CandidateScore first, CandidateScore second, double firstScore,
 				double secondScore)
 		{
 			int score = Double.compare(secondScore, firstScore);
-			return score != 0
-					? score
-					: first.candidate.name.compareTo(second.candidate.name);
+			return score != 0 ? score : first.candidate.name.compareTo(second.candidate.name);
 		}
-		}
+	}
 
-		static final class EvidenceAtom
+	static final class EvidenceAtom
+	{
+		final String label;
+		final double value;
+		/** Additive log-odds contribution (may be negative). */
+		final double contribution;
+		final String explanation;
+
+		private EvidenceAtom(String label, double value, double contribution, String explanation)
 		{
-			final String label;
-			final double value;
-			final double contribution;
-			final String explanation;
-
-			private EvidenceAtom(
-					String label,
-					double value,
-					double contribution,
-					String explanation)
-			{
-				this.label = label == null ? "" : label;
-				this.value = clamp01(value);
-				this.contribution = Math.max(0.0, contribution);
-				this.explanation = explanation == null ? "" : explanation;
-			}
+			this.label = label == null ? "" : label;
+			this.value = clamp01(value);
+			this.contribution = contribution;
+			this.explanation = explanation == null ? "" : explanation;
 		}
+	}
 
-		static final class TimelineFrame
+	static final class TimelineFrame
 	{
 		final int index;
 		final double progress;
@@ -2494,21 +2115,9 @@ final class TemporalGraphFoundationModelSupport
 		int rank;
 		int previousRank;
 
-		private TimelineFrame(
-				int index,
-				double progress,
-				String label,
-				double score,
-				double text,
-				double graph,
-				double time,
-				double bridge,
-				double debias,
-				double robust,
-				String evidence,
-				double scoreDelta,
-				String dominantSignal,
-				String auditNote)
+		private TimelineFrame(int index, double progress, String label, double score, double text, double graph,
+				double time, double bridge, double debias, double robust, String evidence, double scoreDelta,
+				String dominantSignal, String auditNote)
 		{
 			this.index = index;
 			this.progress = clamp01(progress);
@@ -2531,87 +2140,61 @@ final class TemporalGraphFoundationModelSupport
 	{
 		final String label;
 		final double score;
-			final int rank;
-			final double scoreDrop;
-			final boolean rankChanged;
-			final int rankShift;
+		final int rank;
+		final double scoreDrop;
+		final boolean rankChanged;
+		final int rankShift;
 
-			private CounterfactualProbe(
-					String label,
-					double score,
-					int rank,
-					double scoreDrop,
-					boolean rankChanged,
-					int rankShift)
-			{
-				this.label = label == null ? "" : label;
-				this.score = clamp01(score);
-				this.rank = rank;
-				this.scoreDrop = Math.max(0.0, scoreDrop);
-				this.rankChanged = rankChanged;
-				this.rankShift = Math.max(0, rankShift);
-			}
-
-		static CounterfactualProbe from(
-				String label,
-				double score,
-				int rank,
-				double originalScore,
-				int originalRank)
+		private CounterfactualProbe(String label, double score, int rank, double scoreDrop, boolean rankChanged,
+				int rankShift)
 		{
-				return new CounterfactualProbe(
-						label,
-						score,
-						rank,
-						Math.max(0.0, originalScore - score),
-						originalRank > 0 && rank > originalRank,
-						originalRank > 0 && rank > 0
-								? Math.abs(rank - originalRank)
-								: 0);
-			}
+			this.label = label == null ? "" : label;
+			this.score = clamp01(score);
+			this.rank = rank;
+			this.scoreDrop = Math.max(0.0, scoreDrop);
+			this.rankChanged = rankChanged;
+			this.rankShift = Math.max(0, rankShift);
 		}
+
+		static CounterfactualProbe from(String label, double score, int rank, double originalScore, int originalRank)
+		{
+			return new CounterfactualProbe(label, score, rank, Math.max(0.0, originalScore - score),
+					originalRank > 0 && rank != originalRank,
+					originalRank > 0 && rank > 0 ? Math.abs(rank - originalRank) : 0);
+		}
+	}
 
 	static final class ResearchSummary
 	{
 		final int targetCount;
 		final int scoredPairs;
 		final int timelineFrames;
+		/** Fusion lens, averaged over the targets. */
 		final double hitAtOne;
 		final double hitAtThree;
 		final double mrr;
 		final double ndcgAtFive;
-			final double averageStability;
-			final double averageConfidenceWidth;
-			final double counterfactualFlipRate;
-			final double averageEvidenceCoverage;
-			final double averageCounterfactualFragility;
-			final double averageCalibrationPValue;
-			final double abstainRate;
-			final int evidenceLimitFlags;
-			final List<BenchmarkRow> benchmarkRows;
-			final FoundationReadiness foundationReadiness;
-			final String headline;
+		final double averageStability;
+		final double averageConfidenceWidth;
+		/** Share of kept candidates whose rank changes when one signal is removed. */
+		final double counterfactualFlipRate;
+		final double averageEvidenceCoverage;
+		final double averageCounterfactualFragility;
+		final double averageCalibrationPValue;
+		/** Share of kept candidates in the top ten under fewer than half of the refits. */
+		final double abstainRate;
+		final int evidenceLimitFlags;
+		final List<BenchmarkRow> benchmarkRows;
+		final FoundationReadiness foundationReadiness;
+		final String headline;
 
-		private ResearchSummary(
-				int targetCount,
-				int scoredPairs,
-				int timelineFrames,
-				double hitAtOne,
-				double hitAtThree,
-				double mrr,
-					double ndcgAtFive,
-					double averageStability,
-					double averageConfidenceWidth,
-					double counterfactualFlipRate,
-					double averageEvidenceCoverage,
-					double averageCounterfactualFragility,
-					double averageCalibrationPValue,
-					double abstainRate,
-					int evidenceLimitFlags,
-					List<BenchmarkRow> benchmarkRows,
-					FoundationReadiness foundationReadiness,
-					String headline)
-			{
+		private ResearchSummary(int targetCount, int scoredPairs, int timelineFrames, double hitAtOne,
+				double hitAtThree, double mrr, double ndcgAtFive, double averageStability,
+				double averageConfidenceWidth, double counterfactualFlipRate, double averageEvidenceCoverage,
+				double averageCounterfactualFragility, double averageCalibrationPValue, double abstainRate,
+				int evidenceLimitFlags, List<BenchmarkRow> benchmarkRows, FoundationReadiness foundationReadiness,
+				String headline)
+		{
 			this.targetCount = Math.max(0, targetCount);
 			this.scoredPairs = Math.max(0, scoredPairs);
 			this.timelineFrames = Math.max(0, timelineFrames);
@@ -2619,242 +2202,129 @@ final class TemporalGraphFoundationModelSupport
 			this.hitAtThree = clamp01(hitAtThree);
 			this.mrr = clamp01(mrr);
 			this.ndcgAtFive = clamp01(ndcgAtFive);
-				this.averageStability = clamp01(averageStability);
-				this.averageConfidenceWidth = clamp01(averageConfidenceWidth);
-				this.counterfactualFlipRate = clamp01(counterfactualFlipRate);
-				this.averageEvidenceCoverage = clamp01(averageEvidenceCoverage);
-				this.averageCounterfactualFragility =
-						clamp01(averageCounterfactualFragility);
-				this.averageCalibrationPValue = clamp01(averageCalibrationPValue);
-				this.abstainRate = clamp01(abstainRate);
-				this.evidenceLimitFlags = Math.max(0, evidenceLimitFlags);
-				this.benchmarkRows = Collections.unmodifiableList(
-						new ArrayList<BenchmarkRow>(benchmarkRows == null
-								? Collections.<BenchmarkRow>emptyList()
-								: benchmarkRows));
-				this.foundationReadiness = foundationReadiness == null
-						? FoundationReadiness.empty() : foundationReadiness;
-				this.headline = headline == null ? "" : headline;
-			}
+			this.averageStability = clamp01(averageStability);
+			this.averageConfidenceWidth = clamp01(averageConfidenceWidth);
+			this.counterfactualFlipRate = clamp01(counterfactualFlipRate);
+			this.averageEvidenceCoverage = clamp01(averageEvidenceCoverage);
+			this.averageCounterfactualFragility = clamp01(averageCounterfactualFragility);
+			this.averageCalibrationPValue = clamp01(averageCalibrationPValue);
+			this.abstainRate = clamp01(abstainRate);
+			this.evidenceLimitFlags = Math.max(0, evidenceLimitFlags);
+			this.benchmarkRows = Collections.unmodifiableList(new ArrayList<BenchmarkRow>(
+					benchmarkRows == null ? Collections.<BenchmarkRow>emptyList() : benchmarkRows));
+			this.foundationReadiness = foundationReadiness == null ? FoundationReadiness.empty() : foundationReadiness;
+			this.headline = headline == null ? "" : headline;
+		}
 
 		static ResearchSummary empty()
 		{
-			return new ResearchSummary(
-					0,
-					0,
-					0,
-					0.0,
-					0.0,
-					0.0,
-					0.0,
-						0.0,
-						0.0,
-						0.0,
-							0.0,
-							0.0,
-							0.0,
-							0.0,
-							0,
-						Collections.<BenchmarkRow>emptyList(),
-						FoundationReadiness.empty(),
-						"No TGF research trace has been recorded yet.");
+			return new ResearchSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+					Collections.<BenchmarkRow>emptyList(), FoundationReadiness.empty(),
+					"No TGF run has been recorded yet.");
 		}
 
-		static ResearchSummary from(
-				Collection<TargetReport> reports,
-				int scoredPairs,
-				TemporalCorpus corpus,
-				GraphContext graph)
+		static ResearchSummary from(Collection<TargetReport> reports, int scoredPairs, TemporalCorpus corpus,
+				FusionModel model)
 		{
 			if (reports == null || reports.isEmpty())
 			{
 				return empty();
 			}
 			int targets = 0;
-			int hitOne = 0;
-			int hitThree = 0;
-			int timelineFrames = 0;
+			int frames = 0;
 			int candidates = 0;
-			int rankSensitive = 0;
-			double mrrTotal = 0.0;
-			double ndcgTotal = 0.0;
-				double stabilityTotal = 0.0;
-				double widthTotal = 0.0;
-				double coverageTotal = 0.0;
-				double fragilityTotal = 0.0;
-				double calibrationTotal = 0.0;
-				int abstainCount = 0;
-				int evidenceLimitFlags = 0;
-				for (TargetReport report : reports)
+			int flips = 0;
+			int unstable = 0;
+			int flags = 0;
+			double stability = 0.0;
+			double width = 0.0;
+			double coverage = 0.0;
+			double fragility = 0.0;
+			for (TargetReport report : reports)
 			{
 				targets++;
-				if (report.relevantRank == 1)
-				{
-					hitOne++;
-				}
-				if (report.relevantRank > 0 && report.relevantRank <= 3)
-				{
-					hitThree++;
-				}
-				if (report.relevantRank > 0)
-				{
-					mrrTotal += 1.0 / report.relevantRank;
-				}
-				ndcgTotal += report.ndcgAtFive;
 				for (CandidateScore score : report.topCandidates)
 				{
 					candidates++;
-					timelineFrames += score.timeline.size();
-						stabilityTotal += score.stability;
-						coverageTotal += score.evidenceCoverage;
-						fragilityTotal += score.counterfactualFragility;
-						calibrationTotal += score.calibrationPValue;
-						if (score.calibrationVerdict != null
-								&& score.calibrationVerdict.startsWith("abstain"))
-						{
-							abstainCount++;
-						}
-						widthTotal += Math.max(0.0,
-								score.confidenceUpper - score.confidenceLower);
-						if (score.riskFlags != null)
-						{
-							for (String flag : score.riskFlags)
-							{
-								if (flag != null
-										&& !"no critical evidence-limit flags".equals(flag))
-								{
-									evidenceLimitFlags++;
-								}
-							}
-						}
-						if (score.withoutGraphRank > score.rank + 1
-							|| score.withoutTextRank > score.rank + 1
-							|| score.withoutBridgeRank > score.rank + 1)
+					frames += score.timeline.size();
+					stability += score.stability;
+					width += Math.max(0.0, score.confidenceUpper - score.confidenceLower);
+					coverage += score.evidenceCoverage;
+					fragility += score.counterfactualFragility;
+					if (score.stability < 0.5)
 					{
-						rankSensitive++;
+						unstable++;
+					}
+					if (score.withoutTextRank != score.rank || score.withoutGraphRank != score.rank
+							|| score.withoutTimeRank != score.rank)
+					{
+						flips++;
+					}
+					for (String flag : score.riskFlags)
+					{
+						if (!"no evidence-limit flags".equals(flag))
+						{
+							flags++;
+						}
 					}
 				}
 			}
-			double targetDenominator = Math.max(1, targets);
-			double candidateDenominator = Math.max(1, candidates);
-			String headline = "Temporal holdout proxy: "
-					+ pct(hitOne / targetDenominator)
-					+ " Hit@1, " + pct(hitThree / targetDenominator)
-					+ " Hit@3, " + scoredPairs + " scored pairs.";
-			List<BenchmarkRow> benchmarkRows =
-					aggregateBenchmarkRows(reports);
-			FoundationReadiness readiness =
-					FoundationReadiness.from(
-							coverageTotal / candidateDenominator,
-							calibrationTotal / candidateDenominator,
-							abstainCount / candidateDenominator,
-							corpus,
-							graph,
-							benchmarkRows);
-			return new ResearchSummary(
-					targets,
-					scoredPairs,
-					timelineFrames,
-					hitOne / targetDenominator,
-					hitThree / targetDenominator,
-					mrrTotal / targetDenominator,
-					ndcgTotal / targetDenominator,
-						stabilityTotal / candidateDenominator,
-						widthTotal / candidateDenominator,
-						rankSensitive / candidateDenominator,
-						coverageTotal / candidateDenominator,
-						fragilityTotal / candidateDenominator,
-						calibrationTotal / candidateDenominator,
-						abstainCount / candidateDenominator,
-						evidenceLimitFlags,
-						benchmarkRows,
-						readiness,
-						headline);
+			List<BenchmarkRow> lenses = aggregate(reports);
+			BenchmarkRow fused = lenses.isEmpty() ? null : lenses.get(0);
+			double denominator = Math.max(1, candidates);
+			String headline = fused == null ? "No graded targets."
+					: "Fusion lens over " + targets + " target(s): Hit@1 " + pct(fused.hitAtOne) + ", Hit@3 "
+							+ pct(fused.hitAtThree) + ", MRR " + fmt(fused.mrr) + ", NDCG@5 " + fmt(fused.ndcgAtFive) + ".";
+			return new ResearchSummary(targets, scoredPairs, frames,
+					fused == null ? 0.0 : fused.hitAtOne, fused == null ? 0.0 : fused.hitAtThree,
+					fused == null ? 0.0 : fused.mrr, fused == null ? 0.0 : fused.ndcgAtFive,
+					stability / denominator, width / denominator, flips / denominator, coverage / denominator,
+					fragility / denominator, stability / denominator, unstable / denominator, flags, lenses,
+					FoundationReadiness.from(corpus, model, coverage / denominator), headline);
 		}
-	}
 
-	private static List<BenchmarkRow> aggregateBenchmarkRows(
-			Collection<TargetReport> reports)
-	{
-		if (reports == null || reports.isEmpty())
+		private static List<BenchmarkRow> aggregate(Collection<TargetReport> reports)
 		{
-			return Collections.emptyList();
-		}
-		LinkedHashMap<String,BenchmarkAccumulator> accumulators =
-				new LinkedHashMap<String,BenchmarkAccumulator>();
-		for (TargetReport report : reports)
-		{
-			if (report == null || report.benchmarkRows == null)
+			LinkedHashMap<String,double[]> totals = new LinkedHashMap<String,double[]>();
+			LinkedHashMap<String,String> notes = new LinkedHashMap<String,String>();
+			LinkedHashMap<String,String> tops = new LinkedHashMap<String,String>();
+			for (TargetReport report : reports)
 			{
-				continue;
-			}
-			for (BenchmarkRow row : report.benchmarkRows)
-			{
-				BenchmarkAccumulator accumulator = accumulators.get(row.label);
-				if (accumulator == null)
+				for (BenchmarkRow row : report.benchmarkRows)
 				{
-					accumulator = new BenchmarkAccumulator(row.label, row.note);
-					accumulators.put(row.label, accumulator);
+					double[] total = totals.get(row.label);
+					if (total == null)
+					{
+						total = new double[6];
+						totals.put(row.label, total);
+						notes.put(row.label, row.note);
+						tops.put(row.label, row.topCandidate);
+					}
+					total[0] += 1.0;
+					total[1] += row.hitAtOne;
+					total[2] += row.hitAtThree;
+					total[3] += row.mrr;
+					total[4] += row.ndcgAtFive;
+					total[5] += row.topScore;
 				}
-				accumulator.add(row);
 			}
-		}
-		ArrayList<BenchmarkRow> rows = new ArrayList<BenchmarkRow>();
-		for (BenchmarkAccumulator accumulator : accumulators.values())
-		{
-			rows.add(accumulator.toRow());
-		}
-		return Collections.unmodifiableList(rows);
-	}
-
-	private static final class BenchmarkAccumulator
-	{
-		private final String label;
-		private final String note;
-		private int count;
-		private double hitOne;
-		private double hitThree;
-		private double mrr;
-		private double ndcg;
-		private double topScore;
-		private String topCandidate = "";
-
-		BenchmarkAccumulator(String label, String note)
-		{
-			this.label = label;
-			this.note = note;
-		}
-
-		void add(BenchmarkRow row)
-		{
-			count++;
-			hitOne += row.hitAtOne;
-			hitThree += row.hitAtThree;
-			mrr += row.mrr;
-			ndcg += row.ndcgAtFive;
-			topScore += row.topScore;
-			if (topCandidate.length() == 0 && row.topCandidate.length() > 0)
+			ArrayList<BenchmarkRow> rows = new ArrayList<BenchmarkRow>();
+			for (Map.Entry<String,double[]> entry : totals.entrySet())
 			{
-				topCandidate = row.topCandidate;
+				double[] t = entry.getValue();
+				double n = Math.max(1.0, t[0]);
+				rows.add(new BenchmarkRow(entry.getKey(), tops.get(entry.getKey()), t[5] / n, 0, t[1] / n, t[2] / n,
+						t[3] / n, t[4] / n, notes.get(entry.getKey())));
 			}
-		}
-
-		BenchmarkRow toRow()
-		{
-			double denominator = Math.max(1, count);
-			return new BenchmarkRow(
-					label,
-					topCandidate,
-					topScore / denominator,
-					0,
-					hitOne / denominator,
-					hitThree / denominator,
-					mrr / denominator,
-					ndcg / denominator,
-					note);
+			return Collections.unmodifiableList(rows);
 		}
 	}
 
+	/**
+	 * What the run's evidence rests on: the share of dated rows, the share of
+	 * training pairs with graph evidence, the mean evidence coverage of the kept
+	 * candidates, and the fusion's held-out pair AUC ({@code overall}).
+	 */
 	static final class FoundationReadiness
 	{
 		final double temporalDepth;
@@ -2866,131 +2336,53 @@ final class TemporalGraphFoundationModelSupport
 		final String label;
 		final String note;
 
-		private FoundationReadiness(
-				double temporalDepth,
-				double graphCoverage,
-				double evidenceCoverage,
-				double calibrationTrust,
-				double benchmarkHonesty,
-				String label,
-				String note)
+		private FoundationReadiness(double temporalDepth, double graphCoverage, double evidenceCoverage,
+				double calibrationTrust, double benchmarkHonesty, double overall, String label, String note)
 		{
 			this.temporalDepth = clamp01(temporalDepth);
 			this.graphCoverage = clamp01(graphCoverage);
 			this.evidenceCoverage = clamp01(evidenceCoverage);
 			this.calibrationTrust = clamp01(calibrationTrust);
 			this.benchmarkHonesty = clamp01(benchmarkHonesty);
-			this.overall = clamp01(0.22 * this.temporalDepth
-					+ 0.18 * this.graphCoverage
-					+ 0.24 * this.evidenceCoverage
-					+ 0.22 * this.calibrationTrust
-					+ 0.14 * this.benchmarkHonesty);
+			this.overall = clamp01(overall);
 			this.label = label == null ? "" : label;
 			this.note = note == null ? "" : note;
 		}
 
 		static FoundationReadiness empty()
 		{
-			return new FoundationReadiness(
-					0.0,
-					0.0,
-					0.0,
-					0.0,
-					0.0,
-					"no evidence twin yet",
-					"Run TGF to produce temporal, graph, calibration, and benchmark evidence.");
+			return new FoundationReadiness(0, 0, 0, 0, 0, 0, "no run yet", "Run TGF to fit and evaluate the fusion.");
 		}
 
-		static FoundationReadiness from(
-				double evidenceCoverage,
-				double calibrationPValue,
-				double abstainRate,
-				TemporalCorpus corpus,
-				GraphContext graph,
-				List<BenchmarkRow> benchmarkRows)
+		static FoundationReadiness from(TemporalCorpus corpus, FusionModel model, double coverage)
 		{
-			double temporalDepth = corpus == null || corpus.rowsScanned <= 0
-					? 0.0
-					: (corpus.datedRows > 0
-							? clamp01(corpus.datedRows
-									/ (double)Math.max(1L, corpus.rowsScanned))
-							: 0.45);
-			double graphCoverage = graph == null
-					? 0.0
-					: (graph.graphArtifactEdges > 0 ? 1.0
-							: graph.usersByFollowee.isEmpty() ? 0.0 : 0.58);
-			double benchmarkHonesty = benchmarkRows == null || benchmarkRows.isEmpty()
-					? 0.0
-					: Math.min(1.0, benchmarkRows.size() / 5.0);
-			double calibrationTrust = clamp01(0.74 * calibrationPValue
-					+ 0.26 * (1.0 - abstainRate));
-			double preliminary = clamp01(0.22 * temporalDepth
-					+ 0.18 * graphCoverage
-					+ 0.24 * evidenceCoverage
-					+ 0.22 * calibrationTrust
-					+ 0.14 * benchmarkHonesty);
-			String label;
-			if (preliminary >= 0.78)
-			{
-				label = "foundation-ready evidence twin";
-			}
-			else if (preliminary >= 0.58)
-			{
-				label = "research-grade evidence scaffold";
-			}
-			else
-			{
-				label = "experimental evidence lens";
-			}
-			String note = "Not a pretrained graph foundation model; readiness reflects "
-					+ "temporal depth, graph coverage, evidence coverage, calibration, "
-					+ "and benchmark transparency.";
-			return new FoundationReadiness(
-					temporalDepth,
-					graphCoverage,
-					evidenceCoverage,
-					calibrationTrust,
-					benchmarkHonesty,
-					label,
-					note);
+			double dated = corpus.rowsScanned <= 0 ? 0.0 : corpus.datedRows / (double)corpus.rowsScanned;
+			double auc = Double.isNaN(model.heldOutAuc) ? 0.0 : model.heldOutAuc;
+			String label = !model.supervised ? "unsupervised fusion"
+					: Double.isNaN(model.heldOutAuc) ? "learned fusion (no held-out anchors)"
+					: "learned fusion, held-out pair AUC " + fmt(model.heldOutAuc);
+			return new FoundationReadiness(dated, model.active[GRAPH] ? 1.0 : 0.0, coverage, auc,
+					model.supervised ? 1.0 : 0.0, auc, label, model.describe());
 		}
 	}
 
 	private static final class UserProfile
 	{
+		final int index;
 		final String name;
-		String followee;
+		final String followee;
 		final LinkedHashMap<String,Double> tfidf;
+		double[] activity;
 		long firstTime = Long.MAX_VALUE;
 		long latestTime = Long.MIN_VALUE;
-		long firstLine = Long.MAX_VALUE;
-		long latestLine = -1L;
-		int rowCount;
 		int observedRows;
-		double recency = 0.50;
-		double firstPosition;
-		double latestPosition = 0.50;
 
-		UserProfile(String name, String followee, Map<String,Double> tfidf)
+		UserProfile(int index, String name, String followee, Map<String,Double> tfidf)
 		{
+			this.index = index;
 			this.name = name;
-			this.followee = followee == null ? "" : followee;
-			this.tfidf = new LinkedHashMap<String,Double>();
-			this.tfidf.putAll(tfidf);
-		}
-
-		void observeTime(long time)
-		{
-			firstTime = Math.min(firstTime, time);
-			latestTime = Math.max(latestTime, time);
-			rowCount++;
-		}
-
-		void observeLine(long line)
-		{
-			firstLine = Math.min(firstLine, line);
-			latestLine = Math.max(latestLine, line);
-			observedRows++;
+			this.followee = followee == null ? "" : followee.trim();
+			this.tfidf = new LinkedHashMap<String,Double>(tfidf);
 		}
 	}
 
@@ -3000,111 +2392,33 @@ final class TemporalGraphFoundationModelSupport
 		long datedRows;
 		long minTime = Long.MAX_VALUE;
 		long maxTime = Long.MIN_VALUE;
-		long minLine = Long.MAX_VALUE;
-		long maxLine = Long.MIN_VALUE;
-		boolean limitReached;
-		String warning;
+		boolean available;
+		String warning = "";
 	}
 
-	private static final class GraphContext
+	private static TreeMap<String,TreeMap<String,Double>> copyNestedDouble(Map<String,TreeMap<String,Double>> source)
 	{
-		final LinkedHashMap<String,LinkedHashSet<String>> usersByFollowee =
-				new LinkedHashMap<String,LinkedHashSet<String>>();
-		final Map<String,LinkedHashSet<String>> graphNeighbors =
-				new HashMap<String,LinkedHashSet<String>>();
-		final List<String> sampleEdges = new ArrayList<String>();
-		int maxFolloweeSize = 1;
-		int graphArtifactEdges;
-
-		void connect(String first, String second)
-		{
-			addNeighbor(first, second);
-			addNeighbor(second, first);
-		}
-
-		boolean areConnected(String first, String second)
-		{
-			Set<String> neighbors = graphNeighbors.get(first);
-			return neighbors != null && neighbors.contains(second);
-		}
-
-		int commonNeighborCount(String first, String second)
-		{
-			Set<String> firstNeighbors = graphNeighbors.get(first);
-			Set<String> secondNeighbors = graphNeighbors.get(second);
-			if (firstNeighbors == null || secondNeighbors == null
-					|| firstNeighbors.isEmpty() || secondNeighbors.isEmpty())
-			{
-				return 0;
-			}
-			Set<String> smaller = firstNeighbors.size() <= secondNeighbors.size()
-					? firstNeighbors : secondNeighbors;
-			Set<String> larger = smaller == firstNeighbors
-					? secondNeighbors : firstNeighbors;
-			int count = 0;
-			for (String value : smaller)
-			{
-				if (larger.contains(value))
-				{
-					count++;
-				}
-			}
-			return count;
-		}
-
-		private void addNeighbor(String source, String target)
-		{
-			LinkedHashSet<String> neighbors = graphNeighbors.get(source);
-			if (neighbors == null)
-			{
-				neighbors = new LinkedHashSet<String>();
-				graphNeighbors.put(source, neighbors);
-			}
-			neighbors.add(target);
-		}
-	}
-
-	private static final class GraphSignal
-	{
-		final double value;
-		final String path;
-
-		GraphSignal(double value, String path)
-		{
-			this.value = value;
-			this.path = path;
-		}
-	}
-
-	private static TreeMap<String,TreeMap<String,Double>> copyNestedDouble(
-			Map<String,TreeMap<String,Double>> source)
-	{
-		TreeMap<String,TreeMap<String,Double>> copy =
-				new TreeMap<String,TreeMap<String,Double>>();
+		TreeMap<String,TreeMap<String,Double>> copy = new TreeMap<String,TreeMap<String,Double>>();
 		if (source != null)
 		{
 			for (Map.Entry<String,TreeMap<String,Double>> entry : source.entrySet())
 			{
 				copy.put(entry.getKey(), entry.getValue() == null
-						? new TreeMap<String,Double>()
-						: new TreeMap<String,Double>(entry.getValue()));
+						? new TreeMap<String,Double>() : new TreeMap<String,Double>(entry.getValue()));
 			}
 		}
 		return copy;
 	}
 
-	private static TreeMap<String,TreeMap<String,String>> copyNestedString(
-			Map<String,TreeMap<String,String>> source)
+	private static TreeMap<String,TreeMap<String,String>> copyNestedString(Map<String,TreeMap<String,String>> source)
 	{
-		TreeMap<String,TreeMap<String,String>> copy =
-				new TreeMap<String,TreeMap<String,String>>();
+		TreeMap<String,TreeMap<String,String>> copy = new TreeMap<String,TreeMap<String,String>>();
 		if (source != null)
 		{
 			for (Map.Entry<String,TreeMap<String,String>> entry : source.entrySet())
 			{
 				copy.put(entry.getKey(), entry.getValue() == null
-						? new TreeMap<String,String>()
-						: new TreeMap<String,String>(entry.getValue()));
+						? new TreeMap<String,String>() : new TreeMap<String,String>(entry.getValue()));
 			}
 		}
 		return copy;

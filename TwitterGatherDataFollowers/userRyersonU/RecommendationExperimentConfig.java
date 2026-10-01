@@ -18,6 +18,8 @@ final class RecommendationExperimentConfig implements Serializable
 	private final String datasetPath;
 	private final long datasetSize;
 	private final long datasetLastModified;
+	/** The run's canonical normalised corpus (see RunCorpus), or null. */
+	private final String runCorpusPath;
 
 	RecommendationExperimentConfig(
 			RecommendationTargetMode targetMode,
@@ -60,6 +62,7 @@ final class RecommendationExperimentConfig implements Serializable
 				? absoluteDataset.length() : -1L;
 		this.datasetLastModified = absoluteDataset != null && absoluteDataset.isFile()
 				? absoluteDataset.lastModified() : -1L;
+		this.runCorpusPath = null;
 		this.targetUsers = new ArrayList<String>();
 		if (targetUsers != null)
 		{
@@ -71,6 +74,31 @@ final class RecommendationExperimentConfig implements Serializable
 				}
 			}
 		}
+	}
+
+	private RecommendationExperimentConfig(RecommendationExperimentConfig base, File runCorpus)
+	{
+		this.targetMode = base.targetMode;
+		this.algorithm = base.algorithm;
+		this.sourceType = base.sourceType;
+		this.graphGenerationEnabled = base.graphGenerationEnabled;
+		this.datasetPath = base.datasetPath;
+		this.datasetSize = base.datasetSize;
+		this.datasetLastModified = base.datasetLastModified;
+		this.targetUsers = new ArrayList<String>(base.targetUsers);
+		this.runCorpusPath = runCorpus == null ? null : runCorpus.getAbsolutePath();
+	}
+
+	/** The same configuration reading its text from {@code runCorpus}. */
+	RecommendationExperimentConfig withRunCorpus(File runCorpus)
+	{
+		return new RecommendationExperimentConfig(this, runCorpus);
+	}
+
+	/** The run's canonical normalised corpus, or null when none was written. */
+	File getRunCorpusFile()
+	{
+		return runCorpusPath == null ? null : new File(runCorpusPath);
 	}
 
 	static RecommendationExperimentConfig legacyDefault(int algorithm, int sourceType)

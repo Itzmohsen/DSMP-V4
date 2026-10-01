@@ -200,8 +200,26 @@ what keeps the distributed algorithms bit-identical.
   the crash, but the coordinator only notices after the detection timeout
   (500 ms by default) and only then reschedules that node's work. While the
   node is down its data cannot be read, so units homed there wait for its
-  repair. Node-local work in progress is redone after the repair: the node's
-  state is durable, its progress is not. A repaired node rejoins empty.
+  repair. A crash stops the node's emulated work at once; its threads block
+  until the repair. A repaired node rejoins empty.
+- **What a crash loses.** A unit in progress is revoked and restarts wherever
+  the scheduler sends it. Node-local work is durable at every
+  synchronisation point (a collective, a message to the coordinator, the end
+  of a unit). A crash loses only the work since the thread's last durable
+  point, which is redone from scratch after the repair. A second crash during
+  that redo restarts it rather than adding another redo. The ledger's redo
+  time is the redo actually slept, and its slept time still equals what the
+  model owed.
+- **Progress guarantee.** A node-local step lost to 200 crashes in a row, or
+  a unit lost to 200 crashes, takes longer than the time between crashes and
+  can never finish. The run fails with that diagnosis instead of running
+  forever. A step of duration T on nodes crashing every MTBF needs about
+  e^(T/MTBF) attempts, so this happens only when T is several MTBFs. Crash
+  losses never count against a unit's failure budget.
+- **Real errors.** Unit work is deterministic, so only environment failures
+  are retried within the real-failure budget: I/O such as a crashed worker
+  process, timeouts, and running out of memory. Any other error fails the
+  phase at once with its reason.
 
 ## 4. Execution modes and scheduling
 
@@ -314,6 +332,16 @@ milliseconds.
 | `events.csv`, `controls.csv` | operator actions, scenario steps, faults, placement decisions; every control as the replay re-applies it |
 | `replay.csv` | each phase replayed with its live policy: predicted vs live makespan, relative error |
 | `counterfactuals.csv` | the main phase replayed under every policy |
+| `recommendations.csv` | the merged ranked lists: target, its followee, rank, candidate, its followee, score, relevant |
+| `quality.json`, `quality-targets.csv` | the run's ranking quality (`DSMP_V4_EVALUATION.md`): every metric with its interval, chance and MostPop baselines and tests; each target's own figures |
+
+`runs-index.csv` also carries the run's headline quality (k, scored targets,
+hit rate, P@k, R@k, NDCG@k, MRR, MAP@k, NDCG chance level, lift and p-value,
+top-1 accuracy). An index written by an older version is migrated in place.
+
+Every notification of a run (initialized, finished, failed) carries the
+run's id, and the window ignores those of a superseded run. A run that is
+still winding down can therefore never fail, finish or redefine the next run.
 
 `RunRecordReader` loads any past run back, so the Results page, What-If and
 replays work on old runs exactly as on a run that just finished.
@@ -501,6 +529,18 @@ A study directory (`Results/Studies/<stamp>_<name>/`) contains:
   Similarity, Common-Neighbors, K-Means, K-Means Euclidean, Exact SVM,
   Scalable Linear SVM, MLP, Doc2Vec and Temporal Graph Foundation.
   72 of 72 comparisons were bit-identical.
+
+  After the evaluation and crash-model changes of `DSMP_V4_EVALUATION.md`,
+  the suites were rerun on 2026-10-01 with four targets per run for every
+  algorithm, every result delivered through the structured path:
+  - Retail, classifiers converted to similar users: 15 of 15.
+  - Retail, rankers converted to followee accounts: 30 of 30.
+  - The 480-user Universal benchmark, all nine algorithms in their own mode,
+    in configurations 2, 4 and 8: 27 of 27.
+
+  Every comparison was identical to its one-node reference. In the earlier
+  run, K-Means with crash processes on 4 nodes never finished. It now takes
+  12.5 s, and the runs after it are unaffected.
 - **Endurance and fidelity.** A 42-run study (Similarity, 3 nodes
   strong/normal/weak, original DSMP vs work stealing, 20 repetitions plus 2
   warm-up runs):

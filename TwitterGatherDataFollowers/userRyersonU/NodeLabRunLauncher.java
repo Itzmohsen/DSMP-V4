@@ -92,6 +92,10 @@ final class NodeLabRunLauncher
 		{
 			return "Load a dataset and get its users in the Simulator tab first.";
 		}
+		if (gui.selectedTargetCount() <= 0)
+		{
+			return "Choose the recommendation targets on the Simulator's Targets page first.";
+		}
 		if (!gui.isReadyToInitialize())
 		{
 			return "The simulator is busy; wait until its current step finishes.";

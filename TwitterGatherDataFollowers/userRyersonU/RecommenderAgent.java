@@ -87,7 +87,6 @@ import org.neuroph.core.Neuron;
 import org.neuroph.core.Connection;
 import org.neuroph.core.Weight;
 import org.neuroph.core.transfer.TransferFunction;
-import org.neuroph.contrib.learning.SoftMax;
 import org.neuroph.core.learning.LearningRule;
 import org.neuroph.nnet.learning.BackPropagation;
 import org.neuroph.eval.CrossValidation;  //Sepide
@@ -3038,10 +3037,11 @@ public class RecommenderAgent extends Agent
 			}
 			else if (algorithmRec == TEMPORAL_GRAPH_FOUNDATION)
 			{
-				Map<String,String> errors = buildMissingScoreErrors(
+				//Each target is scored on the one node that committed it; the other
+				//nodes do not hold it, which is not an error.
+				Map<String,String> errors = buildMissingScoreErrorsForHeldTargets(
 						allUserScores,
-						"Temporal Graph Foundation found no positive text, graph, or temporal candidates on this node.",
-						false);
+						"Temporal Graph Foundation found no positive text, graph, or temporal candidates.");
 				content = RecommendationScorePayload.directWithDetails(
 						recommendationConfig.getTargetMode(),
 						RecommendationCandidateType.USER,
@@ -3057,8 +3057,24 @@ public class RecommenderAgent extends Agent
 			}
 			else
 			{
-				content = (Serializable) allUserScores;
-				toMergeMsg.setOntology("Merge Lists");
+				//The algorithm's own output (users for the rankers, followee
+				//accounts for the classifiers) takes the same structured path as
+				//every converted mode: one merge, one ranking rule, and a result
+				//every target receives and the run's evaluation scores. Each
+				//candidate's score comes from exactly one node, so MAX keeps it
+				//unchanged; a node that holds no candidate of a target is not an
+				//error, so missing scores are left for the merge to judge.
+				RecommendationCandidateType nativeType =
+						RecommendationModeSupport.nativeCandidateType(algorithmRec);
+				content = RecommendationScorePayload.directWithDetails(
+						recommendationConfig.getTargetMode(),
+						nativeType == null ? RecommendationCandidateType.USER : nativeType,
+						RecommendationMergePolicy.MAX,
+						usersRec,
+						allUserScores,
+						null,
+						Collections.<String,String>emptyMap());
+				toMergeMsg.setOntology("Merge Recommendation Scores V2");
 				scoreTargetsForTelemetry = allUserScores.size();
 				scoreCandidatesForTelemetry =
 						countScoreCandidates(allUserScores);
@@ -3230,6 +3246,38 @@ public class RecommenderAgent extends Agent
 				if (!hasPositive)
 				{
 					errors.put(target, message);
+				}
+			}
+			return errors;
+		}
+
+		/** Like {@link #buildMissingScoreErrors}, for the targets this node holds scores for. */
+		private Map<String,String> buildMissingScoreErrorsForHeldTargets(
+				Map<String,? extends Map<?,Double>> scores,
+				String message)
+		{
+			Map<String,String> errors = new TreeMap<String,String>();
+			if (scores == null)
+			{
+				return errors;
+			}
+			for (Map.Entry<String,? extends Map<?,Double>> row : scores.entrySet())
+			{
+				boolean hasPositive = false;
+				if (row.getValue() != null)
+				{
+					for (Double score : row.getValue().values())
+					{
+						if (score != null && Double.isFinite(score) && score > 0.0)
+						{
+							hasPositive = true;
+							break;
+						}
+					}
+				}
+				if (!hasPositive)
+				{
+					errors.put(row.getKey(), message);
 				}
 			}
 			return errors;
@@ -3747,6 +3795,9 @@ public class RecommenderAgent extends Agent
 							}
 						});
 				final int limit = isUserRankerFolloweeMode() ? 0 : getCosSimLocalResultLimit();
+				//Corpus-wide term degrees (users per term), the same on every node.
+				final Map<String,Integer> termDegrees = allTermsDocumentFreq;
+				final String linkVariant = algorithmSettings().getCommonNeighborsVariant();
 				final LinkedHashMap<String,Map<String,Double>> targetDocuments =
 						new LinkedHashMap<String,Map<String,Double>>();
 				final TreeMap<String,TreeMap<String,Double>> rows =
@@ -3785,7 +3836,8 @@ public class RecommenderAgent extends Agent
 										}
 										Map<String,Double> candidateDocument = plan.vectorOf(candidate);
 										row.put(candidate, commonNeighbors
-												? calculateCommonNeighborScore(target.getValue(), candidateDocument)
+												? SparseRecommendationMath.linkPredictionScore(
+														target.getValue(), candidateDocument, termDegrees, linkVariant)
 												: calculateUnitVectorCosine(target.getValue(), candidateDocument));
 									}
 									unitRows.put(target.getKey(), GlobalTopRows.localTop(row, limit));
@@ -3845,7 +3897,10 @@ public class RecommenderAgent extends Agent
 					final int topn) throws Exception
 			{
 				final List<String> targets = distinctTargets();
-				final File dataset = getConfiguredDatasetFile();
+				//The run's canonical corpus: the same users, tweets and tokens the
+				//other algorithms receive (RunCorpus); the raw dataset otherwise.
+				File runCorpus = recommendationConfig == null ? null : recommendationConfig.getRunCorpusFile();
+				final File dataset = runCorpus != null && runCorpus.isFile() ? runCorpus : getConfiguredDatasetFile();
 				if (dataset == null)
 				{
 					throw new IllegalStateException(
@@ -4026,7 +4081,9 @@ public class RecommenderAgent extends Agent
 				final String phaseKey = "tgf-targets";
 				final List<String> targets = distinctTargets();
 				final int limit = getCosSimLocalResultLimit();
-				final File dataset = getConfiguredDatasetFile();
+				//Activity profiles come from the run's canonical corpus (RunCorpus).
+				File runCorpus = recommendationConfig == null ? null : recommendationConfig.getRunCorpusFile();
+				final File dataset = runCorpus != null && runCorpus.isFile() ? runCorpus : getConfiguredDatasetFile();
 				final LinkedHashMap<String,String> datasetFollowees =
 						new LinkedHashMap<String,String>(datasetUserFollowee);
 				final String runId = runLifecycle.getActiveRunId();
@@ -4487,28 +4544,10 @@ public class RecommenderAgent extends Agent
 					final SchedulingRunContext context) throws Exception
 			{
 				List<String> targets = distinctTargets();
-				HashSet<String> heldOut = new HashSet<String>(targets);
 				HashSet<String> centralTrain = new HashSet<String>(
 						centralTrainSetUsers == null ? Collections.<String>emptyList() : centralTrainSetUsers);
 				HashSet<String> centralTest = new HashSet<String>(
 						centralTestSetUsers == null ? Collections.<String>emptyList() : centralTestSetUsers);
-				ArrayList<String> train = new ArrayList<String>();
-				ArrayList<String> test = new ArrayList<String>();
-				for (String user : corpus.users())
-				{
-					if (heldOut.contains(user) || corpus.labelOf(user) == null)
-					{
-						continue;
-					}
-					if (centralTrain.contains(user))
-					{
-						train.add(user);
-					}
-					else if (centralTest.contains(user))
-					{
-						test.add(user);
-					}
-				}
 				String[] classNames = (datasetFollowees == null
 						? Collections.<String>emptyList() : datasetFollowees).toArray(new String[0]);
 				LinkedHashMap<String,Integer> classIndex = new LinkedHashMap<String,Integer>();
@@ -4518,197 +4557,326 @@ public class RecommenderAgent extends Agent
 				}
 				TreeSet<String> vocabulary = centralUniqueDocTerms != null && !centralUniqueDocTerms.isEmpty()
 						? centralUniqueDocTerms : new TreeSet<String>(corpus.terms());
-				HashSet<String> trainClasses = new HashSet<String>();
-				for (String user : train)
+				LinkedHashMap<String,String> labels = new LinkedHashMap<String,String>();
+				for (String user : corpus.users())
 				{
-					if (classIndex.containsKey(corpus.labelOf(user)))
+					String label = corpus.labelOf(user);
+					if (label != null && classIndex.containsKey(label))
 					{
-						trainClasses.add(corpus.labelOf(user));
+						labels.put(user, label);
 					}
 				}
-				if (trainClasses.size() < 2)
-				{
-					throw new IllegalStateException("MLP needs at least two followee classes in the training "
-							+ "set after the recommendation targets are held out; it has "
-							+ trainClasses.size() + ".");
-				}
+				//A target is never in the training data of the model that predicts
+				//it: all targets are held out of one model, or fold by fold when
+				//they are many (TargetFolds).
+				List<List<String>> folds = TargetFolds.of(targets, labels, labels.size());
 				ArrayList<String> report = new ArrayList<String>();
 				report.add("MLP (" + settings.getMlpEngineLabel() + ") on the whole run: "
-						+ train.size() + " training and " + test.size() + " test users, "
-						+ targets.size() + " held-out target(s), " + vocabulary.size()
+						+ TargetFolds.describe(folds, labels.size()) + "; " + vocabulary.size()
 						+ " features, " + classNames.length + " classes.");
 				TreeMap<String,TreeMap<String,Double>> scores = new TreeMap<String,TreeMap<String,Double>>();
-				long trainStart;
-				long trainNanos;
-				long testStart;
-				long testNanos;
-				if (settings.isSparseFederatedMlpEnabled())
+				long trainNanos = 0L;
+				long testNanos = 0L;
+				int correct = 0;
+				int tested = 0;
+				for (int foldIndex = 0; foldIndex < folds.size(); foldIndex++)
 				{
-					Map<String,Integer> termIndex = buildSparseMlpTermIndex(vocabulary);
-					List<SparseFederatedMlpModelSupport.TrainingExample> trainExamples =
-							sparseExamples(train, corpus, termIndex, classIndex, true);
-					List<SparseFederatedMlpModelSupport.TrainingExample> testExamples =
-							sparseExamples(test, corpus, termIndex, classIndex, true);
-					SparseFederatedMlpModelSupport.SparseMlpModel model =
-							SparseFederatedMlpModelSupport.SparseMlpModel.create(
-									vocabulary.size(),
-									settings.getMlpHiddenLayers(),
-									settings.getMlpHiddenNeurons(),
-									classNames.length,
-									0x5A17EEDL);
-					try (RecommendationMemoryCoordinator.Lease ignored =
-							RecommendationMemoryCoordinator.acquire(
-									getLocalName(),
-									"Sparse MLP training",
-									RecommendationMemoryCoordinator.Workload.MLP_TRAIN,
-									RecommendationMemoryCoordinator.estimateSparseMlpTrainingBytes(
-											vocabulary.size(),
-											settings.getMlpHiddenNeurons(),
-											settings.getMlpHiddenLayers(),
-											classNames.length,
-											corpus.nonZeroCount(),
-											train.size() + test.size() + targets.size())))
+					HashSet<String> heldOut = new HashSet<String>(folds.get(foldIndex));
+					ArrayList<String> train = new ArrayList<String>();
+					ArrayList<String> test = new ArrayList<String>();
+					for (String user : corpus.users())
 					{
-						trainStart = System.nanoTime();
-						model.train(
-								trainExamples,
-								settings.getMlpSparseEpochs(),
-								settings.getMlpLearningRate(),
-								settings.getMlpSparseL2(),
-								settings.getMlpFedProxMu());
-						trainNanos = System.nanoTime() - trainStart;
-						testStart = System.nanoTime();
-						int correct = 0;
-						for (SparseFederatedMlpModelSupport.TrainingExample example : testExamples)
+						if (heldOut.contains(user) || !labels.containsKey(user))
 						{
-							if (findIndexOfMaxValue(model.predict(example.getFeatures()))
-									== example.getLabelIndex())
-							{
-								correct++;
-							}
+							continue;
 						}
-						testNanos = System.nanoTime() - testStart;
-						report.add(testExamples.isEmpty()
-								? "Sparse MLP accuracy skipped: no test users."
-								: String.format("Sparse MLP held-out accuracy: %.2f%% (%d/%d)",
-										100.0 * correct / testExamples.size(), correct, testExamples.size()));
-						for (SparseFederatedMlpModelSupport.TrainingExample example
-								: sparseExamples(targets, corpus, termIndex, classIndex, false))
+						if (centralTrain.contains(user))
 						{
-							double[] output = model.predict(example.getFeatures());
-							TreeMap<String,Double> row = new TreeMap<String,Double>();
-							for (int index = 0; index < output.length && index < classNames.length; index++)
-							{
-								row.put(classNames[index], output[index] < 0.0 ? 0.0 : output[index] * 100.0);
-							}
-							scores.put(example.getUser(), row);
+							train.add(user);
+						}
+						else if (centralTest.contains(user))
+						{
+							test.add(user);
 						}
 					}
+					HashSet<String> trainClasses = new HashSet<String>();
+					for (String user : train)
+					{
+						trainClasses.add(labels.get(user));
+					}
+					if (trainClasses.size() < 2)
+					{
+						throw new IllegalStateException("MLP needs at least two followee classes in the training "
+								+ "set after the recommendation targets are held out; it has "
+								+ trainClasses.size() + ".");
+					}
+					String foldLabel = folds.size() == 1 ? "" : " (fold " + (foldIndex + 1) + " of " + folds.size() + ")";
+					MlpFold fold = settings.isSparseFederatedMlpEnabled()
+							? trainSoftmaxMlpFold(corpus, settings, vocabulary, classIndex, classNames.length,
+									labels, train, test, folds.get(foldIndex), foldIndex, foldLabel)
+							: trainNeurophMlpFold(corpus, settings, context, vocabulary, classIndex,
+									classNames, train, test, folds.get(foldIndex), foldLabel);
+					scores.putAll(fold.scores);
+					trainNanos += fold.trainNanos;
+					testNanos += fold.testNanos;
+					correct += fold.correct;
+					tested += fold.tested;
+					report.add(fold.description);
 				}
-				else
+				report.add(tested == 0
+						? "MLP held-out accuracy skipped: no test users."
+						: String.format(java.util.Locale.US,
+								"MLP held-out accuracy (test split, targets excluded): %.2f%% (%d/%d)",
+								100.0 * correct / tested, correct, tested));
+				return new MlpOutcome(scores, report, trainNanos, testNanos);
+			}
+
+			/** What training and testing one fold's model produced. */
+			private static final class MlpFold
+			{
+				private final TreeMap<String,TreeMap<String,Double>> scores =
+						new TreeMap<String,TreeMap<String,Double>>();
+				private long trainNanos;
+				private long testNanos;
+				private int correct;
+				private int tested;
+				private String description = "";
+			}
+
+			/**
+			 * The softmax MLP on one fold: the training users are split once more
+			 * (stratified, 15%) into a fitting and a validation set for early
+			 * stopping; the test users only measure accuracy; the fold's targets
+			 * get the model's class probabilities.
+			 */
+			private MlpFold trainSoftmaxMlpFold(
+					GlobalCorpus corpus,
+					AlgorithmParameterSettings settings,
+					TreeSet<String> vocabulary,
+					Map<String,Integer> classIndex,
+					int classCount,
+					Map<String,String> labels,
+					List<String> train,
+					List<String> test,
+					List<String> foldTargets,
+					int foldIndex,
+					String foldLabel) throws Exception
+			{
+				MlpFold fold = new MlpFold();
+				Map<String,Integer> termIndex = buildSparseMlpTermIndex(vocabulary);
+				TreeMap<String,List<String>> trainByClass = new TreeMap<String,List<String>>();
+				for (String user : train)
 				{
-					validateLegacyNeurophMlpConfiguration(
+					String label = labels.get(user);
+					List<String> members = trainByClass.get(label);
+					if (members == null)
+					{
+						members = new ArrayList<String>();
+						trainByClass.put(label, members);
+					}
+					members.add(user);
+				}
+				SvmReproducibility.Split inner = SvmReproducibility.stratifiedSplit(trainByClass, 0.15);
+				List<SparseFederatedMlpModelSupport.TrainingExample> fitExamples =
+						sparseExamples(inner.getTrainUsers(), corpus, termIndex, classIndex, true);
+				List<SparseFederatedMlpModelSupport.TrainingExample> validationExamples =
+						sparseExamples(inner.getTestUsers(), corpus, termIndex, classIndex, true);
+				List<SparseFederatedMlpModelSupport.TrainingExample> testExamples =
+						sparseExamples(test, corpus, termIndex, classIndex, true);
+				SparseFederatedMlpModelSupport.SparseMlpModel model =
+						SparseFederatedMlpModelSupport.SparseMlpModel.create(
+								vocabulary.size(),
+								settings.getMlpHiddenLayers(),
+								settings.getMlpHiddenNeurons(),
+								classCount,
+								0x5A17EEDL + foldIndex);
+				try (RecommendationMemoryCoordinator.Lease ignored =
+						RecommendationMemoryCoordinator.acquire(
+								getLocalName(),
+								"Softmax MLP training",
+								RecommendationMemoryCoordinator.Workload.MLP_TRAIN,
+								RecommendationMemoryCoordinator.estimateSparseMlpTrainingBytes(
+										vocabulary.size(),
+										settings.getMlpHiddenNeurons(),
+										settings.getMlpHiddenLayers(),
+										classCount,
+										corpus.nonZeroCount(),
+										train.size() + test.size() + foldTargets.size())))
+				{
+					long trainStart = System.nanoTime();
+					SparseFederatedMlpModelSupport.SparseMlpModel.TrainingReport training =
+							model.trainWithEarlyStopping(
+									fitExamples,
+									validationExamples,
+									settings.getMlpSparseEpochs(),
+									AlgorithmParameterSettings.MLP_EARLY_STOPPING_PATIENCE,
+									settings.getMlpLearningRate(),
+									settings.getMlpSparseL2());
+					fold.trainNanos = System.nanoTime() - trainStart;
+					long testStart = System.nanoTime();
+					for (SparseFederatedMlpModelSupport.TrainingExample example : testExamples)
+					{
+						if (findIndexOfMaxValue(model.predict(example.getFeatures()))
+								== example.getLabelIndex())
+						{
+							fold.correct++;
+						}
+						fold.tested++;
+					}
+					fold.testNanos = System.nanoTime() - testStart;
+					fold.description = "Softmax MLP" + foldLabel + ": " + fitExamples.size()
+							+ " fitting, " + validationExamples.size() + " validation and "
+							+ testExamples.size() + " test users; " + training.describe() + ".";
+					String[] classNames = classIndex.keySet().toArray(new String[0]);
+					for (SparseFederatedMlpModelSupport.TrainingExample example
+							: sparseExamples(foldTargets, corpus, termIndex, classIndex, false))
+					{
+						double[] output = model.predict(example.getFeatures());
+						TreeMap<String,Double> row = new TreeMap<String,Double>();
+						for (int index = 0; index < output.length && index < classNames.length; index++)
+						{
+							row.put(classNames[index], Math.max(0.0, output[index]));
+						}
+						fold.scores.put(example.getUser(), row);
+					}
+				}
+				return fold;
+			}
+
+			/**
+			 * The Neuroph MLP (V3's engine) on one fold: tanh hidden layers and
+			 * sigmoid outputs trained by back-propagation on the squared error,
+			 * one transfer-function instance per output neuron (a shared softmax
+			 * instance mixed neurons' outputs and gradients). The fold's targets
+			 * get the outputs normalised to sum to one.
+			 */
+			private MlpFold trainNeurophMlpFold(
+					GlobalCorpus corpus,
+					AlgorithmParameterSettings settings,
+					final SchedulingRunContext context,
+					TreeSet<String> vocabulary,
+					Map<String,Integer> classIndex,
+					String[] classNames,
+					List<String> train,
+					List<String> test,
+					List<String> foldTargets,
+					String foldLabel) throws Exception
+			{
+				MlpFold fold = new MlpFold();
+				validateLegacyNeurophMlpConfiguration(
+						vocabulary.size(),
+						settings.getMlpHiddenNeurons(),
+						settings.getMlpHiddenLayers(),
+						classNames.length,
+						train.size(),
+						test.size(),
+						foldTargets.size());
+				long reservation = RecommendationMemoryCoordinator.estimateMlpTrainingBytes(
+						vocabulary.size(),
+						settings.getMlpHiddenNeurons(),
+						settings.getMlpHiddenLayers(),
+						classNames.length,
+						train.size() + test.size() + Math.max(1, foldTargets.size()));
+				try (RecommendationMemoryCoordinator.Lease ignored =
+						RecommendationMemoryCoordinator.acquire(
+								getLocalName(),
+								"Neuroph MLP dataset construction and training",
+								RecommendationMemoryCoordinator.Workload.MLP_TRAIN,
+								reservation))
+				{
+					reportLegacyNeurophMlpConfiguration(
 							vocabulary.size(),
 							settings.getMlpHiddenNeurons(),
 							settings.getMlpHiddenLayers(),
 							classNames.length,
 							train.size(),
 							test.size(),
-							targets.size());
-					long reservation = RecommendationMemoryCoordinator.estimateMlpTrainingBytes(
+							foldTargets.size(),
+							reservation);
+					DataSet trainSet = denseDataSet(train, corpus, vocabulary, classIndex, classNames.length);
+					DataSet testSet = denseDataSet(test, corpus, vocabulary, classIndex, classNames.length);
+					MultiLayerPerceptron network = createLegacyNeurophMlp(
 							vocabulary.size(),
 							settings.getMlpHiddenNeurons(),
 							settings.getMlpHiddenLayers(),
-							classNames.length,
-							train.size() + test.size() + Math.max(1, targets.size()));
-					try (RecommendationMemoryCoordinator.Lease ignored =
-							RecommendationMemoryCoordinator.acquire(
-									getLocalName(),
-									"MLP dataset construction and training",
-									RecommendationMemoryCoordinator.Workload.MLP_TRAIN,
-									reservation))
+							classNames.length);
+					//Neuroph draws initial weights from an unseeded generator; the
+					//same range from a fixed seed makes training reproducible.
+					network.randomizeWeights(new org.neuroph.util.random.RangeRandomizer(
+							-0.7, 0.7, new java.util.Random(MLP_WEIGHT_SEED)));
+					List<Layer> layers = network.getLayers();
+					for (Neuron outputNeuron : layers.get(layers.size() - 1).getNeurons())
 					{
-						reportLegacyNeurophMlpConfiguration(
-								vocabulary.size(),
-								settings.getMlpHiddenNeurons(),
-								settings.getMlpHiddenLayers(),
-								classNames.length,
-								train.size(),
-								test.size(),
-								targets.size(),
-								reservation);
-						DataSet trainSet = denseDataSet(train, corpus, vocabulary, classIndex, classNames.length);
-						DataSet testSet = denseDataSet(test, corpus, vocabulary, classIndex, classNames.length);
-						MultiLayerPerceptron network = createLegacyNeurophMlp(
-								vocabulary.size(),
-								settings.getMlpHiddenNeurons(),
-								settings.getMlpHiddenLayers(),
-								classNames.length);
-						//Neuroph draws initial weights from an unseeded generator; the
-						//same range from a fixed seed makes training reproducible.
-						network.randomizeWeights(new org.neuroph.util.random.RangeRandomizer(
-								-0.7, 0.7, new java.util.Random(MLP_WEIGHT_SEED)));
-						SoftMax softMax = new SoftMax(network.getLayers().get(network.getLayers().size() - 1));
-						List<Layer> layers = network.getLayers();
-						for (Neuron outputNeuron : layers.get(layers.size() - 1).getNeurons())
+						//One instance per neuron: a transfer function keeps the
+						//neuron's last output for its derivative.
+						outputNeuron.setTransferFunction(new org.neuroph.core.transfer.Sigmoid());
+					}
+					final BackPropagation rule = (BackPropagation)network.getLearningRule();
+					rule.setLearningRate(settings.getMlpLearningRate());
+					rule.setMaxError(settings.getMlpMaxError());
+					rule.setMaxIterations(MLP_MAX_EPOCHS);
+					rule.addListener(new org.neuroph.core.events.LearningEventListener()
+					{
+						public void handleLearningEvent(org.neuroph.core.events.LearningEvent event)
 						{
-							outputNeuron.setTransferFunction(softMax);
-						}
-						final BackPropagation rule = (BackPropagation)network.getLearningRule();
-						rule.setLearningRate(settings.getMlpLearningRate());
-						rule.setMaxError(settings.getMlpMaxError());
-						rule.setMaxIterations(MLP_MAX_EPOCHS);
-						rule.addListener(new org.neuroph.core.events.LearningEventListener()
-						{
-							public void handleLearningEvent(org.neuroph.core.events.LearningEvent event)
+							//A revoked training unit (drain, crash) stops at the next epoch.
+							if (context.isAborted() || UnitCancellation.isRevoked())
 							{
-								//A revoked training unit (drain, crash) stops at the next epoch.
-								if (context.isAborted() || UnitCancellation.isRevoked())
-								{
-									rule.stopLearning();
-								}
+								rule.stopLearning();
 							}
-						});
-						shuffleTrainingRows(trainSet, MLP_PRESENTATION_SEED);
-						trainStart = System.nanoTime();
-						network.learn(trainSet);
-						trainNanos = System.nanoTime() - trainStart;
-						UnitCancellation.check();
-						context.requireActive();
-						report.add("Legacy Neuroph MLP stopped after " + rule.getCurrentIteration()
-								+ " epoch(s) with total error " + rule.getTotalNetworkError()
-								+ (rule.getCurrentIteration() >= MLP_MAX_EPOCHS
-										? " (epoch limit " + MLP_MAX_EPOCHS + " reached before max error "
-												+ settings.getMlpMaxError() + ")"
-										: ""));
-						testStart = System.nanoTime();
-						double accuracy = reportLegacyNeurophAccuracy(network, testSet,
-								"model trained on the whole run");
-						testNanos = System.nanoTime() - testStart;
-						if (Double.isFinite(accuracy))
-						{
-							report.add(String.format("Legacy Neuroph MLP held-out accuracy: %.2f%%", accuracy));
 						}
-						for (String target : targets)
+					});
+					shuffleTrainingRows(trainSet, MLP_PRESENTATION_SEED);
+					long trainStart = System.nanoTime();
+					network.learn(trainSet);
+					fold.trainNanos = System.nanoTime() - trainStart;
+					UnitCancellation.check();
+					context.requireActive();
+					long testStart = System.nanoTime();
+					for (DataSetRow row : testSet.getRows())
+					{
+						network.setInput(row.getInput());
+						network.calculate();
+						if (findIndexOfMaxValue(network.getOutput())
+								== findIndexOfMaxValue(row.getDesiredOutput()))
 						{
-							Map<String,Double> document = corpus.vectorOf(target);
-							if (document == null)
-							{
-								continue;
-							}
-							network.setInput(denseVector(document, vocabulary));
-							network.calculate();
-							double[] output = network.getOutput();
-							TreeMap<String,Double> row = new TreeMap<String,Double>();
-							for (int index = 0; index < output.length && index < classNames.length; index++)
-							{
-								row.put(classNames[index], output[index] < 0.0 ? 0.0 : output[index]);
-							}
-							scores.put(target, row);
+							fold.correct++;
 						}
+						fold.tested++;
+					}
+					fold.testNanos = System.nanoTime() - testStart;
+					fold.description = "Neuroph MLP" + foldLabel + ": " + trainSet.size() + " training and "
+							+ testSet.size() + " test users; stopped after " + rule.getCurrentIteration()
+							+ " epoch(s) with total error " + rule.getTotalNetworkError()
+							+ (rule.getCurrentIteration() >= MLP_MAX_EPOCHS
+									? " (epoch limit " + MLP_MAX_EPOCHS + " reached before max error "
+											+ settings.getMlpMaxError() + ")"
+									: "") + ".";
+					for (String target : foldTargets)
+					{
+						Map<String,Double> document = corpus.vectorOf(target);
+						if (document == null)
+						{
+							continue;
+						}
+						network.setInput(denseVector(document, vocabulary));
+						network.calculate();
+						double[] output = network.getOutput();
+						double total = 0.0;
+						for (int index = 0; index < output.length && index < classNames.length; index++)
+						{
+							total += Math.max(0.0, output[index]);
+						}
+						TreeMap<String,Double> row = new TreeMap<String,Double>();
+						for (int index = 0; index < output.length && index < classNames.length; index++)
+						{
+							double value = Math.max(0.0, output[index]);
+							row.put(classNames[index], total > 0.0 ? value / total : 0.0);
+						}
+						fold.scores.put(target, row);
 					}
 				}
-				return new MlpOutcome(scores, report, trainNanos, testNanos);
+				return fold;
 			}
 
 			private List<SparseFederatedMlpModelSupport.TrainingExample> sparseExamples(

@@ -310,28 +310,42 @@ final class ScalableSvmSharedCoordinator
 			}
 			else
 			{
-				Map<String,List<String>> usersByClass =
-						groupUsersByClass(corpus.documents.keySet(), corpus.followees);
-				SvmReproducibility.Split split =
-						SvmReproducibility.stratifiedSplit(usersByClass, 0.30);
-				ExactSvmWorkerResult worker = runWorker(
-						owner,
-						runId,
-						directory,
-						"global",
-						state.targets,
-						split,
-						tfidf,
+				//A target must never be in the training data of the model that
+				//predicts it: its followee is exactly what is scored. The targets
+				//are held out together, or fold by fold when they are many.
+				int labelled = groupUsersByClass(corpus.documents.keySet(), corpus.followees)
+						.values().stream().mapToInt(List::size).sum();
+				List<List<String>> folds = TargetFolds.of(state.targets, corpus.followees, labelled);
+				for (int foldIndex = 0; foldIndex < folds.size(); foldIndex++)
+				{
+					List<String> fold = folds.get(foldIndex);
+					Map<String,List<String>> usersByClass =
+							groupUsersByClass(corpus.documents.keySet(), corpus.followees);
+					for (String target : fold)
+					{
+						removeUser(usersByClass, target);
+					}
+					SvmReproducibility.Split split =
+							SvmReproducibility.stratifiedSplit(usersByClass, 0.30);
+					ExactSvmWorkerResult worker = runWorker(
+							owner,
+							runId,
+							directory,
+							"fold-" + foldIndex,
+							fold,
+							split,
+							tfidf,
 							terms,
 							classes,
 							corpus.followees,
-							"shared global scalable SVM",
+							"shared scalable SVM, held-out fold " + (foldIndex + 1) + " of " + folds.size(),
 							state.settings);
-				scores.putAll(buildScores(state.targets, worker));
-				if (Double.isFinite(worker.getTestAccuracyPercent()))
-				{
-					accuracyTotal = worker.getTestAccuracyPercent();
-					accuracyCount = 1;
+					scores.putAll(buildScores(fold, worker));
+					if (Double.isFinite(worker.getTestAccuracyPercent()))
+					{
+						accuracyTotal += worker.getTestAccuracyPercent();
+						accuracyCount++;
+					}
 				}
 			}
 			Map<String,TreeMap<String,RecommendationCandidateEvidence>> evidence =
