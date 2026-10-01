@@ -909,10 +909,8 @@ final class SimulatorHelpPanel extends JPanel
 						"rows", preview.loading ? "..." : formatCount(preview.validRows),
 						"usable DSMP rows", BLUE);
 				drawReadinessMetric(g, metricW + gap, y, metricW, metricH,
-						"targets", snapshot.batchEnabled
-								? formatCount(snapshot.batchUsers)
-								: targetCountLabel(),
-						snapshot.batchEnabled ? "batch users" : "selected user", PURPLE);
+						"targets", formatCount(snapshot.batchUsers),
+						"recommendation targets", PURPLE);
 				y += metricH + gap;
 			}
 			if (h - y >= metricH)
@@ -1072,11 +1070,7 @@ final class SimulatorHelpPanel extends JPanel
 			{
 				score -= 24;
 			}
-			if (!snapshot.batchEnabled && snapshot.batchUsers > 1)
-			{
-				score -= 8;
-			}
-			if (snapshot.primaryTargetName().length() == 0 && !snapshot.batchEnabled)
+			if (snapshot.primaryTargetName().length() == 0)
 			{
 				score -= 5;
 			}
@@ -2075,7 +2069,7 @@ final class SimulatorHelpPanel extends JPanel
 					w);
 			String[] labels = {
 					snapshot.parameterProfile,
-					snapshot.batchEnabled ? "Batch " + snapshot.batchUsers : "Single target",
+					snapshot.batchUsers + (snapshot.batchUsers == 1 ? " target" : " targets"),
 					snapshot.graphEnabled ? "Graph export on" : "Graph export off",
 					snapshot.heapMb + " MB heap"
 			};
@@ -2167,7 +2161,7 @@ final class SimulatorHelpPanel extends JPanel
 	private static String cleaningSummary(Snapshot s)
 	{
 		StringBuilder out = new StringBuilder();
-		out.append(s.removeHashTags ? "hashtags removed" : "hashtags kept");
+		out.append("letters kept, symbols split words");
 		out.append(", ");
 		out.append(s.removeRetweets ? "RT removed" : "RT kept");
 		out.append(", ");
@@ -2552,7 +2546,7 @@ final class SimulatorHelpPanel extends JPanel
 				};
 			case 1:
 				return new String[] {
-						s.removeHashTags ? "remove hashtags" : "keep hashtags",
+						"keep letters; # @ and digits split words",
 						s.removeRetweets ? "remove retweets" : "keep retweets",
 						s.removeStopWords ? "drop stop words" : "keep stop words"
 				};

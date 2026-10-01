@@ -124,15 +124,13 @@ final class TemporalGraphFoundationPanel extends JPanel
 			candidateList =
 				new JList<TemporalGraphFoundationModelSupport.CandidateScore>(
 						candidateModel);
-		private final FoundationCanvas foundationCanvas = new FoundationCanvas();
+		private final EvidenceCanvas foundationCanvas = new EvidenceCanvas();
 		private final ResearchCanvas researchCanvas = new ResearchCanvas();
 		private final ReplayScrubber replayScrubber = new ReplayScrubber();
 		private final JSlider timeSlider = new JSlider(0, 11, 11);
 		private final JLabel timeReadout = new JLabel("final frame");
 		private final JCheckBox removeGraphBox = controlToggle("Graph off");
 		private final JCheckBox removeTimeBox = controlToggle("Time off");
-		private final JCheckBox removeBridgeBox = controlToggle("Bridge off");
-		private final JCheckBox removeDebiasBox = controlToggle("Debias off");
 		private final JCheckBox removeTopTermBox = controlToggle("Top term off");
 		private final Timer animationTimer;
 		private TemporalGraphFoundationModelSupport.Result latestResult;
@@ -388,7 +386,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				metrics.add(metricCard("RUN", runMetric, BLUE));
 				metrics.add(metricCard("ROWS", rowsMetric, GREEN));
 				metrics.add(metricCard("DATED", datedMetric, TEAL));
-				metrics.add(metricCard("GRAPH EDGES", graphMetric, AMBER));
+				metrics.add(metricCard("FUSION AUC", graphMetric, AMBER));
 				metrics.add(metricCard("TARGETS", targetsMetric, PURPLE));
 				metrics.add(metricCard("TRACE FRAMES", eventsMetric, RED));
 				metrics.add(metricCard("HIT@1", researchMetric, GREEN));
@@ -503,12 +501,10 @@ final class TemporalGraphFoundationPanel extends JPanel
 			timeSlider.setSnapToTicks(true);
 			panel.add(replayScrubber, BorderLayout.CENTER);
 
-			JPanel toggles = new JPanel(new GridLayout(1, 5, 5, 0));
+			JPanel toggles = new JPanel(new GridLayout(1, 3, 5, 0));
 			toggles.setOpaque(false);
 			toggles.add(removeGraphBox);
 			toggles.add(removeTimeBox);
-			toggles.add(removeBridgeBox);
-			toggles.add(removeDebiasBox);
 			toggles.add(removeTopTermBox);
 			panel.add(toggles, BorderLayout.SOUTH);
 			return panel;
@@ -519,7 +515,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 			JPanel panel = surfacePanel(new BorderLayout(0, 10));
 			panel.setPreferredSize(new Dimension(620, 306));
 			panel.add(sectionHeader("Evidence Cockpit",
-					"readiness, probes, benchmark state"), BorderLayout.NORTH);
+					"held-out fit, probes, ablation lenses"), BorderLayout.NORTH);
 			researchCanvas.setPreferredSize(new Dimension(620, 260));
 			panel.add(researchCanvas, BorderLayout.CENTER);
 			return panel;
@@ -573,8 +569,6 @@ final class TemporalGraphFoundationPanel extends JPanel
 			};
 			removeGraphBox.addActionListener(counterfactualListener);
 			removeTimeBox.addActionListener(counterfactualListener);
-			removeBridgeBox.addActionListener(counterfactualListener);
-			removeDebiasBox.addActionListener(counterfactualListener);
 			removeTopTermBox.addActionListener(counterfactualListener);
 		}
 
@@ -621,8 +615,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 						selectedFrameIndex(candidate),
 						removeGraphBox.isSelected(),
 						removeTimeBox.isSelected(),
-						removeBridgeBox.isSelected(),
-						removeDebiasBox.isSelected(),
+						false,
+						false,
 						removeTopTermBox.isSelected());
 				foundationCanvas.setSelection(
 					latestResult,
@@ -631,8 +625,6 @@ final class TemporalGraphFoundationPanel extends JPanel
 					selectedFrameIndex(candidate),
 					removeGraphBox.isSelected(),
 					removeTimeBox.isSelected(),
-					removeBridgeBox.isSelected(),
-					removeDebiasBox.isSelected(),
 					removeTopTermBox.isSelected());
 			researchCanvas.setSelection(
 					latestResult,
@@ -641,8 +633,8 @@ final class TemporalGraphFoundationPanel extends JPanel
 					selectedFrameIndex(candidate),
 					removeGraphBox.isSelected(),
 					removeTimeBox.isSelected(),
-					removeBridgeBox.isSelected(),
-					removeDebiasBox.isSelected(),
+					false,
+					false,
 					removeTopTermBox.isSelected());
 		}
 
@@ -693,7 +685,9 @@ final class TemporalGraphFoundationPanel extends JPanel
 			runMetric.setText(shortRunId(result.getRunId()));
 			rowsMetric.setText(COUNT_FORMAT.format(result.getRowsScanned()));
 			datedMetric.setText(COUNT_FORMAT.format(result.getDatedRows()));
-			graphMetric.setText(COUNT_FORMAT.format(result.getGraphArtifactEdges()));
+			graphMetric.setText(decimal(research.foundationReadiness.overall));
+			graphMetric.setToolTipText("Held-out pair AUC of the learned fusion: "
+					+ research.foundationReadiness.label + ".");
 				targetsMetric.setText(COUNT_FORMAT.format(result.getReports().size()));
 				eventsMetric.setText(COUNT_FORMAT.format(research.timelineFrames));
 				researchMetric.setText(percent(research.hitAtOne));
@@ -703,12 +697,10 @@ final class TemporalGraphFoundationPanel extends JPanel
 				runMetric.setToolTipText(dataset == null ? result.getRunId()
 						: result.getRunId() + " | " + dataset.getPath());
 				researchMetric.setToolTipText(research.headline);
-				coverageMetric.setToolTipText("Mean evidence coverage; readiness "
-						+ percent(research.foundationReadiness.overall)
-						+ " (" + research.foundationReadiness.label + ").");
-				fragilityMetric.setToolTipText("Mean counterfactual fragility; calibration p~"
-						+ decimal(research.averageCalibrationPValue)
-						+ ", abstain " + percent(research.abstainRate) + ".");
+				coverageMetric.setToolTipText("Mean evidence coverage of the kept candidates.");
+				fragilityMetric.setToolTipText("Mean counterfactual fragility; mean top-10 stability "
+						+ percent(research.averageCalibrationPValue)
+						+ "; unstable candidates " + percent(research.abstainRate) + ".");
 			}
 
 			private void updateDecisionDossier(
@@ -986,7 +978,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				writer.newLine();
 				writer.write("Java runtime: " + System.getProperty("java.version"));
 				writer.newLine();
-				writer.write("Model weights: "
+				writer.write("Fusion: "
 						+ TemporalGraphFoundationModelSupport.weightsDescription());
 				writer.newLine();
 				writer.write("Summary: " + latestResult.getSummary());
@@ -1022,20 +1014,19 @@ final class TemporalGraphFoundationPanel extends JPanel
 					writer.write("- Counterfactual fragility: "
 							+ percent(research.averageCounterfactualFragility));
 					writer.newLine();
-					writer.write("- Calibration p-value proxy: "
-							+ decimal(research.averageCalibrationPValue));
+					writer.write("- Mean top-10 stability over bootstrap refits: "
+							+ percent(research.averageCalibrationPValue));
 					writer.newLine();
-					writer.write("- Calibration abstain rate: "
+					writer.write("- Share of candidates kept in the top ten by fewer than half of the refits: "
 							+ percent(research.abstainRate));
 					writer.newLine();
 					writer.write("- Evidence-limit flags: "
 							+ research.evidenceLimitFlags);
 					writer.newLine();
-					writer.write("- Foundation readiness: "
-							+ percent(research.foundationReadiness.overall)
-							+ " (" + research.foundationReadiness.label + ")");
+					writer.write("- Fusion fit: "
+							+ research.foundationReadiness.label);
 					writer.newLine();
-					writer.write("- Foundation honesty note: "
+					writer.write("- Fusion model: "
 							+ research.foundationReadiness.note);
 					writer.newLine();
 					writer.newLine();
@@ -1962,32 +1953,42 @@ final class TemporalGraphFoundationPanel extends JPanel
 			}
 		}
 
-		private static final class FoundationCanvas extends RoundedPanel
+		/**
+		 * The selected recommendation, explained by the model that made it.
+		 *
+		 * The temporal graph model is a logistic fusion of three signals (text
+		 * similarity, graph diffusion, temporal co-activity) learned from
+		 * labelled non-target users. The canvas shows the candidate's
+		 * probability with its bootstrap interval, each signal's additive
+		 * log-odds contribution relative to the mean training pair (bars to
+		 * the right raise the probability, to the left lower it), the
+		 * counterfactual probes (the probability and rank with one piece of
+		 * evidence removed), and how the candidate's rank built up over the
+		 * dated activity.
+		 */
+		private static final class EvidenceCanvas extends RoundedPanel
 		{
-			private static final String[] SIGNAL_LABELS = {
-					"Text", "Graph", "Time", "Bridge", "Debias", "Robust"};
-			private static final double[] SIGNAL_WEIGHTS = {
-					0.34, 0.22, 0.18, 0.14, 0.07, 0.05};
-			private static final Color[] SIGNAL_COLORS = {
-					BLUE, GREEN, TEAL, AMBER, RED, PURPLE};
+			private static final String[] SIGNAL_LABELS = {"Text", "Graph", "Time"};
+			private static final String[] SIGNAL_DETAILS = {
+					"TF-IDF cosine of the two users' terms",
+					"mass diffusion over the user-term graph",
+					"cosine of their 24-hour activity profiles"};
+			private static final Color[] SIGNAL_COLORS = {BLUE, GREEN, TEAL};
 			private TemporalGraphFoundationModelSupport.Result result;
 			private TemporalGraphFoundationModelSupport.TargetReport report;
 			private TemporalGraphFoundationModelSupport.CandidateScore candidate;
 			private int frameIndex;
 			private boolean removeGraph;
 			private boolean removeTime;
-			private boolean removeBridge;
-			private boolean removeDebias;
 			private boolean removeTopTerm;
-			private double phase;
 
-		FoundationCanvas()
-		{
-			super(SURFACE);
-			setPreferredSize(new Dimension(620, 790));
-			setMinimumSize(new Dimension(480, 760));
-			setBorder(new EmptyBorder(14, 14, 14, 14));
-		}
+			EvidenceCanvas()
+			{
+				super(SURFACE);
+				setPreferredSize(new Dimension(620, 700));
+				setMinimumSize(new Dimension(480, 600));
+				setBorder(new EmptyBorder(14, 14, 14, 14));
+			}
 
 			void setSelection(
 					TemporalGraphFoundationModelSupport.Result result,
@@ -1996,8 +1997,6 @@ final class TemporalGraphFoundationPanel extends JPanel
 					int frameIndex,
 					boolean removeGraph,
 					boolean removeTime,
-					boolean removeBridge,
-					boolean removeDebias,
 					boolean removeTopTerm)
 			{
 				this.result = result;
@@ -2006,1336 +2005,376 @@ final class TemporalGraphFoundationPanel extends JPanel
 				this.frameIndex = frameIndex;
 				this.removeGraph = removeGraph;
 				this.removeTime = removeTime;
-				this.removeBridge = removeBridge;
-				this.removeDebias = removeDebias;
 				this.removeTopTerm = removeTopTerm;
 				repaint();
 			}
 
-		void advance()
-		{
-			phase += 0.025;
-			if (phase > Math.PI * 2.0)
+			/** The evidence view is static; kept for the panel's animation timer. */
+			void advance()
 			{
-				phase = 0.0;
 			}
-			repaint();
-		}
 
-		protected void paintComponent(Graphics graphics)
-		{
-			super.paintComponent(graphics);
-			Graphics2D g = (Graphics2D) graphics.create();
-			NebulaDesign.prepare(g);
-			int w = getWidth();
-			int h = getHeight();
-			paintBackground(g, w, h);
-			if (result == null)
+			protected void paintComponent(Graphics graphics)
 			{
-				paintEmpty(g, w, h, "No TGF run has been recorded.");
-				g.dispose();
-				return;
-			}
-			if (report == null)
-			{
-				paintEmpty(g, w, h, result.getSummary());
-				g.dispose();
-				return;
-			}
-			if (candidate == null)
-			{
-				paintEmpty(g, w, h, report.headline);
-				g.dispose();
-				return;
-			}
-			paintFoundation(g, w, h);
-			g.dispose();
-		}
-
-			private void paintBackground(Graphics2D g, int w, int h)
-			{
+				super.paintComponent(graphics);
+				Graphics2D g = (Graphics2D)graphics.create();
 				NebulaDesign.prepare(g);
-				boolean night = StudioNightTheme.isNightMode();
-				Color top = night ? NebulaDesign.NIGHT_SURFACE
-						: NebulaDesign.DAY_SURFACE;
-				Color low = night
-						? mix(NebulaDesign.NIGHT_SURFACE,
-								NebulaDesign.NIGHT_PURPLE, 0.10f)
-						: mix(NebulaDesign.DAY_SURFACE,
-								NebulaDesign.DAY_ACCENT_SOFT, 0.55f);
-				g.setPaint(new GradientPaint(0, 0, top, w, h, low));
-				g.fillRoundRect(0, 0, w - 1, h - 1,
-						NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
-				g.setPaint(null);
-				g.setColor(alphaOf(BORDER, night ? 110 : 130));
-				for (int x = 24; x < w; x += 42)
+				int w = getWidth();
+				int h = getHeight();
+				if (result == null || report == null || candidate == null)
 				{
-					g.drawLine(x, 12, x, h - 14);
+					String message = result == null ? "No Temporal Graph Foundation run has been recorded."
+							: report == null ? result.getSummary() : report.headline;
+					paintEmpty(g, w, h, message);
+					g.dispose();
+					return;
 				}
-				for (int y = 24; y < h; y += 42)
-				{
-					g.drawLine(12, y, w - 14, y);
-				}
-				g.setColor(alphaOf(TEAL, night ? 50 : 34));
-				for (int i = 0; i < 5; i++)
-				{
-					int x = w - 230 + i * 42;
-					int y = 34 + (i % 3) * 28;
-					g.fillOval(x, y, 6, 6);
-					if (i > 0)
-					{
-						g.drawLine(x - 42 + 3, y - ((i % 3) - ((i - 1) % 3)) * 28 + 3,
-								x + 3, y + 3);
-					}
-				}
-				g.setColor(BORDER);
-				g.drawRoundRect(0, 0, w - 1, h - 1,
-						NebulaDesign.RADIUS_CARD, NebulaDesign.RADIUS_CARD);
+				int pad = 22;
+				int y = paintHeader(g, pad, pad + 4, w - pad * 2);
+				int columnGap = 16;
+				int leftW = Math.max(260, (w - pad * 2 - columnGap) * 11 / 20);
+				int rightW = w - pad * 2 - columnGap - leftW;
+				int bodyH = Math.max(210, Math.min(300, (h - y) / 2));
+				paintContributions(g, pad, y, leftW, bodyH);
+				paintCounterfactuals(g, pad + leftW + columnGap, y, rightW, bodyH);
+				y += bodyH + 14;
+				int timelineH = Math.max(120, Math.min(190, h - y - 96));
+				paintTimeline(g, pad, y, w - pad * 2, timelineH);
+				y += timelineH + 14;
+				paintEvidence(g, pad, y, w - pad * 2, Math.max(60, h - y - pad));
+				g.dispose();
 			}
 
-		private void paintEmpty(Graphics2D g, int w, int h, String message)
-		{
-			int cx = w / 2;
-			int cy = h / 2 - 34;
-			g.setColor(alphaOf(BLUE, 22));
-			g.fillOval(cx - 44, cy - 44, 88, 88);
-			g.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND,
-					BasicStroke.JOIN_ROUND));
-			g.setColor(alphaOf(BLUE, 170));
-			g.drawOval(cx - 28, cy - 28, 56, 56);
-			g.setColor(alphaOf(TEAL, 200));
-			g.fillOval(cx - 21, cy - 9, 8, 8);
-			g.fillOval(cx + 12, cy - 20, 8, 8);
-			g.fillOval(cx + 2, cy + 12, 8, 8);
-			g.setColor(alphaOf(TEAL, 120));
-			g.drawLine(cx - 17, cy - 5, cx + 16, cy - 16);
-			g.drawLine(cx + 16, cy - 16, cx + 6, cy + 16);
-			g.setStroke(new BasicStroke(1.0f));
-			g.setFont(font(Font.BOLD, 18));
-			g.setColor(TEXT);
-			String title = "Temporal Graph Foundation";
-			FontMetrics titleMetrics = g.getFontMetrics();
-			g.drawString(title, (w - titleMetrics.stringWidth(title)) / 2,
-					h / 2 + 44);
-			g.setFont(font(Font.PLAIN, 13));
-			g.setColor(MUTED);
-			FontMetrics metrics = g.getFontMetrics();
-			String body = ellipsize(message, metrics, Math.max(100, w - 80));
-			g.drawString(body, (w - metrics.stringWidth(body)) / 2, h / 2 + 68);
-		}
-
-			private void paintFoundation(Graphics2D g, int w, int h)
+			private void paintEmpty(Graphics2D g, int w, int h, String message)
 			{
-				int pad = 24;
-				TemporalGraphFoundationModelSupport.TimelineFrame frame =
-						frameAt(candidate, frameIndex);
-				boolean compact = h < 330;
-				drawTitle(g, pad, compact ? 32 : 38, w - pad * 2, frame);
-				int bodyY = compact ? 64 : 82;
-				int footerH = compact ? 0 : (h < 430 ? 56 : 68);
-				int footerY = h - pad - footerH;
-				if (footerH > 0 && footerY - bodyY < 190)
-				{
-					footerH = 0;
-					footerY = h - pad;
-				}
-				int bodyH = Math.max(compact ? 126 : 164,
-						footerY - bodyY - (footerH > 0 ? 14 : 0));
-				int ledgerW = Math.min(350, Math.max(250, w / 4));
-				if (w < 760)
-				{
-					ledgerW = Math.min(260, Math.max(206, w / 3));
-				}
-				int ledgerX = w - pad - ledgerW;
-				int mapW = Math.max(220, ledgerX - pad - 14);
-				drawDecisionMap(g, pad, bodyY, mapW, bodyH, frame);
-				drawSignalLedger(g, ledgerX, bodyY, ledgerW, bodyH, frame);
-				if (footerH > 0)
-				{
-					drawEvidenceFooter(g, pad, footerY, w - pad * 2,
-							Math.max(48, h - pad - footerY), frame);
-				}
-			}
-
-			private void drawTitle(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
-			{
-				int rightReserved = width > 760 ? 420 : 0;
-				g.setFont(font(Font.BOLD, 18));
+				g.setColor(alphaOf(BLUE, 26));
+				g.fillOval(w / 2 - 40, h / 2 - 90, 80, 80);
+				g.setColor(BLUE);
+				g.setStroke(new BasicStroke(2f));
+				g.drawOval(w / 2 - 24, h / 2 - 74, 48, 48);
+				g.setStroke(new BasicStroke(1f));
+				g.setFont(font(Font.BOLD, 17));
 				g.setColor(TEXT);
-				FontMetrics titleMetrics = g.getFontMetrics();
-				g.drawString(
-						ellipsize(report.targetUser + " -> "
-								+ candidate.candidateName(), titleMetrics,
-								Math.max(140, width - rightReserved)),
-						x, y);
+				centered(g, "Temporal Graph Foundation", w / 2, h / 2 + 22);
 				g.setFont(font(Font.PLAIN, 12));
 				g.setColor(MUTED);
-				FontMetrics bodyMetrics = g.getFontMetrics();
-				String frameText = frame == null ? candidate.path
-					: frame.label + " | replay score "
-							+ scoreText(displayScore(frame))
-							+ " | frame rank #" + frame.rank
-							+ " -> active #" + activeCounterfactualRank(candidate)
-							+ " | " + frame.auditNote;
-				g.drawString(ellipsize(frameText, bodyMetrics,
-						Math.max(140, width - rightReserved)), x, y + 22);
-				if (rightReserved > 0)
-				{
-					int pillX = x + width - rightReserved + 8;
-					drawMetricPill(g, pillX, y - 25, 122, 36, "Score",
-							scoreText(displayScore(frame)), GREEN);
-					drawMetricPill(g, pillX + 132, y - 25, 126, 36, "CI",
-							scoreText(candidate.confidenceLower) + "-"
-									+ scoreText(candidate.confidenceUpper), TEAL);
-					drawMetricPill(g, pillX + 268, y - 25, 138, 36, "Rank",
-							"#" + candidate.rank + " -> #"
-									+ activeCounterfactualRank(candidate),
-							AMBER);
-				}
+				FontMetrics metrics = g.getFontMetrics();
+				centered(g, ellipsize(safe(message), metrics, Math.max(120, w - 80)), w / 2, h / 2 + 46);
 			}
 
-			private void drawDecisionMap(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
+			/** Title, followees, probability with its interval, rank and stability. */
+			private int paintHeader(Graphics2D g, int x, int y, int width)
 			{
-				drawPanel(g, x, y, width, height, alphaOf(INK, 235),
-						alphaOf(BORDER_STRONG, 150));
-				g.setFont(font(Font.BOLD, 11));
-				g.setColor(TEAL);
-				drawClipped(g, "FUSED EVIDENCE CONSTELLATION", x + 16, y + 22,
-						width - 32);
-				double[] values = activeSignalValues(frame);
-				int cx = x + width / 2;
-				int cy = y + Math.max(76,
-						Math.min(Math.max(76, height - 64), height / 2 + 14));
-				int sidePad = Math.max(46, Math.min(86, width / 6));
-				int leftX = x + sidePad;
-				int rightX = x + width - sidePad;
-				drawConstellationBackdrop(g, x, y, width, height, cx, cy, frame);
-				int visibleSignals = height < 210 ? 4 : SIGNAL_LABELS.length;
-				int[] signalOrder = visibleSignals == SIGNAL_LABELS.length
-						? naturalSignalOrder()
-						: sortedSignalOrder(values);
-				double[] offsets = {-0.72, -0.42, -0.16, 0.16, 0.42, 0.72};
-				for (int row = visibleSignals - 1; row >= 0; row--)
-				{
-					int i = signalOrder[row];
-					double offset = offsets[Math.min(row, offsets.length - 1)]
-							* Math.max(58, Math.min(126, height / 3));
-					drawSignalArc(g, leftX + 36, cy, rightX - 36, cy,
-							cx, cy + (int)Math.round(offset),
-							SIGNAL_LABELS[i], values[i], SIGNAL_COLORS[i]);
-				}
-				String targetFollowee = height < 170 ? "" : safe(report.targetFollowee);
-				String candidateFollowee = height < 170
-						? "" : safe(candidate.candidateFollowee());
-				drawIdentityNode(g, leftX, cy, BLUE, "TARGET", report.targetUser,
-						targetFollowee);
-				drawIdentityNode(g, rightX, cy, GREEN, "CANDIDATE",
-						candidate.candidateName(), candidateFollowee);
-				drawFusionCore(g, cx, cy, Math.max(42,
-						Math.min(64, Math.min(width, height) / 4)), frame, values);
-				if (height >= 188)
-				{
-					drawPathBanner(g, x + 18, y + 40, width - 36,
-							Math.min(34, Math.max(26, height / 8)));
-				}
-				drawSignalBadges(g, x, y, width, height, cx, cy,
-						Math.max(120, width / 4), Math.max(78, height / 3),
-						visibleSignals, signalOrder, values);
-				if (height >= 224)
-				{
-					drawReplayTrace(g, x + 18, y + height - 52,
-							Math.max(80, width - 36), 34, frame);
-				}
-			}
-
-			private void drawConstellationBackdrop(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					int cx,
-					int cy,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
-			{
-				int haloW = Math.max(180, Math.min(width - 60, width * 2 / 3));
-				int haloH = Math.max(92, Math.min(height - 34, height * 2 / 3));
-				g.setStroke(new BasicStroke(1.0f));
-				for (int i = 0; i < 4; i++)
-				{
-					int inset = i * 22;
-					int alpha = 54 - i * 9;
-					g.setColor(alphaOf(TEAL, Math.max(16, alpha)));
-					g.drawOval(cx - haloW / 2 + inset,
-							cy - haloH / 2 + inset / 2,
-							Math.max(12, haloW - inset * 2),
-							Math.max(12, haloH - inset));
-				}
-				g.setColor(alphaOf(BLUE, 48));
-				g.drawLine(x + 32, cy, x + width - 32, cy);
-				if (height < 224)
-				{
-					// The replay trace band carries this caption when it is
-					// visible; only paint it here on short canvases.
-					g.setFont(font(Font.BOLD, 9));
-					g.setColor(MUTED);
-					String label = frame == null ? candidate.path
-							: frame.label + " | " + frame.auditNote;
-					drawClipped(g, label, x + 18, y + height - 14, width - 36);
-				}
-			}
-
-			private void drawSignalArc(
-					Graphics2D g,
-					int x1,
-					int y1,
-					int x2,
-					int y2,
-					int cx,
-					int controlY,
-					String label,
-					double value,
-					Color color)
-			{
-				double clamped = clamp01(value);
-				int c1x = x1 + Math.max(70, (cx - x1) / 2);
-				int c2x = x2 - Math.max(70, (x2 - cx) / 2);
-				java.awt.geom.CubicCurve2D.Double curve =
-						new java.awt.geom.CubicCurve2D.Double(
-								x1,
-								y1,
-								c1x,
-								controlY,
-								c2x,
-								controlY,
-								x2,
-								y2);
-				g.setStroke(new BasicStroke((float)(10.0 + clamped * 11.0),
-						BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-				g.setColor(new Color(color.getRed(), color.getGreen(),
-						color.getBlue(), alpha(22 + (int)Math.round(44 * clamped))));
-				g.draw(curve);
-				g.setStroke(new BasicStroke((float)(1.5 + clamped * 5.5),
-						BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-				g.setColor(new Color(color.getRed(), color.getGreen(),
-						color.getBlue(), alpha(86 + (int)Math.round(132 * clamped))));
-				g.draw(curve);
-				double t = (phase * 0.18 + clamped) % 1.0;
-				int px = cubicPoint(x1, c1x, c2x, x2, t);
-				int py = cubicPoint(y1, controlY, controlY, y2, t);
-				int dot = Math.max(4, Math.min(9, (int)Math.round(4 + clamped * 7)));
-				g.setColor(new Color(color.getRed(), color.getGreen(),
-						color.getBlue(), alpha(110 + (int)Math.round(105 * clamped))));
-				g.fillOval(px - dot / 2, py - dot / 2, dot, dot);
-				g.setStroke(new BasicStroke(1.0f));
-			}
-
-			private void drawPathBanner(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height)
-			{
-				drawPanel(g, x, y, width, height, alphaOf(PLATE, 205),
-						alphaOf(AMBER, 112));
-				String title = "GRAPH BRIDGE";
-				String detail = candidate.path;
-				if (removeGraph)
-				{
-					title = "GRAPH COUNTERFACTUAL";
-					detail = "graph signal intentionally removed in this replay";
-				}
-				else if (candidate.graph <= 0.04)
-				{
-					title = "TEXT-LED CANDIDATE";
-					detail = "no same-community, direct-edge, or common-neighbor bridge for this pair";
-				}
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(AMBER);
-				drawClipped(g, title, x + 12, y + 13, 124);
-				g.setFont(font(Font.PLAIN, 9));
-				g.setColor(MUTED);
-				drawClipped(g, detail, x + 144, y + 13, width - 156);
-			}
-
-			private void drawSignalBadges(
-					Graphics2D g,
-					int mapX,
-					int mapY,
-					int mapW,
-					int mapH,
-					int cx,
-					int cy,
-					int radiusX,
-					int radiusY,
-					int visibleSignals,
-					int[] signalOrder,
-					double[] values)
-			{
-				int rows = Math.max(1, (visibleSignals + 1) / 2);
-				for (int row = 0; row < visibleSignals; row++)
-				{
-					int signal = signalOrder[row];
-					int side = row % 2 == 0 ? -1 : 1;
-					int band = row / 2;
-					int dy = rows <= 1 ? 0
-							: -radiusY + (int)Math.round(
-									(2.0 * radiusY * band) / Math.max(1, rows - 1));
-					int badgeW = 118;
-					int badgeH = 25;
-					int bx = cx + side * radiusX - badgeW / 2;
-					int by = cy + dy - badgeH / 2;
-					if (dy == 0 && rows >= 3)
-					{
-						// Keep the middle band clear of the identity nodes:
-						// float those chips just above the node halo.
-						by = cy - 60 - badgeH;
-					}
-					bx = Math.max(mapX + 12, Math.min(mapX + mapW - badgeW - 12, bx));
-					by = Math.max(mapY + 34, Math.min(mapY + mapH - badgeH - 12, by));
-					drawSignalBadge(g, bx, by, badgeW, badgeH,
-							signal, values[signal]);
-				}
-			}
-
-			private void drawSignalBadge(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					int signal,
-					double value)
-			{
-				Color color = SIGNAL_COLORS[signal];
-				drawPanel(g, x, y, width, height,
-						alphaOf(PLATE, 225),
-						alphaOf(color, 150));
-				int barW = Math.max(20, width - 18);
-				g.setColor(TRACK);
-				g.fillRoundRect(x + 9, y + height - 7, barW, 4, 4, 4);
-				g.setColor(color);
-				g.fillRoundRect(x + 9, y + height - 7,
-						Math.max(2, (int)Math.round(barW * clamp01(value))),
-						4, 4, 4);
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(TEXT);
-				drawClipped(g, SIGNAL_LABELS[signal] + " " + percent(value),
-						x + 9, y + 13, width - 60);
-				g.setColor(color);
-				drawClipped(g, "+" + decimal(SIGNAL_WEIGHTS[signal] * value),
-						x + width - 48, y + 13, 42);
-			}
-
-			private void drawSignalLedger(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
-			{
-				drawPanel(g, x, y, width, height, alphaOf(INK, 240),
-						alphaOf(BORDER_STRONG, 160));
-				g.setFont(font(Font.BOLD, 13));
-				g.setColor(TEXT);
-				drawClipped(g, "Signal Contribution Ledger", x + 14, y + 24,
-						width - 28);
-				g.setFont(font(Font.PLAIN, 10));
-				g.setColor(MUTED);
-				String dominant = frame == null ? "dominant "
-						+ strongestSignal(activeSignalValues(frame))
-						: "dominant " + frame.dominantSignal;
-				drawClipped(g, dominant + " | "
-						+ activeCounterfactualLabel(), x + 14, y + 41, width - 28);
-				drawScoreBand(g, x + 14, y + 52, width - 28, 26, frame);
-				double[] values = activeSignalValues(frame);
-				int rowY = y + 91;
-				if (height >= 310)
-				{
-					drawSignalRadar(g, x + 20, y + 88, width - 40, 100, values);
-					rowY = y + 204;
-				}
-				int available = Math.max(1, height - (rowY - y) - 12);
-				int visibleRows = SIGNAL_LABELS.length;
-				if (available < SIGNAL_LABELS.length * 23)
-				{
-					visibleRows = Math.max(3,
-							Math.min(SIGNAL_LABELS.length, available / 18));
-				}
-				int rowGap = Math.max(17, Math.min(32,
-						available / Math.max(1, visibleRows)));
-				int rowH = Math.max(15, Math.min(27, rowGap - 5));
-				int[] order = visibleRows == SIGNAL_LABELS.length
-						? naturalSignalOrder()
-						: sortedSignalOrder(values);
-				for (int i = 0; i < visibleRows; i++)
-				{
-					int signal = order[i];
-					drawLedgerRow(g, x + 14, rowY + i * rowGap,
-							width - 28, rowH, signal, values[signal]);
-				}
-			}
-
-			private void drawSignalRadar(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					double[] values)
-			{
-				int cx = x + width / 2;
-				int cy = y + height / 2;
-				int radius = Math.max(34, Math.min(width / 2 - 38, height / 2 - 6));
-				g.setStroke(new BasicStroke(1.0f));
-				for (int level = 1; level <= 4; level++)
-				{
-					double scale = level / 4.0;
-					java.awt.Polygon grid = radarPolygon(cx, cy, radius * scale,
-							filledValues(1.0));
-					g.setColor(alphaOf(BORDER_STRONG, 70 + level * 12));
-					g.drawPolygon(grid);
-				}
-				for (int i = 0; i < SIGNAL_LABELS.length; i++)
-				{
-					double angle = radarAngle(i);
-					int ex = cx + (int)Math.round(Math.cos(angle) * radius);
-					int ey = cy + (int)Math.round(Math.sin(angle) * radius);
-					g.setColor(alphaOf(BORDER_STRONG, 140));
-					g.drawLine(cx, cy, ex, ey);
-					g.setFont(font(Font.BOLD, 8));
-					g.setColor(SIGNAL_COLORS[i]);
-					drawClipped(g, SIGNAL_LABELS[i].substring(0, 1),
-							ex - 4, ey + 3, 12);
-				}
-				double[] challenger = challengerSignalValues();
-				java.awt.Polygon challengerShape =
-						radarPolygon(cx, cy, radius, challenger);
-				g.setColor(alphaOf(AMBER, 40));
-				g.fillPolygon(challengerShape);
-				g.setColor(alphaOf(AMBER, 120));
-				g.drawPolygon(challengerShape);
-				java.awt.Polygon shape = radarPolygon(cx, cy, radius, values);
-				g.setColor(alphaOf(GREEN, 64));
-				g.fillPolygon(shape);
-				g.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND,
-						BasicStroke.JOIN_ROUND));
-				g.setColor(alphaOf(GREEN, 210));
-				g.drawPolygon(shape);
-				g.setStroke(new BasicStroke(1.0f));
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(MUTED);
-				centerString(g, "candidate shape", cx, y + height + 11);
-			}
-
-			private void drawEvidenceFooter(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
-			{
-				drawPanel(g, x, y, width, height, alphaOf(INK, 235),
-						alphaOf(BORDER_STRONG, 160));
-				int gap = 8;
-				int columns = width >= 980 ? 4 : 3;
-				int colW = Math.max(96, (width - gap * (columns + 1)) / columns);
-				int colX = x + gap;
-				drawFooterColumn(g, colX, y + 8, colW, height - 16,
-						"SHARED TERMS", join(candidate.sharedTerms, 4),
-						BLUE, true);
-				colX += colW + gap;
-				drawFooterColumn(g, colX, y + 8, colW, height - 16,
-						"EVIDENCE LIMITS", evidenceLimitText(),
-						RED, true);
-				colX += colW + gap;
-				drawFooterColumn(g, colX, y + 8, colW, height - 16,
-						"CHALLENGER", challengerFooterText(),
-						AMBER, false);
-				if (columns > 3)
-				{
-					colX += colW + gap;
-					String replay = (frame == null ? "final frame" : frame.label)
-							+ " | " + activeCounterfactualLabel()
-							+ " | " + scoreText(displayScore(frame));
-					drawFooterColumn(g, colX, y + 8, colW, height - 16,
-							"REPLAY STATE", replay, TEAL, false);
-				}
-			}
-
-			private void drawMetricPill(
-					Graphics2D g,
-					int x,
-					int y,
-					int w,
-					int h,
-					String label,
-					String value,
-					Color color)
-			{
-				drawPanel(g, x, y, w, h, new Color(color.getRed(), color.getGreen(),
-						color.getBlue(), 34), new Color(color.getRed(),
-						color.getGreen(), color.getBlue(), 128));
-				g.setFont(font(Font.BOLD, 8));
-				g.setColor(color);
-				drawClipped(g, label.toUpperCase(Locale.US), x + 9, y + 12, w - 18);
-				g.setFont(font(Font.BOLD, 13));
-				g.setColor(TEXT);
-				drawClipped(g, value, x + 9, y + 28, w - 18);
-			}
-
-			private void drawSignalLane(
-					Graphics2D g,
-					int x1,
-					int y1,
-					int x2,
-					int y2,
-					String label,
-					double value,
-					Color color,
-					double contribution,
-					boolean drawLabel)
-			{
-				if (x2 <= x1)
-				{
-					return;
-				}
-				float stroke = (float)(1.2 + 7.0 * clamp01(value));
-				g.setStroke(new BasicStroke(stroke, BasicStroke.CAP_ROUND,
-						BasicStroke.JOIN_ROUND));
-				g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(),
-						alpha(38 + (int)Math.round(152.0 * clamp01(value)))));
-				g.drawLine(x1, y1, x2, y2);
-				int pulse = x1 + (int)Math.round((x2 - x1)
-						* ((phase + value) % 1.0));
-				g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(),
-						alpha(80 + (int)Math.round(100.0 * clamp01(value)))));
-				int dot = Math.max(3, Math.min(7, (int)Math.round(3 + 5 * value)));
-				g.fillOval(pulse - dot / 2, y1 - dot / 2, dot, dot);
-				if (drawLabel)
-				{
-					int chipW = 112;
-					int chipX = Math.max(x1, Math.min(x2 - chipW, x2 - 142));
-					drawPanel(g, chipX, y1 - 11, chipW, 22,
-							alphaOf(PLATE, 228),
-							alphaOf(color, 128));
-					g.setFont(font(Font.BOLD, 9));
-					g.setColor(TEXT);
-					drawClipped(g, label + " " + percent(value),
-							chipX + 7, y1 + 4, chipW - 14);
-					g.setFont(font(Font.PLAIN, 9));
-					g.setColor(MUTED);
-					drawClipped(g, "+" + decimal(contribution),
-							chipX + 68, y1 + 4, 38);
-				}
-				g.setStroke(new BasicStroke(1.0f));
-			}
-
-			private void drawIdentityNode(
-					Graphics2D g,
-					int cx,
-					int cy,
-					Color color,
-					String caption,
-					String name,
-					String followee)
-			{
-				int glow = 8 + (int)Math.round(3.0 * Math.sin(phase));
-				g.setColor(alphaOf(color, 34));
-				g.fillOval(cx - 34 - glow, cy - 34 - glow,
-						68 + glow * 2, 68 + glow * 2);
-				g.setColor(alphaOf(PLATE, 235));
-				g.fillOval(cx - 34, cy - 34, 68, 68);
-				g.setStroke(new BasicStroke(3.0f));
-				g.setColor(color);
-				g.drawOval(cx - 34, cy - 34, 68, 68);
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(color);
-				centerString(g, caption, cx, cy - 7);
-				g.setFont(font(Font.BOLD, 11));
-				g.setColor(TEXT);
-				centerString(g, ellipsize(name, g.getFontMetrics(), 112), cx, cy + 9);
-				g.setFont(font(Font.PLAIN, 10));
-				g.setColor(MUTED);
-				if (followee != null && followee.trim().length() > 0)
-				{
-					centerString(g, ellipsize(followee, g.getFontMetrics(), 128),
-							cx, cy + 50);
-				}
-			}
-
-			private void drawFusionCore(
-					Graphics2D g,
-					int cx,
-					int cy,
-					int radius,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame,
-					double[] values)
-			{
-				double score = displayScore(frame);
-				g.setColor(alphaOf(PLATE, 240));
-				g.fillOval(cx - radius, cy - radius, radius * 2, radius * 2);
-				g.setStroke(new BasicStroke(10.0f, BasicStroke.CAP_ROUND,
-						BasicStroke.JOIN_ROUND));
-				g.setColor(alphaOf(TRACK, 220));
-				g.drawOval(cx - radius, cy - radius, radius * 2, radius * 2);
-				int ciStart = 90 - (int)Math.round(candidate.confidenceUpper * 360.0);
-				int ciExtent = Math.max(3, (int)Math.round(
-						(candidate.confidenceUpper - candidate.confidenceLower) * 360.0));
-				g.setColor(alphaOf(TEAL, 160));
-				g.drawArc(cx - radius, cy - radius, radius * 2, radius * 2,
-						ciStart, ciExtent);
-				g.setStroke(new BasicStroke(7.0f, BasicStroke.CAP_ROUND,
-						BasicStroke.JOIN_ROUND));
-				g.setColor(score >= candidate.challengerScore ? GREEN : AMBER);
-				g.drawArc(cx - radius + 8, cy - radius + 8,
-						(radius - 8) * 2, (radius - 8) * 2, 90,
-						-(int)Math.round(score * 360.0));
 				g.setFont(font(Font.BOLD, 19));
 				g.setColor(TEXT);
-				centerString(g, scoreText(score), cx, cy - 2);
-				g.setFont(font(Font.BOLD, 9));
+				FontMetrics title = g.getFontMetrics();
+				g.drawString(ellipsize(report.targetUser + "  →  " + candidate.candidateName(), title,
+						width - 300), x, y + 16);
+				g.setFont(font(Font.PLAIN, 12));
 				g.setColor(MUTED);
-				centerString(g, "TGF SCORE", cx, cy + 16);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(TEAL);
-				centerString(g, strongestSignal(values).toUpperCase(Locale.US),
-						cx, cy - radius - 14);
-				g.setStroke(new BasicStroke(1.0f));
+				FontMetrics body = g.getFontMetrics();
+				String followees = "Target follows " + safe(report.targetFollowee) + "; candidate follows "
+						+ safe(candidate.candidateFollowee())
+						+ (safe(report.targetFollowee).equals(safe(candidate.candidateFollowee()))
+								? "  (same community)" : "");
+				g.drawString(ellipsize(followees, body, width - 300), x, y + 38);
+				int pillW = 138;
+				int pillX = x + width - pillW * 2 - 8;
+				drawPill(g, pillX, y, pillW, 46, "P(same community)",
+						scoreText(candidate.finalScore) + "  [" + scoreText(candidate.confidenceLower) + ", "
+								+ scoreText(candidate.confidenceUpper) + "]", GREEN);
+				drawPill(g, pillX + pillW + 8, y, pillW, 46, "Rank / stability",
+						"#" + candidate.rank + "  ·  " + percent(candidate.stability), AMBER);
+				g.setFont(font(Font.PLAIN, 11));
+				g.setColor(FAINT);
+				g.drawString(ellipsize("Interval: 5-95% of " + "bootstrap refits of the fusion. Stability: share"
+						+ " of refits that keep the candidate in the top ten.", body, width), x, y + 62);
+				return y + 78;
 			}
 
-			private void drawBridgeBadge(Graphics2D g, int cx, int y, int width)
-			{
-				int x = cx - width / 2;
-				drawPanel(g, x, y - 15, width, 30, alphaOf(AMBER, 28),
-						alphaOf(AMBER, 112));
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(AMBER);
-				centerString(g, "GRAPH BRIDGE", cx, y - 2);
-				g.setFont(font(Font.PLAIN, 9));
-				g.setColor(MUTED);
-				centerString(g, ellipsize(candidate.path, g.getFontMetrics(),
-						Math.max(40, width - 18)), cx, y + 11);
-			}
-
-			private void drawReplayTrace(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
-			{
-				drawPanel(g, x, y, width, height, alphaOf(PLATE, 205),
-						alphaOf(BORDER_STRONG, 140));
-				if (candidate.timeline == null || candidate.timeline.isEmpty())
-				{
-					return;
-				}
-				int lineX = x + 12;
-				int lineY = y + 19;
-				int lineW = Math.max(20, width - 24);
-				g.setColor(alphaOf(BORDER_STRONG, 190));
-				g.drawLine(lineX, lineY, lineX + lineW, lineY);
-				int previousX = -1;
-				int previousY = -1;
-				for (int i = 0; i < candidate.timeline.size(); i++)
-				{
-					TemporalGraphFoundationModelSupport.TimelineFrame point =
-							candidate.timeline.get(i);
-					int px = lineX + (int)Math.round(lineW * point.progress);
-					int py = lineY - (int)Math.round(13.0 * displayScore(point));
-					if (previousX >= 0)
-					{
-						g.setColor(new Color(BLUE.getRed(), BLUE.getGreen(),
-								BLUE.getBlue(), 150));
-						g.drawLine(previousX, previousY, px, py);
-					}
-					g.setColor(i == frameIndex ? GREEN : BLUE);
-					g.fillOval(px - 3, py - 3, 6, 6);
-					previousX = px;
-					previousY = py;
-				}
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(MUTED);
-				String text = frame == null ? "final replay"
-						: frame.label + " | " + frame.evidence;
-				drawClipped(g, text, x + 12, y + height - 6, width - 24);
-			}
-
-			private void drawScoreBand(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
-			{
-				g.setColor(TRACK);
-				g.fillRoundRect(x, y + height - 9, width, 7, 7, 7);
-				int lo = x + (int)Math.round(width * candidate.confidenceLower);
-				int hi = x + (int)Math.round(width * candidate.confidenceUpper);
-				g.setColor(alphaOf(TEAL, 100));
-				g.fillRoundRect(Math.min(lo, hi), y + height - 10,
-						Math.max(3, Math.abs(hi - lo)), 9, 9, 9);
-				int scoreX = x + (int)Math.round(width * displayScore(frame));
-				g.setColor(GREEN);
-				g.fillRoundRect(scoreX - 2, y + height - 14, 4, 15, 4, 4);
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(MUTED);
-				drawClipped(g, "CI " + scoreText(candidate.confidenceLower)
-						+ "-" + scoreText(candidate.confidenceUpper)
-						+ " | p~" + decimal(candidate.calibrationPValue),
-						x, y + 10, width);
-			}
-
-			private void drawLedgerRow(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					int index,
-					double value)
-			{
-				Color color = SIGNAL_COLORS[index];
-				double contribution = value * SIGNAL_WEIGHTS[index];
-				double delta = contribution - challengerContribution(index);
-				g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(),
-						34));
-				g.fillRoundRect(x, y, width, height, 7, 7);
-				g.setColor(alphaOf(BORDER_STRONG, 170));
-				g.drawRoundRect(x, y, width, height, 7, 7);
-				g.setFont(font(Font.BOLD, 10));
-				g.setColor(TEXT);
-				drawClipped(g, SIGNAL_LABELS[index], x + 8, y + 14,
-						Math.max(44, width / 4));
-				int barX = x + Math.max(58, width / 4);
-				int barW = Math.max(34, width - (barX - x) - 76);
-				g.setColor(TRACK);
-				g.fillRoundRect(barX, y + height / 2 - 4, barW, 8, 8, 8);
-				g.setColor(color);
-				g.fillRoundRect(barX, y + height / 2 - 4,
-						Math.max(2, (int)Math.round(barW * clamp01(value))),
-						8, 8, 8);
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(MUTED);
-				drawClipped(g, percent(value), barX + barW + 7, y + 12, 42);
-				g.setColor(delta >= 0.0 ? GREEN : RED);
-				drawClipped(g, (delta >= 0.0 ? "+" : "")
-						+ decimal(delta), barX + barW + 7, y + height - 4, 48);
-			}
-
-			private void drawFooterColumn(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					String title,
-					String value,
-					Color color,
-					boolean chips)
-			{
-				drawPanel(g, x, y, width, height, new Color(color.getRed(),
-						color.getGreen(), color.getBlue(), 24),
-						new Color(color.getRed(), color.getGreen(),
-								color.getBlue(), 98));
-				g.setFont(font(Font.BOLD, 9));
-				g.setColor(color);
-				drawClipped(g, title, x + 9, y + 13, width - 18);
-				if (chips)
-				{
-					drawChipStrip(g, value, x + 9, y + 22, width - 18,
-							height - 26, color);
-				}
-				else
-				{
-					g.setFont(font(Font.BOLD, 10));
-					g.setColor(TEXT);
-					drawClipped(g, value, x + 9, y + 33, width - 18);
-					g.setFont(font(Font.PLAIN, 9));
-					g.setColor(MUTED);
-					drawClipped(g, candidate.reliabilityBand + " | "
-							+ candidate.calibrationVerdict,
-							x + 9, y + Math.min(height - 6, 49), width - 18);
-				}
-			}
-
-			private void drawChipStrip(
-					Graphics2D g,
-					String value,
-					int x,
-					int y,
-					int width,
-					int height,
+			private void drawPill(Graphics2D g, int x, int y, int width, int height, String label, String value,
 					Color color)
 			{
-				String[] parts = safe(value).split(",");
-				int cx = x;
-				int cy = y;
+				g.setColor(alphaOf(color, 26));
+				g.fillRoundRect(x, y, width, height, 14, 14);
+				g.setColor(alphaOf(color, 120));
+				g.drawRoundRect(x, y, width - 1, height - 1, 14, 14);
 				g.setFont(font(Font.BOLD, 9));
-				for (int i = 0; i < parts.length && i < 4; i++)
+				g.setColor(color);
+				FontMetrics metrics = g.getFontMetrics();
+				g.drawString(ellipsize(label.toUpperCase(Locale.US), metrics, width - 16), x + 10, y + 15);
+				g.setFont(font(Font.BOLD, 13));
+				g.setColor(TEXT);
+				metrics = g.getFontMetrics();
+				g.drawString(ellipsize(value, metrics, width - 16), x + 10, y + 35);
+			}
+
+			/**
+			 * Diverging bars of the learned log-odds contributions, the baseline
+			 * of the mean pair, and the probability they add up to.
+			 */
+			private void paintContributions(Graphics2D g, int x, int y, int width, int height)
+			{
+				panel(g, x, y, width, height);
+				g.setFont(font(Font.BOLD, 11));
+				g.setColor(TEAL);
+				g.drawString("WHY THIS PROBABILITY", x + 14, y + 20);
+				g.setFont(font(Font.PLAIN, 10));
+				g.setColor(MUTED);
+				FontMetrics small = g.getFontMetrics();
+				g.drawString(ellipsize("log-odds each signal adds over the mean training pair", small, width - 28),
+						x + 14, y + 36);
+				double[] contributions = {candidate.textContribution, candidate.graphContribution,
+						candidate.timeContribution};
+				double[] values = {removeTopTerm ? candidate.withoutTopTermText : candidate.text,
+						candidate.graph, candidate.time};
+				boolean[] removed = {false, removeGraph, removeTime};
+				double sum = 0.0;
+				double scale = 0.5;
+				for (int signal = 0; signal < 3; signal++)
 				{
-					String part = parts[i].trim();
-					if (part.length() == 0)
+					sum += contributions[signal];
+					scale = Math.max(scale, Math.abs(contributions[signal]));
+				}
+				double logit = Math.log(Math.max(1e-12, candidate.finalScore)
+						/ Math.max(1e-12, 1.0 - candidate.finalScore));
+				double baseline = logit - sum;
+				int labelW = Math.min(150, width / 3);
+				int barX = x + 14 + labelW;
+				int barW = width - 28 - labelW;
+				int center = barX + barW / 2;
+				int rowH = Math.max(34, Math.min(46, (height - 96) / 3));
+				int rowY = y + 50;
+				g.setColor(alphaOf(BORDER_STRONG, 160));
+				g.drawLine(center, rowY - 4, center, rowY + rowH * 3);
+				for (int signal = 0; signal < 3; signal++)
+				{
+					int top = rowY + signal * rowH;
+					g.setFont(font(Font.BOLD, 12));
+					g.setColor(removed[signal] ? FAINT : TEXT);
+					g.drawString(SIGNAL_LABELS[signal] + "  " + scoreText(values[signal]), x + 14, top + 14);
+					g.setFont(font(Font.PLAIN, 9));
+					g.setColor(FAINT);
+					g.drawString(ellipsize(SIGNAL_DETAILS[signal], small, labelW - 6), x + 14, top + 27);
+					double contribution = removed[signal] ? 0.0 : contributions[signal];
+					int length = (int)Math.round((barW / 2 - 8) * Math.min(1.0, Math.abs(contribution) / scale));
+					Color color = contribution >= 0 ? SIGNAL_COLORS[signal] : RED;
+					g.setColor(alphaOf(color, removed[signal] ? 50 : 210));
+					if (contribution >= 0)
 					{
-						continue;
-					}
-					FontMetrics metrics = g.getFontMetrics();
-					int chipW = Math.min(width, metrics.stringWidth(part) + 16);
-					if (cx + chipW > x + width)
-					{
-						cx = x;
-						cy += 20;
-					}
-					if (cy + 17 > y + height)
-					{
-						return;
-					}
-					g.setColor(new Color(color.getRed(), color.getGreen(),
-							color.getBlue(), 46));
-					g.fillRoundRect(cx, cy, chipW, 17, 8, 8);
-					g.setColor(new Color(color.getRed(), color.getGreen(),
-							color.getBlue(), 128));
-					g.drawRoundRect(cx, cy, chipW, 17, 8, 8);
-					g.setColor(TEXT);
-					drawClipped(g, part, cx + 8, cy + 12, chipW - 16);
-					cx += chipW + 6;
-				}
-			}
-
-			private void drawPanel(
-					Graphics2D g,
-					int x,
-					int y,
-					int width,
-					int height,
-					Color fill,
-					Color border)
-			{
-				if (width <= 0 || height <= 0)
-				{
-					return;
-				}
-				g.setColor(fill);
-				g.fillRoundRect(x, y, width, height, 10, 10);
-				g.setColor(border);
-				g.drawRoundRect(x, y, width, height, 10, 10);
-			}
-
-			private double[] activeSignalValues(
-					TemporalGraphFoundationModelSupport.TimelineFrame frame)
-			{
-				double textValue = removeTopTerm ? candidate.withoutTopTermText
-						: valueFromFrame(frame, candidate.text, 0);
-				double graphValue = removeGraph ? 0.0
-						: valueFromFrame(frame, candidate.graph, 1);
-				double timeValue = removeTime ? 0.0
-						: valueFromFrame(frame, candidate.time, 2);
-				double bridgeValue = removeBridge ? 0.0
-						: valueFromFrame(frame, candidate.bridge, 3);
-				double debiasValue = removeDebias ? 0.0
-						: valueFromFrame(frame, candidate.debias, 4);
-				double robustValue = (!removeGraph && !removeTime && !removeBridge
-						&& !removeTopTerm)
-						? valueFromFrame(frame, candidate.robust, 5)
-						: visualRobustness(textValue, graphValue, timeValue, bridgeValue);
-				return new double[] {
-						clamp01(textValue),
-						clamp01(graphValue),
-						clamp01(timeValue),
-						clamp01(bridgeValue),
-						clamp01(debiasValue),
-						clamp01(robustValue)};
-			}
-
-			private java.awt.Polygon radarPolygon(
-					int cx,
-					int cy,
-					double radius,
-					double[] values)
-			{
-				java.awt.Polygon polygon = new java.awt.Polygon();
-				for (int i = 0; i < SIGNAL_LABELS.length; i++)
-				{
-					double angle = radarAngle(i);
-					double value = i < values.length ? clamp01(values[i]) : 0.0;
-					polygon.addPoint(
-							cx + (int)Math.round(Math.cos(angle) * radius * value),
-							cy + (int)Math.round(Math.sin(angle) * radius * value));
-				}
-				return polygon;
-			}
-
-			private double[] filledValues(double value)
-			{
-				double[] values = new double[SIGNAL_LABELS.length];
-				for (int i = 0; i < values.length; i++)
-				{
-					values[i] = clamp01(value);
-				}
-				return values;
-			}
-
-			private double radarAngle(int signal)
-			{
-				return -Math.PI / 2.0
-						+ Math.PI * 2.0 * signal / SIGNAL_LABELS.length;
-			}
-
-			private double[] challengerSignalValues()
-			{
-				return new double[] {
-						removeTopTerm ? 0.0 : clamp01(candidate.challengerText),
-						removeGraph ? 0.0 : clamp01(candidate.challengerGraph),
-						removeTime ? 0.0 : clamp01(candidate.challengerTime),
-						removeBridge ? 0.0 : clamp01(candidate.challengerBridge),
-						removeDebias ? 0.0 : clamp01(candidate.challengerDebias),
-						clamp01(candidate.challengerRobust)};
-			}
-
-			private double challengerContribution(int signal)
-			{
-				double value = 0.0;
-				if (signal == 0)
-				{
-					value = removeTopTerm ? 0.0 : candidate.challengerText;
-				}
-				else if (signal == 1)
-				{
-					value = removeGraph ? 0.0 : candidate.challengerGraph;
-				}
-				else if (signal == 2)
-				{
-					value = removeTime ? 0.0 : candidate.challengerTime;
-				}
-				else if (signal == 3)
-				{
-					value = removeBridge ? 0.0 : candidate.challengerBridge;
-				}
-				else if (signal == 4)
-				{
-					value = removeDebias ? 0.0 : candidate.challengerDebias;
-				}
-				else
-				{
-					value = candidate.challengerRobust;
-				}
-				return SIGNAL_WEIGHTS[signal] * clamp01(value);
-			}
-
-			private double visualRobustness(
-					double text,
-					double graph,
-					double time,
-					double bridge)
-			{
-				double sum = text + graph + time + bridge;
-				if (sum <= 0.0)
-				{
-					return 0.0;
-				}
-				double max = Math.max(Math.max(text, graph), Math.max(time, bridge));
-				return clamp01((1.0 - max / sum) * 1.35);
-			}
-
-			private String strongestSignal(double[] values)
-			{
-				int best = 0;
-				for (int i = 1; i < values.length; i++)
-				{
-					if (values[i] * SIGNAL_WEIGHTS[i]
-							> values[best] * SIGNAL_WEIGHTS[best])
-					{
-						best = i;
-					}
-				}
-				return SIGNAL_LABELS[best];
-			}
-
-			private int[] naturalSignalOrder()
-			{
-				int[] order = new int[SIGNAL_LABELS.length];
-				for (int i = 0; i < order.length; i++)
-				{
-					order[i] = i;
-				}
-				return order;
-			}
-
-			private int[] sortedSignalOrder(double[] values)
-			{
-				int[] order = naturalSignalOrder();
-				for (int i = 0; i < order.length; i++)
-				{
-					for (int j = i + 1; j < order.length; j++)
-					{
-						double left = values[order[i]] * SIGNAL_WEIGHTS[order[i]];
-						double right = values[order[j]] * SIGNAL_WEIGHTS[order[j]];
-						if (right > left)
-						{
-							int tmp = order[i];
-							order[i] = order[j];
-							order[j] = tmp;
-						}
-					}
-				}
-				return order;
-			}
-
-			private String challengerFooterText()
-			{
-				if (candidate.challengerName == null
-						|| candidate.challengerName.length() == 0)
-				{
-					return "No retained challenger";
-				}
-				return candidate.candidateName() + " "
-						+ (candidate.challengerGap >= 0.0 ? "leads " : "trails ")
-						+ candidate.challengerName + " by "
-						+ scoreText(Math.abs(candidate.challengerGap))
-						+ " | " + candidate.bestContrastSignal;
-			}
-
-			private String evidenceLimitText()
-			{
-				if (candidate.riskFlags == null || candidate.riskFlags.isEmpty())
-				{
-					return "-";
-				}
-				ArrayList<String> values = new ArrayList<String>();
-				for (String flag : candidate.riskFlags)
-				{
-					if ("no usable graph path".equals(flag))
-					{
-						values.add("text-led: no pair bridge");
-					}
-					else if ("graph artifact edge file is sparse/empty".equals(flag))
-					{
-						values.add("sparse graph artifact");
+						g.fillRoundRect(center, top + 4, Math.max(2, length), 16, 8, 8);
 					}
 					else
 					{
-						values.add(flag);
+						g.fillRoundRect(center - length, top + 4, Math.max(2, length), 16, 8, 8);
 					}
-					if (values.size() >= 3)
-					{
-						break;
-					}
+					g.setFont(font(Font.BOLD, 10));
+					g.setColor(removed[signal] ? FAINT : color);
+					String text = removed[signal] ? "removed" : String.format(Locale.US, "%+.2f", contribution);
+					int tx = contribution >= 0 ? center + length + 6 : center - length - 6
+							- g.getFontMetrics().stringWidth(text);
+					g.drawString(text, Math.max(barX, Math.min(barX + barW - 40, tx)), top + 16);
 				}
-				return join(values, values.size());
-			}
-
-			private void centerString(Graphics2D g, String value, int cx, int y)
-			{
-				FontMetrics metrics = g.getFontMetrics();
-				String text = safe(value);
-				g.drawString(text, cx - metrics.stringWidth(text) / 2, y);
-			}
-
-			private static int alpha(int value)
-			{
-				return Math.max(0, Math.min(255, value));
-			}
-
-			private static int cubicPoint(
-					int p0,
-					int p1,
-					int p2,
-					int p3,
-					double t)
-			{
-				double one = 1.0 - t;
-				double value = one * one * one * p0
-						+ 3.0 * one * one * t * p1
-						+ 3.0 * one * t * t * p2
-						+ t * t * t * p3;
-				return (int)Math.round(value);
-			}
-
-			private static double clamp01(double value)
-			{
-				return Math.max(0.0, Math.min(1.0, value));
-			}
-
-				private double displayScore(
-						TemporalGraphFoundationModelSupport.TimelineFrame frame)
+				int footY = rowY + rowH * 3 + 18;
+				g.setFont(font(Font.PLAIN, 11));
+				g.setColor(MUTED);
+				g.drawString(ellipsize(String.format(Locale.US,
+						"baseline %+.2f  +  signals %+.2f  =  log-odds %+.2f  →  P = %s", baseline, sum,
+						logit, scoreText(candidate.finalScore)), small, width - 28), x + 14, footY);
+				if (removeGraph || removeTime || removeTopTerm)
 				{
-				double base = frame == null ? candidate.finalScore : frame.score;
-				if (!removeGraph && !removeTime && !removeBridge
-						&& !removeDebias && !removeTopTerm)
-				{
-					return base;
-				}
-				double counterfactual = candidate.counterfactualScore(
-						removeGraph,
-						removeTime,
-						removeBridge,
-						removeDebias,
-						removeTopTerm);
-				if (candidate.finalScore <= 0.0)
-				{
-					return counterfactual;
-				}
-					return Math.max(0.0, Math.min(1.0,
-							base * (counterfactual / candidate.finalScore)));
-				}
-
-				private int activeCounterfactualRank(
-						TemporalGraphFoundationModelSupport.CandidateScore score)
-				{
-					if (report == null || score == null || report.topCandidates.isEmpty())
-					{
-						return 0;
-					}
-					double selected = activeCounterfactualScore(score);
-					int rank = 1;
-					for (TemporalGraphFoundationModelSupport.CandidateScore other
-							: report.topCandidates)
-					{
-						if (other == score)
-						{
-							continue;
-						}
-						double otherScore = activeCounterfactualScore(other);
-						if (otherScore > selected
-								|| (otherScore == selected
-										&& other.candidateName().compareTo(
-												score.candidateName()) < 0))
-						{
-							rank++;
-						}
-					}
-					return rank;
-				}
-
-				private double activeCounterfactualScore(
-						TemporalGraphFoundationModelSupport.CandidateScore score)
-				{
-					if (score == null)
-					{
-						return 0.0;
-					}
-					return score.counterfactualScore(
-							removeGraph,
-							removeTime,
-							removeBridge,
-							removeDebias,
+					double what = candidate.counterfactualScore(removeGraph, removeTime, false, false,
 							removeTopTerm);
+					g.setFont(font(Font.BOLD, 11));
+					g.setColor(AMBER);
+					g.drawString(ellipsize("With the selected evidence removed: P = " + scoreText(what)
+							+ " (" + signed(what - candidate.finalScore) + ")", small, width - 28),
+							x + 14, footY + 18);
 				}
-
-				private void drawClipped(
-						Graphics2D g,
-						String value,
-						int x,
-						int y,
-						int width)
-				{
-					FontMetrics metrics = g.getFontMetrics();
-					g.drawString(ellipsize(value, metrics, Math.max(4, width)), x, y);
-				}
-
-				private double valueFromFrame(
-						TemporalGraphFoundationModelSupport.TimelineFrame frame,
-					double fallback,
-					int signal)
-			{
-				if (frame == null)
-				{
-					return fallback;
-				}
-				if (signal == 0)
-				{
-					return frame.text;
-				}
-				if (signal == 1)
-				{
-					return frame.graph;
-				}
-				if (signal == 2)
-				{
-					return frame.time;
-				}
-				if (signal == 3)
-				{
-					return frame.bridge;
-				}
-				if (signal == 4)
-				{
-					return frame.debias;
-				}
-				return frame.robust;
 			}
 
-			private String activeCounterfactualLabel()
+			/** The probability and rank with one piece of evidence removed. */
+			private void paintCounterfactuals(Graphics2D g, int x, int y, int width, int height)
 			{
-				ArrayList<String> active = new ArrayList<String>();
-				if (removeGraph)
+				panel(g, x, y, width, height);
+				g.setFont(font(Font.BOLD, 11));
+				g.setColor(PURPLE);
+				g.drawString("COUNTERFACTUALS", x + 14, y + 20);
+				g.setFont(font(Font.PLAIN, 10));
+				g.setColor(MUTED);
+				FontMetrics small = g.getFontMetrics();
+				g.drawString(ellipsize("probability and rank without one piece of evidence", small, width - 28),
+						x + 14, y + 36);
+				List<TemporalGraphFoundationModelSupport.CounterfactualProbe> probes = candidate.counterfactuals;
+				if (probes == null || probes.isEmpty())
 				{
-					active.add("graph off");
+					g.drawString("No probes for this candidate.", x + 14, y + 60);
+					return;
 				}
-				if (removeTime)
+				int rowH = Math.max(34, Math.min(48, (height - 50) / Math.max(1, probes.size())));
+				int barW = width - 28;
+				for (int index = 0; index < probes.size(); index++)
 				{
-					active.add("time off");
+					TemporalGraphFoundationModelSupport.CounterfactualProbe probe = probes.get(index);
+					int top = y + 48 + index * rowH;
+					g.setFont(font(Font.BOLD, 11));
+					g.setColor(TEXT);
+					g.drawString(ellipsize(probe.label, small, barW - 110), x + 14, top + 12);
+					g.setFont(font(Font.PLAIN, 10));
+					g.setColor(probe.rankChanged ? AMBER : MUTED);
+					String rank = probe.rank <= 0 ? "" : "rank #" + probe.rank
+							+ (probe.rankChanged ? " (" + (probe.rank > candidate.rank ? "↓" : "↑")
+									+ probe.rankShift + ")" : "");
+					int rankWidth = g.getFontMetrics().stringWidth(rank);
+					g.drawString(rank, x + 14 + barW - rankWidth, top + 12);
+					g.setColor(TRACK);
+					g.fillRoundRect(x + 14, top + 18, barW, 7, 7, 7);
+					g.setColor(alphaOf(GREEN, 120));
+					g.fillRoundRect(x + 14, top + 18, (int)Math.round(barW * clamp(candidate.finalScore)), 7, 7, 7);
+					g.setColor(PURPLE);
+					g.fillRoundRect(x + 14, top + 18, (int)Math.round(barW * clamp(probe.score)), 7, 7, 7);
 				}
-				if (removeBridge)
-				{
-					active.add("bridge off");
-				}
-				if (removeDebias)
-				{
-					active.add("debias off");
-				}
-				if (removeTopTerm)
-				{
-					active.add("top term off");
-				}
-				return active.isEmpty() ? "observed replay" : join(active, 5);
 			}
 
-		private static String join(List<String> values, int limit)
-		{
-			ArrayList<String> safeValues = new ArrayList<String>();
-			for (String value : values)
+			/** The candidate's probability and rank as the dated activity accumulates. */
+			private void paintTimeline(Graphics2D g, int x, int y, int width, int height)
 			{
-				if (value != null && value.trim().length() > 0)
+				panel(g, x, y, width, height);
+				g.setFont(font(Font.BOLD, 11));
+				g.setColor(BLUE);
+				g.drawString("RANK OVER TIME", x + 14, y + 20);
+				g.setFont(font(Font.PLAIN, 10));
+				g.setColor(MUTED);
+				FontMetrics small = g.getFontMetrics();
+				List<TemporalGraphFoundationModelSupport.TimelineFrame> frames = candidate.timeline;
+				if (frames == null || frames.isEmpty())
 				{
-					safeValues.add(value.trim());
+					g.drawString(ellipsize("The dataset has no usable dates, so the model has no temporal signal"
+							+ " and no timeline.", small, width - 28), x + 14, y + 40);
+					return;
 				}
-				if (safeValues.size() >= limit)
+				g.drawString(ellipsize("time co-activity recomputed on growing prefixes of the dated activity",
+						small, width - 28), x + 14, y + 36);
+				int plotX = x + 44;
+				int plotY = y + 48;
+				int plotW = width - 64;
+				int plotH = height - 70;
+				int worst = 1;
+				for (TemporalGraphFoundationModelSupport.TimelineFrame frame : frames)
 				{
-					break;
+					worst = Math.max(worst, frame.rank);
+				}
+				g.setColor(alphaOf(BORDER, 200));
+				g.drawLine(plotX, plotY + plotH, plotX + plotW, plotY + plotH);
+				g.setFont(font(Font.PLAIN, 9));
+				g.setColor(FAINT);
+				g.drawString("#1", x + 14, plotY + 8);
+				g.drawString("#" + worst, x + 14, plotY + plotH);
+				int count = frames.size();
+				int[] xs = new int[count];
+				int[] ys = new int[count];
+				for (int index = 0; index < count; index++)
+				{
+					TemporalGraphFoundationModelSupport.TimelineFrame frame = frames.get(index);
+					xs[index] = plotX + (count == 1 ? plotW / 2 : index * plotW / (count - 1));
+					double position = worst <= 1 ? 0.0 : (Math.max(1, frame.rank) - 1) / (double)(worst - 1);
+					ys[index] = plotY + (int)Math.round(position * (plotH - 8)) + 4;
+				}
+				g.setColor(alphaOf(GREEN, 60));
+				for (int index = 0; index < count; index++)
+				{
+					TemporalGraphFoundationModelSupport.TimelineFrame frame = frames.get(index);
+					int barH = (int)Math.round((plotH - 6) * clamp(frame.score));
+					g.fillRoundRect(xs[index] - 5, plotY + plotH - barH, 10, barH, 4, 4);
+				}
+				g.setColor(BLUE);
+				g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+				for (int index = 1; index < count; index++)
+				{
+					g.drawLine(xs[index - 1], ys[index - 1], xs[index], ys[index]);
+				}
+				g.setStroke(new BasicStroke(1f));
+				int selected = Math.max(0, Math.min(count - 1, frameIndex));
+				for (int index = 0; index < count; index++)
+				{
+					int size = index == selected ? 10 : 6;
+					g.setColor(index == selected ? AMBER : BLUE);
+					g.fillOval(xs[index] - size / 2, ys[index] - size / 2, size, size);
+				}
+				TemporalGraphFoundationModelSupport.TimelineFrame current = frames.get(selected);
+				g.setFont(font(Font.BOLD, 10));
+				g.setColor(AMBER);
+				String callout = safe(current.label) + ": rank #" + current.rank + ", P " + scoreText(current.score);
+				int calloutWidth = g.getFontMetrics().stringWidth(callout);
+				g.drawString(callout, Math.max(plotX, Math.min(plotX + plotW - calloutWidth, xs[selected]
+						- calloutWidth / 2)), y + height - 8);
+			}
+
+			/** Shared terms and the model's own explanation. */
+			private void paintEvidence(Graphics2D g, int x, int y, int width, int height)
+			{
+				panel(g, x, y, width, height);
+				g.setFont(font(Font.BOLD, 11));
+				g.setColor(GREEN);
+				g.drawString("EVIDENCE", x + 14, y + 20);
+				g.setFont(font(Font.PLAIN, 11));
+				FontMetrics metrics = g.getFontMetrics();
+				int chipX = x + 14;
+				int chipY = y + 30;
+				List<String> terms = candidate.sharedTerms;
+				if (terms == null || terms.isEmpty())
+				{
+					g.setColor(MUTED);
+					g.drawString("No shared terms.", chipX, chipY + 14);
+				}
+				else
+				{
+					for (String term : terms)
+					{
+						int chipW = metrics.stringWidth(term) + 18;
+						if (chipX + chipW > x + width - 14)
+						{
+							break;
+						}
+						g.setColor(alphaOf(GREEN, 30));
+						g.fillRoundRect(chipX, chipY, chipW, 20, 10, 10);
+						g.setColor(TEXT);
+						g.drawString(term, chipX + 9, chipY + 14);
+						chipX += chipW + 6;
+					}
+				}
+				if (height > 70)
+				{
+					g.setColor(MUTED);
+					g.drawString(ellipsize(safe(candidate.whyThis), metrics, width - 28), x + 14, y + 68);
+				}
+				if (height > 90)
+				{
+					g.drawString(ellipsize(safe(candidate.whyNotChallenger), metrics, width - 28), x + 14, y + 86);
 				}
 			}
-			if (safeValues.isEmpty())
+
+			private void panel(Graphics2D g, int x, int y, int width, int height)
 			{
-				return "-";
+				g.setColor(alphaOf(INK, 235));
+				g.fillRoundRect(x, y, width, height, 14, 14);
+				g.setColor(alphaOf(BORDER_STRONG, 150));
+				g.drawRoundRect(x, y, width - 1, height - 1, 14, 14);
 			}
-			StringBuilder builder = new StringBuilder();
-			for (int i = 0; i < safeValues.size(); i++)
+
+			private static void centered(Graphics2D g, String text, int cx, int baseline)
 			{
-				if (i > 0)
-				{
-					builder.append(", ");
-				}
-				builder.append(safeValues.get(i));
+				g.drawString(text, cx - g.getFontMetrics().stringWidth(text) / 2, baseline);
 			}
-			return builder.toString();
+
+			private static double clamp(double value)
+			{
+				return Double.isNaN(value) ? 0.0 : Math.max(0.0, Math.min(1.0, value));
+			}
+
+			private static String signed(double value)
+			{
+				return String.format(Locale.US, "%+.3f", value);
 			}
 		}
 
@@ -3409,10 +2448,10 @@ final class TemporalGraphFoundationPanel extends JPanel
 				drawMetric(g, pad + metricW + 6, pad, metricW, metricH, "MRR",
 						decimal(summary.mrr), BLUE, summary.mrr);
 				drawMetric(g, pad + (metricW + 6) * 2, pad, metricW, metricH,
-						"Cal P", decimal(summary.averageCalibrationPValue), TEAL,
+						"Stable", percent(summary.averageCalibrationPValue), TEAL,
 						summary.averageCalibrationPValue);
 				drawMetric(g, pad + (metricW + 6) * 3, pad, metricW, metricH,
-						"Ready", percent(summary.foundationReadiness.overall), AMBER,
+						"AUC", decimal(summary.foundationReadiness.overall), AMBER,
 						summary.foundationReadiness.overall);
 				drawMetric(g, pad + (metricW + 6) * 4, pad, metricW, metricH,
 						"Fragile", percent(summary.averageCounterfactualFragility), PINK,
@@ -3745,7 +2784,7 @@ final class TemporalGraphFoundationPanel extends JPanel
 				drawPanel(g, x, y, w, h);
 				g.setFont(font(Font.BOLD, 10));
 				g.setColor(TEAL);
-				drawClipped(g, "READINESS + BENCHMARK", x + 12, y + 17, w - 24);
+				drawClipped(g, "FUSION FIT + ABLATION LENSES", x + 12, y + 17, w - 24);
 				TemporalGraphFoundationModelSupport.ResearchSummary summary =
 						result.getResearchSummary();
 				TemporalGraphFoundationModelSupport.FoundationReadiness readiness =
@@ -3765,9 +2804,9 @@ final class TemporalGraphFoundationPanel extends JPanel
 						w - ring - 32);
 				int barY = y + 30 + ring + 12;
 				int barW = Math.max(90, w - 26);
-				drawReadinessBar(g, x + 13, barY, barW, "temporal",
+				drawReadinessBar(g, x + 13, barY, barW, "dated rows",
 						readiness.temporalDepth, TEAL);
-				drawReadinessBar(g, x + 13, barY + 17, barW, "graph",
+				drawReadinessBar(g, x + 13, barY + 17, barW, "graph signal",
 						readiness.graphCoverage, GREEN);
 				drawReadinessBar(g, x + 13, barY + 34, barW, "evidence",
 						readiness.evidenceCoverage, BLUE);

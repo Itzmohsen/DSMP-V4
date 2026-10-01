@@ -75,7 +75,6 @@ public class OrganizingAgent extends Agent
     public static final int CommonNeighbors = 5;        // added by Sepide	
 	public static final int K_MEANSEUCLIDEAN = 6;   // added by Sepide 
 	public static final int TEMPORAL_GRAPH_FOUNDATION = 8;
-	private static final boolean WRITE_MERGE_DEBUG_FILES = false;
 	private static final long DEFAULT_INITIALIZATION_STALL_TIMEOUT_MILLIS =
 			180000L;
 	private static final long INITIALIZATION_STALL_TIMEOUT_MILLIS =
@@ -120,10 +119,8 @@ public class OrganizingAgent extends Agent
 	//@Jason added algorithmRec 
 	private int algorithmRec;
 
-	private ArrayList<Map<String,TreeMap<String,Double>>> listOfScores = new ArrayList<Map<String,TreeMap<String,Double>>>();
 	private ArrayList<RecommendationScorePayload> recommendationScorePayloads =
 			new ArrayList<RecommendationScorePayload>();
-	private Map<String,SortedSet<Map.Entry<String,Double>>> sortedAllUserScores = new TreeMap<String,SortedSet<Map.Entry<String,Double>>>();
 	private Map<String,RecommendationResultPayload> recommendationResults =
 			new LinkedHashMap<String,RecommendationResultPayload>();
 	private int recMergeCount = 0;
@@ -315,7 +312,7 @@ public class OrganizingAgent extends Agent
 
 				myGui.enableAllButtons();
 				myGui.enableList();
-				myGui.showMessageBox("initialize");
+				myGui.showRunMessage(runLifecycle.getActiveRunId(), "initialize");
 				System.out.println(
 						getLocalName()
 						+ " all live participants and recommender nodes are ready.");
@@ -366,7 +363,7 @@ public class OrganizingAgent extends Agent
 				System.err.println(getLocalName()+" initialization failed: "+detail);
 				if (myGui != null)
 				{
-					myGui.handleInitializationFailure(detail);
+					myGui.handleInitializationFailure(runLifecycle.getActiveRunId(), detail);
 				}
 			}
 
@@ -375,9 +372,7 @@ public class OrganizingAgent extends Agent
 		System.out.println(getLocalName()+" resetting per-run merge state for "+runId);
 		recMergeCount = 0;
 		recommendationRunFailed = false;
-		listOfScores.clear();
 		recommendationScorePayloads.clear();
-		sortedAllUserScores.clear();
 		recommendationResults.clear();
 		usersRequestedCount = 0;
 		userInterestListSent = 0;
@@ -514,152 +509,6 @@ public class OrganizingAgent extends Agent
 				}
 			}
 
-			if ("Merge Lists".equals(msg.getOntology()))
-			{
-				if (recommendationRunFailed)
-				{
-					return;
-				}
-				
-				recMergeCount++;
-				Map<String,TreeMap<String,Double>> scoresFromRecAgent = null;
-				Map<String,TreeMap<String,Double>> finalScores = new TreeMap<String,TreeMap<String,Double>>();
-
-				System.out.println(getLocalName()+" received Merge Lists recMergeCount: "+recMergeCount);
-
-				try {
-					scoresFromRecAgent = (TreeMap<String,TreeMap<String,Double>>)msg.getContentObject();
-					// System.out.println("scoresFromRecAgent: "+scoresFromRecAgent);
-					listOfScores.add(scoresFromRecAgent);
-				} catch (UnreadableException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-				}
-
-				System.out.println("recMergeCount: "+recMergeCount+" allRecAgents.length: "+allRecAgents.length);
-				 
-				if (recMergeCount == allRecAgents.length)
-				{
-					//Merge lists when > 1 recAgents otherwise just stores into finalScores
-					for (int i = 0; i < listOfScores.size(); i++)
-					{
-						for (String recUser : listOfScores.get(i).keySet())
-						{
-							TreeMap<String,Double> scoreOtherUsers = listOfScores.get(i).get(recUser);
-
-							//System.out.println(getLocalName()+ " scoreOtherUsers: "+scoreOtherUsers);
-							for(Map.Entry<String,Double> entry : scoreOtherUsers.entrySet()) 
-							{
-								String otherUser = entry.getKey();
-								Double otherUserScore = entry.getValue();
-
-								//System.out.println(otherUser + " => " + otherUserScore);
-								if (finalScores.containsKey(recUser))
-								{
-									//Case for classifier scores in distributed nodes
-									if (finalScores.get(recUser).containsKey(otherUser))
-									{
-										double oldScore = finalScores.get(recUser).get(otherUser);
-										finalScores.get(recUser).put(otherUser, oldScore+otherUserScore);
-										// System.out.println("FOUND "+otherUser+" AGAIN");
-									}
-									else
-										finalScores.get(recUser).put(otherUser, otherUserScore);
-									
-									// System.out.println("ENTERED THIS JUNK HERERERERERERE "+getLocalName());
-									// System.out.println(recUser+","+otherUser+","+otherUserScore);
-								}
-								else
-								{
-									TreeMap<String,Double> newScoreOtherUsers = new TreeMap<String,Double>();
-									newScoreOtherUsers.put(otherUser, otherUserScore);
-									finalScores.put(recUser, newScoreOtherUsers);
-									// System.out.println("FIRST "+recUser+","+newScoreOtherUsers);
-								}
-							}
-						}		
-					}
-
-					//System.out.println("finalScores: "+finalScores);
-					
-					if (WRITE_MERGE_DEBUG_FILES)
-					{
-						try {
-							FileWriter writer = new FileWriter("finalScores_Not_Normalized.txt", true); //append
-							BufferedWriter bufferedWriter = new BufferedWriter(writer);
-							
-							for (String userRec: finalScores.keySet())
-							{
-								bufferedWriter.write(userRec+" Scores: [\t");
-								
-								TreeMap<String,Double> otherUserScores = finalScores.get(userRec);
-								
-								for (String otherUser: otherUserScores.keySet())
-								{
-									double oldScore = otherUserScores.get(otherUser);
-									
-									bufferedWriter.write(otherUser+":"+oldScore+"\t");				
-								}
-								
-							}
-							bufferedWriter.write("]");
-							bufferedWriter.newLine();
-							bufferedWriter.close();
-						} catch (IOException e) {
-							// TODO Auto-generated catch block
-							e.printStackTrace();
-						}
-					}
-
-					//Normalize the scores
-					double maxScore;
-					for (String userRec: finalScores.keySet())
-					{
-
-						TreeMap<String,Double> otherUserScores = finalScores.get(userRec);
-						if (otherUserScores == null || otherUserScores.isEmpty())
-						{
-							finalScores.put(userRec, new TreeMap<String,Double>());
-							continue;
-						}
-						maxScore = Collections.max(otherUserScores.values());
-						for (String otherUser: otherUserScores.keySet())
-						{
-							double oldScore = otherUserScores.get(otherUser);
-							double newScore = 0.0;
-							if (maxScore <= 0.0)
-							{
-								newScore = oldScore * 100;
-							}
-							else
-							{
-								newScore = (oldScore / maxScore) * 100;
-							}
-							
-							otherUserScores.put(otherUser, newScore);					
-						}
-						finalScores.put(userRec, otherUserScores);
-					}
-
-
-
-
-					//Sort the scores descending order by score
-					for (String userScore : finalScores.keySet()){
-						//System.out.print(userScore+" scores: ");
-						//System.out.println(entriesSortedByValues(finalScores.get(userScore)));
-						sortedAllUserScores.put(userScore,entriesSortedByValues(finalScores.get(userScore)));
-					}
-					RecommendationRunResults.record(
-							runLifecycle.getActiveRunId(), sortedAllUserScores);
-
-
-
-					sendMergeCompleted();
-				}
-
-			}
-
 			//Message from user agent to get scores
 			if ("Get Score List".equals(msg.getOntology()))		
 			{
@@ -682,56 +531,28 @@ public class OrganizingAgent extends Agent
 				ACLMessage msg2 = new ACLMessage( ACLMessage.REQUEST );
 				msg2.addReceiver(msg.getSender());
 				msg2.setConversationId(runLifecycle.getActiveRunId());
-				if (recommendationConfig.usesConvertedPipeline()
-						|| recommendationResults.containsKey(requestedBy))
+				//Every algorithm and mode delivers one structured result.
+				msg2.setOntology("Recommendation Result V2");
+				RecommendationResultPayload result = recommendationResults.get(requestedBy);
+				if (result == null)
 				{
-					msg2.setOntology("Recommendation Result V2");
-					RecommendationResultPayload result = recommendationResults.get(requestedBy);
-					if (result == null)
-					{
-						result = new RecommendationResultPayload(
-								requestedBy,
-								recommendationConfig.getTargetMode(),
-								recommendationConfig.getCandidateType(),
-								RecommendationResultStatus.FAILED,
-								"No merged recommendation result was produced for this target.",
-								Collections.<String,Double>emptyMap());
-					}
-					try
-					{
-						msg2.setContentObject(result);
-						send(msg2);
-					}
-					catch (IOException e)
-					{
-						e.printStackTrace();
-					}
+					result = new RecommendationResultPayload(
+							requestedBy,
+							recommendationConfig.getTargetMode(),
+							recommendationConfig.getCandidateType(),
+							RecommendationResultStatus.FAILED,
+							"No merged recommendation result was produced for this target.",
+							Collections.<String,Double>emptyMap());
 				}
-				else
+				try
 				{
-					msg2.setOntology("Scores for User");
-					LinkedHashMap<String,Double> userScores = new LinkedHashMap<String,Double>();
-					SortedSet<Map.Entry<String,Double>> sortedScores = sortedAllUserScores.get(requestedBy);
-					if (sortedScores != null)
-					{
-						Iterator<Entry<String,Double>> entries = sortedScores.iterator();
-						while (entries.hasNext())
-						{
-							Entry<String,Double> currentEntry = entries.next();
-							userScores.put(currentEntry.getKey(), currentEntry.getValue());
-						}
-					}
-					try
-					{
-						msg2.setContentObject(userScores);
-						send(msg2);
-					}
-					catch (IOException e)
-					{
-						e.printStackTrace();
-					}
+					msg2.setContentObject(result);
+					send(msg2);
 				}
-
+				catch (IOException e)
+				{
+					e.printStackTrace();
+				}
 			}
 
 			//Message from user agent that user received score list
@@ -779,25 +600,6 @@ public class OrganizingAgent extends Agent
 		send(mergedMsg);
 	}
 
-	//code from http://stackoverflow.com/questions/2864840/treemap-sort-by-value
-	static <String,Double extends Comparable<? super Double>>
-	SortedSet<Map.Entry<String,Double>> entriesSortedByValues(Map<String,Double> map) {
-		SortedSet<Map.Entry<String,Double>> sortedEntries = new TreeSet<Map.Entry<String,Double>>(
-				new Comparator<Map.Entry<String,Double>>() {
-					public int compare(Map.Entry<String,Double> e1, Map.Entry<String,Double> e2) {
-						//int res = e2.getValue().compareTo(e1.getValue());
-						int res = e1.getValue().compareTo(e2.getValue());
-						//return res != 0 ? res : 1;
-						if (res > 0)
-							return -1;
-						else
-							return 1;
-					}
-				}
-				);
-		sortedEntries.addAll(map.entrySet());
-		return sortedEntries;
-	}
 
 
 	protected void takeDown() {

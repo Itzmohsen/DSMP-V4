@@ -136,6 +136,15 @@ final class WorkDispatcher
 		void onEvent(Event event);
 	}
 
+	/**
+	 * Crash losses one unit may suffer before the phase fails. A unit of
+	 * duration D on nodes crashing every MTBF on average needs about
+	 * e^(D/MTBF) executions; this many losses means D is several MTBFs and the
+	 * unit cannot finish between crashes. Crash losses are not the unit's
+	 * fault, so they never count against its failure budgets.
+	 */
+	static final int MAX_CRASH_LOSSES_PER_UNIT = 200;
+
 	static final class Options
 	{
 		private int maxFailuresPerUnit = 10;
@@ -513,6 +522,8 @@ final class WorkDispatcher
 		private int executions;
 		private int failures;
 		private int realFailures;
+		/** Executions of this unit lost to node crashes. */
+		private int crashLosses;
 		private final BitSet excluded = new BitSet();
 		private boolean retryFirst;
 		/** For a delivered unit: when its descriptor and data are at the node. */
@@ -778,6 +789,15 @@ final class WorkDispatcher
 
 	synchronized Outcome fail(Assignment assignment, double now, String reason)
 	{
+		return fail(assignment, now, reason, true);
+	}
+
+	/**
+	 * Reports a real execution error. A {@code retryable} error is retried up
+	 * to the unit's real-failure budget; any other fails the phase at once.
+	 */
+	synchronized Outcome fail(Assignment assignment, double now, String reason, boolean retryable)
+	{
 		noteTime(now);
 		Inflight run = releaseInflight(assignment.getToken());
 		UnitRecord record = units.get(Integer.valueOf(assignment.getUnitId()));
@@ -794,16 +814,20 @@ final class WorkDispatcher
 		addEvent(now, assignment.getNode(), record.spec, "failed",
 				reason == null ? "Execution failed." : reason);
 		record.realFailures++;
-		if (record.realFailures >= options.maxRealFailuresPerUnit)
+		if (!retryable || record.realFailures >= options.maxRealFailuresPerUnit)
 		{
 			node.failed++;
 			record.failures++;
 			record.token = 0L;
 			record.state = UnitState.FAILED;
 			failed = true;
-			failureReason = "Work unit " + record.spec.getKey() + " failed "
-					+ record.realFailures + " time(s) with a real error; last on node "
-					+ assignment.getNode() + ": " + (reason == null ? "unknown" : reason);
+			failureReason = retryable
+					? "Work unit " + record.spec.getKey() + " failed "
+							+ record.realFailures + " time(s) with a real error; last on node "
+							+ assignment.getNode() + ": " + (reason == null ? "unknown" : reason)
+					: "Work unit " + record.spec.getKey() + " failed on node " + assignment.getNode()
+							+ " (not retried: the work itself failed, so a retry would fail the same way): "
+							+ (reason == null ? "unknown" : reason);
 			addEvent(now, assignment.getNode(), record.spec, "failed-final", failureReason);
 			revokeAll("the phase failed");
 			return Outcome.FINAL_FAILURE;
@@ -905,6 +929,7 @@ final class WorkDispatcher
 		{
 			return lost;
 		}
+		boolean failedBefore = failed;
 		record.down = true;
 		record.crashDetected = false;
 		record.downSince = now;
@@ -913,6 +938,16 @@ final class WorkDispatcher
 		{
 			lost.add(Integer.valueOf(unit.spec.getId()));
 			record.lostToCrash++;
+			unit.crashLosses++;
+			if (unit.crashLosses >= MAX_CRASH_LOSSES_PER_UNIT && !failed)
+			{
+				failed = true;
+				failureReason = "Work unit " + unit.spec.getKey() + " was lost to node crashes "
+						+ unit.crashLosses + " times: it takes longer than the time between the"
+						+ " nodes' crashes, so it can never finish. Raise the nodes' MTBF (or lower"
+						+ " their crash rate) and run again.";
+				addEvent(now, node, unit.spec, "failed-final", failureReason);
+			}
 			unit.state = UnitState.RESERVED;
 			unit.node = node;
 			unit.retryFirst = true;
@@ -924,6 +959,10 @@ final class WorkDispatcher
 		{
 			UnitRecord unit = units.get(id);
 			unit.readyAt = Double.POSITIVE_INFINITY;
+		}
+		if (failed && !failedBefore)
+		{
+			revokeAll("the phase failed");
 		}
 		dispatch(now);
 		return lost;

@@ -550,7 +550,7 @@ public class StarterAgent extends Agent
 		NodeExecutionMonitor.setRunPhase(safeMessage);
 		if (myGui != null)
 		{
-			myGui.handleSimulationStartFailure(safeMessage);
+			myGui.handleSimulationStartFailure(conversationIDInitial, safeMessage);
 		}
 	}
 	
@@ -901,7 +901,7 @@ public class StarterAgent extends Agent
 						System.err.println(failure);
 						NodeExecutionMonitor.setRunPhase(failure);
 						RunRecords.finish(conversationIDInitial, "failed: " + failure);
-						myGui.handleSimulationStartFailure(failure);
+						myGui.handleSimulationStartFailure(conversationIDInitial, failure);
 						finishSimulationLifecycle();
 						return;
 					}
@@ -920,7 +920,7 @@ public class StarterAgent extends Agent
 							NodeExecutionMonitor.setRunPhase(
 									"Recommendation run failed safely. No partial results were published.");
 							RunRecords.finish(conversationIDInitial, "failed: " + failure);
-							myGui.handleSimulationRunFailure(failure);
+							myGui.handleSimulationRunFailure(conversationIDInitial, failure);
 							finishSimulationLifecycle();
 						}
 						return;
@@ -1545,7 +1545,7 @@ public class StarterAgent extends Agent
 				public void run()
 				{
 					myGui.appendResult(message);
-					myGui.showMessageBox("finished simulation");
+					myGui.showRunMessage(conversationIDInitial, "finished simulation");
 				}
 			});
 		}
@@ -1642,12 +1642,7 @@ public class StarterAgent extends Agent
 			return;
 		}
 
-		javax.swing.SwingUtilities.invokeLater(new Runnable() {
-			public void run()
-			{
-				myGui.showMessageBox("finished simulation");
-			}
-		});
+		myGui.showRunMessage(conversationIDInitial, "finished simulation");
 	}
 
 	protected void takeDown() {

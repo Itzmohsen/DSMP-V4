@@ -19,6 +19,12 @@ final class AlgorithmParameterSettings implements Serializable
 
 	static final int DEFAULT_SIMILARITY_LOCAL_TOP_MULTIPLIER = 10;
 	static final int DEFAULT_SIMILARITY_LOCAL_TOP_MINIMUM = 20;
+	/** Common-Neighbors link-prediction variants on the user-term graph. */
+	static final String CN_COMMON_NEIGHBOURS = "common-neighbours";
+	static final String CN_JACCARD = "jaccard";
+	static final String CN_ADAMIC_ADAR = "adamic-adar";
+	static final String CN_RESOURCE_ALLOCATION = "resource-allocation";
+	static final String DEFAULT_CN_VARIANT = CN_COMMON_NEIGHBOURS;
 	static final int DEFAULT_KMEANS_CLUSTERS = 3;
 	static final int DEFAULT_KMEANS_MAX_ITERATIONS = 10;
 	static final long DEFAULT_KMEANS_SEED = 1L;
@@ -28,12 +34,16 @@ final class AlgorithmParameterSettings implements Serializable
 	static final double DEFAULT_SCALABLE_SVM_AGGRESSIVENESS = 0.1;
 	static final String MLP_ENGINE_LEGACY_NEUROPH = "legacy-neuroph";
 	static final String MLP_ENGINE_SPARSE_FEDERATED = "sparse-federated";
-	static final String DEFAULT_MLP_ENGINE = MLP_ENGINE_LEGACY_NEUROPH;
+	/** The softmax MLP (cross-entropy, early stopping) is the default; Neuroph is kept for V3 comparisons. */
+	static final String DEFAULT_MLP_ENGINE = MLP_ENGINE_SPARSE_FEDERATED;
 	static final int DEFAULT_MLP_HIDDEN_NEURONS = 10;
 	static final int DEFAULT_MLP_HIDDEN_LAYERS = 1;
 	static final double DEFAULT_MLP_LEARNING_RATE = 0.1;
 	static final double DEFAULT_MLP_MAX_ERROR = 0.01;
-	static final int DEFAULT_MLP_SPARSE_EPOCHS = 8;
+	/** Epoch limit of the softmax MLP; early stopping usually ends training sooner. */
+	static final int DEFAULT_MLP_SPARSE_EPOCHS = 200;
+	/** Epochs without a better validation cross-entropy before the softmax MLP stops. */
+	static final int MLP_EARLY_STOPPING_PATIENCE = 15;
 	static final double DEFAULT_MLP_SPARSE_L2 = 0.0001;
 	static final double DEFAULT_MLP_FEDPROX_MU = 0.0;
 	static final int DEFAULT_DOC2VEC_DM = 0;
@@ -49,6 +59,7 @@ final class AlgorithmParameterSettings implements Serializable
 	private boolean customEnabled;
 	private int similarityLocalTopMultiplier;
 	private int similarityLocalTopMinimum;
+	private String commonNeighborsVariant;
 	private int kMeansClusters;
 	private int kMeansMaxIterations;
 	private long kMeansSeed;
@@ -105,6 +116,8 @@ final class AlgorithmParameterSettings implements Serializable
 		settings.similarityLocalTopMinimum = intProperty(
 				"dsmp.similarity.localTopMinimum",
 				DEFAULT_SIMILARITY_LOCAL_TOP_MINIMUM);
+		settings.commonNeighborsVariant = cnVariantProperty(
+				"dsmp.commonNeighbors.variant", DEFAULT_CN_VARIANT);
 		settings.kMeansClusters = intProperty(
 				"dsmp.kmeans.clusters", DEFAULT_KMEANS_CLUSTERS);
 		settings.kMeansMaxIterations = intProperty(
@@ -225,6 +238,7 @@ final class AlgorithmParameterSettings implements Serializable
 		copy.customEnabled = customEnabled;
 		copy.similarityLocalTopMultiplier = similarityLocalTopMultiplier;
 		copy.similarityLocalTopMinimum = similarityLocalTopMinimum;
+		copy.commonNeighborsVariant = commonNeighborsVariant;
 		copy.kMeansClusters = kMeansClusters;
 		copy.kMeansMaxIterations = kMeansMaxIterations;
 		copy.kMeansSeed = kMeansSeed;
@@ -257,6 +271,7 @@ final class AlgorithmParameterSettings implements Serializable
 		customEnabled = false;
 		similarityLocalTopMultiplier = DEFAULT_SIMILARITY_LOCAL_TOP_MULTIPLIER;
 		similarityLocalTopMinimum = DEFAULT_SIMILARITY_LOCAL_TOP_MINIMUM;
+		commonNeighborsVariant = DEFAULT_CN_VARIANT;
 		kMeansClusters = DEFAULT_KMEANS_CLUSTERS;
 		kMeansMaxIterations = DEFAULT_KMEANS_MAX_ITERATIONS;
 		kMeansSeed = DEFAULT_KMEANS_SEED;
@@ -310,6 +325,12 @@ final class AlgorithmParameterSettings implements Serializable
 			case RecommendationModeSupport.COS_SIM:
 			case RecommendationModeSupport.COMMON_NEIGHBORS:
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
+				if (algorithm == RecommendationModeSupport.COMMON_NEIGHBORS
+						&& !isValidCnVariant(commonNeighborsVariant))
+				{
+					errors.add("Common-Neighbors variant must be common neighbours, Jaccard, "
+							+ "Adamic-Adar or resource allocation.");
+				}
 				validateInt(errors, "Similarity candidate multiplier",
 						similarityLocalTopMultiplier, 1, 100);
 				validateInt(errors, "Similarity minimum local candidates",
@@ -337,7 +358,7 @@ final class AlgorithmParameterSettings implements Serializable
 			case RecommendationModeSupport.MLP:
 				if (!isValidMlpEngine(mlpEngine))
 				{
-					errors.add("MLP engine must be Legacy Neuroph or Sparse Federated.");
+					errors.add("MLP engine must be the softmax MLP or the Neuroph MLP.");
 				}
 				validateInt(errors, "MLP hidden neurons",
 						mlpHiddenNeurons, 1, 512);
@@ -347,9 +368,9 @@ final class AlgorithmParameterSettings implements Serializable
 						mlpLearningRate, 0.00001, 1.0);
 				validateDouble(errors, "MLP max error",
 						mlpMaxError, 0.000001, 0.5);
-				validateInt(errors, "Sparse MLP epochs",
-						mlpSparseEpochs, 1, 200);
-				validateDouble(errors, "Sparse MLP L2",
+				validateInt(errors, "Softmax MLP epoch limit",
+						mlpSparseEpochs, 1, 5000);
+				validateDouble(errors, "Softmax MLP L2",
 						mlpSparseL2, 0.0, 1.0);
 				validateDouble(errors, "FedProx mu",
 						mlpFedProxMu, 0.0, 10.0);
@@ -441,7 +462,7 @@ final class AlgorithmParameterSettings implements Serializable
 						+ effective.getSimilarityLocalTopMultiplier() + "x, min "
 						+ effective.getSimilarityLocalTopMinimum();
 			case RecommendationModeSupport.COMMON_NEIGHBORS:
-				return "Common-neighbor buffer "
+				return cnVariantLabel(effective.getCommonNeighborsVariant()) + ", buffer "
 						+ effective.getSimilarityLocalTopMultiplier() + "x, min "
 						+ effective.getSimilarityLocalTopMinimum();
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
@@ -467,7 +488,10 @@ final class AlgorithmParameterSettings implements Serializable
 						+ ", " + effective.getMlpHiddenNeurons()
 						+ " neurons/layer, rate "
 						+ formatDouble(effective.getMlpLearningRate())
-						+ ", max error " + formatDouble(effective.getMlpMaxError());
+						+ (effective.isSparseFederatedMlpEnabled()
+								? ", up to " + effective.getMlpSparseEpochs() + " epochs, L2 "
+										+ formatDouble(effective.getMlpSparseL2())
+								: ", max error " + formatDouble(effective.getMlpMaxError()));
 			case RecommendationModeSupport.DOC2VEC:
 				return effective.getDoc2VecVectorSize() + " dimensions, "
 						+ effective.getDoc2VecEpochs() + " epochs, window "
@@ -497,6 +521,7 @@ final class AlgorithmParameterSettings implements Serializable
 				+ effective.getSimilarityLocalTopMultiplier());
 		command.add("-Ddsmp.similarity.localTopMinimum="
 				+ effective.getSimilarityLocalTopMinimum());
+		command.add("-Ddsmp.commonNeighbors.variant=" + effective.getCommonNeighborsVariant());
 		command.add("-Ddsmp.kmeans.clusters=" + effective.getKMeansClusters());
 		command.add("-Ddsmp.kmeans.maxIterations="
 				+ effective.getKMeansMaxIterations());
@@ -590,6 +615,46 @@ final class AlgorithmParameterSettings implements Serializable
 				: DEFAULT_SIMILARITY_LOCAL_TOP_MINIMUM;
 	}
 
+	String getCommonNeighborsVariant()
+	{
+		return customEnabled && isValidCnVariant(commonNeighborsVariant)
+				? commonNeighborsVariant : DEFAULT_CN_VARIANT;
+	}
+
+	void setCommonNeighborsVariant(String value)
+	{
+		commonNeighborsVariant = value;
+	}
+
+	static boolean isValidCnVariant(String value)
+	{
+		return CN_COMMON_NEIGHBOURS.equals(value) || CN_JACCARD.equals(value)
+				|| CN_ADAMIC_ADAR.equals(value) || CN_RESOURCE_ALLOCATION.equals(value);
+	}
+
+	static String cnVariantLabel(String value)
+	{
+		if (CN_JACCARD.equals(value))
+		{
+			return "Jaccard";
+		}
+		if (CN_ADAMIC_ADAR.equals(value))
+		{
+			return "Adamic-Adar";
+		}
+		if (CN_RESOURCE_ALLOCATION.equals(value))
+		{
+			return "Resource allocation";
+		}
+		return "Common neighbours (ties by Adamic-Adar)";
+	}
+
+	private static String cnVariantProperty(String name, String fallback)
+	{
+		String value = System.getProperty(name);
+		return isValidCnVariant(value) ? value : fallback;
+	}
+
 	int getKMeansClusters()
 	{
 		return customEnabled ? kMeansClusters : DEFAULT_KMEANS_CLUSTERS;
@@ -636,7 +701,7 @@ final class AlgorithmParameterSettings implements Serializable
 	String getMlpEngineLabel()
 	{
 		return MLP_ENGINE_SPARSE_FEDERATED.equals(getMlpEngine())
-				? "Sparse federated MLP" : "Legacy Neuroph MLP";
+				? "Softmax MLP (cross-entropy, early stopping)" : "Neuroph MLP (V3, sigmoid outputs)";
 	}
 
 	boolean isSparseFederatedMlpEnabled()
@@ -868,6 +933,7 @@ final class AlgorithmParameterSettings implements Serializable
 		return customEnabled == other.customEnabled
 				&& similarityLocalTopMultiplier == other.similarityLocalTopMultiplier
 				&& similarityLocalTopMinimum == other.similarityLocalTopMinimum
+				&& commonNeighborsVariant.equals(other.commonNeighborsVariant)
 				&& kMeansClusters == other.kMeansClusters
 				&& kMeansMaxIterations == other.kMeansMaxIterations
 				&& kMeansSeed == other.kMeansSeed
@@ -901,6 +967,7 @@ final class AlgorithmParameterSettings implements Serializable
 		int result = customEnabled ? 1 : 0;
 		result = 31 * result + similarityLocalTopMultiplier;
 		result = 31 * result + similarityLocalTopMinimum;
+		result = 31 * result + commonNeighborsVariant.hashCode();
 		result = 31 * result + kMeansClusters;
 		result = 31 * result + kMeansMaxIterations;
 		result = 31 * result + (int)(kMeansSeed ^ (kMeansSeed >>> 32));

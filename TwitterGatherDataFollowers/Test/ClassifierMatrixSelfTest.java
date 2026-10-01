@@ -44,7 +44,7 @@ public final class ClassifierMatrixSelfTest
 		sparseMlpTrainingReducesCrossEntropy();
 		sparseMlpAveragingIsTheSampleWeightedMean();
 		sparseMlpIsDeterministicForAFixedSeed();
-		temporalGraphWeightsFormAConvexCombination();
+		sparseMlpEarlyStoppingKeepsTheBestEpoch();
 		stratifiedSplitKeepsClassProportionsAndIsStable();
 		onlineLearnersAreInsensitiveToTrainingRowOrder();
 
@@ -355,30 +355,38 @@ public final class ClassifierMatrixSelfTest
 	// ------------------------------------------------------------------
 
 	/**
-	 * The score is a fixed linear blend of six component scores. For the result
-	 * to stay inside the range of its components the weights must be
-	 * non-negative and sum to one, which is what makes it a convex combination.
+	 * Early stopping keeps the epoch with the lowest validation cross-entropy:
+	 * on a validation set whose labels disagree with the training set, the
+	 * validation loss rises as the model fits the training data, so training
+	 * stops after the patience runs out and the kept weights are the best
+	 * epoch's, not the last epoch's.
 	 */
-	private static void temporalGraphWeightsFormAConvexCombination() throws Exception
+	private static void sparseMlpEarlyStoppingKeepsTheBestEpoch()
 	{
-		String[] names = {"TEXT_WEIGHT", "GRAPH_WEIGHT", "TIME_WEIGHT",
-			"BRIDGE_WEIGHT", "DEBIAS_WEIGHT", "ROBUST_WEIGHT"};
-		double total = 0.0;
-		StringBuilder detail = new StringBuilder();
-		for (String name : names)
+		List<SparseFederatedMlpModelSupport.TrainingExample> training = syntheticExamples();
+		List<SparseFederatedMlpModelSupport.TrainingExample> flipped =
+				new ArrayList<SparseFederatedMlpModelSupport.TrainingExample>();
+		for (SparseFederatedMlpModelSupport.TrainingExample example : training)
 		{
-			java.lang.reflect.Field field =
-					TemporalGraphFoundationModelSupport.class.getDeclaredField(name);
-			field.setAccessible(true);
-			double weight = field.getDouble(null);
-			require(weight >= 0.0, name + " is negative");
-			require(weight <= 1.0, name + " exceeds 1");
-			total += weight;
-			detail.append(name.replace("_WEIGHT", "").toLowerCase(Locale.US))
-					.append('=').append(format(weight)).append(' ');
+			flipped.add(new SparseFederatedMlpModelSupport.TrainingExample(example.getUser(),
+					example.getFeatures(), (example.getLabelIndex() + 1) % 3));
 		}
-		requireClose(total, 1.0, 1.0e-12, "temporal graph weight total");
-		pass("temporal graph weights are a convex combination: " + detail.toString().trim());
+		SparseFederatedMlpModelSupport.SparseMlpModel model =
+				SparseFederatedMlpModelSupport.SparseMlpModel.create(6, 1, 8, 3, 1L);
+		SparseFederatedMlpModelSupport.SparseMlpModel.TrainingReport report =
+				model.trainWithEarlyStopping(training, flipped, 500, 5, 0.1, 0.0);
+		require(report.stoppedEarly, "a rising validation loss must stop training early");
+		require(report.epochsRun == report.bestEpoch + 5,
+				"training must stop exactly 5 epochs after the best one: " + report.describe());
+		requireClose(model.meanCrossEntropy(flipped), report.bestValidationLoss, 1.0e-12,
+				"the kept weights are the best epoch's");
+		SparseFederatedMlpModelSupport.SparseMlpModel again =
+				SparseFederatedMlpModelSupport.SparseMlpModel.create(6, 1, 8, 3, 1L);
+		again.trainWithEarlyStopping(training, flipped, 500, 5, 0.1, 0.0);
+		requireClose(again.meanCrossEntropy(training), model.meanCrossEntropy(training), 0.0,
+				"early-stopped training is deterministic for a fixed seed");
+		pass("early stopping kept epoch " + report.bestEpoch + " of " + report.epochsRun
+				+ " (validation cross-entropy " + format(report.bestValidationLoss) + ")");
 	}
 
 	/**

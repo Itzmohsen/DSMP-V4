@@ -41,6 +41,8 @@ public final class ExactModelStagesSelfTest
 		globalCorpusIsPartitionInvariant(random);
 		indexedArffRowsMatchScannedRows(random);
 		emulatorSpansDilateWorkOnce();
+		emulatorCrashRedoesOnlyWorkSinceTheLastDurablePoint(false);
+		emulatorCrashRedoesOnlyWorkSinceTheLastDurablePoint(true);
 		System.out.println("ExactModelStagesSelfTest passed");
 	}
 
@@ -307,6 +309,102 @@ public final class ExactModelStagesSelfTest
 				"nested spans counted work twice: " + ledger.getComputeNanos()
 				+ " ns measured, " + burned + " ns burned");
 		context.close("self-test finished");
+	}
+
+	/**
+	 * A crash loses the work since the thread's last durable point, never the
+	 * work before it, and a second crash during the redo restarts the redo
+	 * instead of adding another one. The ledger still balances: what was slept
+	 * is what was owed.
+	 */
+	private static void emulatorCrashRedoesOnlyWorkSinceTheLastDurablePoint(final boolean crashDuringRedo)
+			throws Exception
+	{
+		ArrayList<NodeCapacityProfile> profiles = new ArrayList<NodeCapacityProfile>();
+		profiles.add(NodeCapacityProfile.rolePreset(1, NodeCapacityProfile.Role.NORMAL, 2, 4096));
+		profiles.add(NodeCapacityProfile.rolePreset(2, NodeCapacityProfile.Role.WEAK, 2, 4096));
+		final SchedulingRunContext context = new SchedulingRunContext(
+				"emulator-crash-self-test-" + System.nanoTime(),
+				SchedulingRunContext.Mode.EMULATED,
+				SchedulerLabEngine.SchedulingPolicy.CAPACITY_WEIGHTED,
+				profiles, 2, -1, 1L, 3, 60000L, 0);
+		NodeEmulator weak = context.emulator(2);
+		double dilation = context.clock().getDilation();
+		double factor = dilation / Math.min(context.speedOf(2), dilation);
+		final NodeEmulator.Ledger ledger = weak.getLedger();
+		NodeEmulator.Span span = weak.begin();
+		spin(60);
+		weak.checkpoint();
+		long durable = NodeEmulator.threadCpuNanos();
+		long lost = spin(100);
+		//The crash happens before the node's thread pays for the lost work, and
+		//each repair waits until that thread is actually stalled by the outage,
+		//so nothing below depends on how promptly the host wakes threads.
+		context.crashNode(2, Double.NaN);
+		final Throwable[] operatorFailure = new Throwable[1];
+		Thread operator = new Thread(new Runnable()
+		{
+			public void run()
+			{
+				try
+				{
+					awaitStalled(context, 2);
+					context.recoverNode(2);
+					if (crashDuringRedo)
+					{
+						//Crash again as soon as the thread is back to redoing the work.
+						long deadline = System.currentTimeMillis() + 10000L;
+						while (ledger.getDowntimeNanos() == 0L && System.currentTimeMillis() < deadline)
+						{
+							Thread.onSpinWait();
+						}
+						context.crashNode(2, Double.NaN);
+						awaitStalled(context, 2);
+						context.recoverNode(2);
+					}
+				}
+				catch (Throwable failure)
+				{
+					operatorFailure[0] = failure;
+				}
+			}
+		});
+		operator.start();
+		weak.checkpoint();
+		operator.join();
+		weak.checkpoint();
+		require(operatorFailure[0] == null, "operator failed: " + operatorFailure[0]);
+		long sinceDurable = NodeEmulator.threadCpuNanos() - durable;
+		double redo = ledger.getRedoNanos();
+		double full = sinceDurable * factor;
+		require(ledger.getDowntimeNanos() > 0L, "the outage was not spent blocked");
+		require(redo >= lost * factor * 0.8 - 1000000.0,
+				"the lost " + lost + " ns of work were not redone: redo " + redo + " ns, factor " + factor);
+		//Redoing from the span's start (the 60 ms before the durable point) or
+		//adding a second full redo on top of an interrupted one would exceed this:
+		//an interrupted redo adds only what was slept of it before the crash.
+		require(redo <= (crashDuringRedo ? 1.9 : 1.15) * full + 2000000.0,
+				"redo " + redo + " ns is more than the work since the durable point (" + sinceDurable
+				+ " ns) at factor " + factor + (crashDuringRedo ? " plus the interrupted redo" : ""));
+		long excess = ledger.getDilationNanos() - ledger.getOwedNanos();
+		require(excess >= -1000L && excess <= ledger.getSleepErrorNanos() + 1000L,
+				"slept " + ledger.getDilationNanos() + " ns but owed " + ledger.getOwedNanos() + " ns");
+		weak.end(span);
+		context.close("self-test finished");
+	}
+
+	/** Waits until a thread of the node is stalled by its outage. */
+	private static void awaitStalled(SchedulingRunContext context, int node) throws InterruptedException
+	{
+		long deadline = System.currentTimeMillis() + 10000L;
+		while (context.threadsWaitingForRepair(node) == 0)
+		{
+			if (System.currentTimeMillis() > deadline)
+			{
+				throw new IllegalStateException("node " + node + "'s thread never stalled on the outage");
+			}
+			Thread.sleep(1L);
+		}
 	}
 
 	/** Burns about {@code millis} of this thread's CPU; returns the CPU time the clock measured. */

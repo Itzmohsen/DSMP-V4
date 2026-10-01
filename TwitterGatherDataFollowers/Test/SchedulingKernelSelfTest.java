@@ -693,7 +693,7 @@ public final class SchedulingKernelSelfTest
 									Thread.sleep(laneRandom.nextInt(3));
 									if (laneRandom.nextInt(20) == 0)
 									{
-										phase.fail(assignment, new RuntimeException("synthetic"));
+										phase.fail(assignment, new java.io.IOException("synthetic transient failure"));
 										continue;
 									}
 									WorkDispatcher.Outcome outcome = phase.complete(assignment);

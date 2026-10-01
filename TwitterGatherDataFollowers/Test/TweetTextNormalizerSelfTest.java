@@ -29,6 +29,7 @@ public final class TweetTextNormalizerSelfTest
 		lowercasingIsLocaleIndependent();
 		tokenCountMatchesTheSplit();
 		outputShapeIsStableAndClean();
+		keepsLettersOfEveryScript();
 		System.out.println("TweetTextNormalizerSelfTest passed");
 	}
 
@@ -140,6 +141,21 @@ public final class TweetTextNormalizerSelfTest
 			requireEquals(normalize(first), first,
 					"normalisation was not idempotent for: " + tweet);
 		}
+	}
+
+	/**
+	 * Accented and non-Latin letters are words too: they must not be cut out
+	 * of tokens ("caf" from "café"), and composed and decomposed accents must
+	 * give the same token.
+	 */
+	private static void keepsLettersOfEveryScript()
+	{
+		requireEquals(normalize("Café crème brûlée"), "café crème brûlée", "accented latin");
+		requireEquals(normalize("Cafe\u0301 au lait"), "café au lait", "decomposed accent");
+		requireEquals(normalize("سلام دنیا 2026"), "سلام دنیا", "arabic script, digits dropped");
+		requireEquals(normalize("Ünïcödé, données!"), "ünïcödé données", "punctuation and case");
+		String mixed = normalize("Größe 42 Ölmühle");
+		requireEquals(normalize(mixed), mixed, "unicode normalisation was not idempotent");
 	}
 
 	private static String normalize(String text)

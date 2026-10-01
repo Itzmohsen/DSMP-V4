@@ -16,10 +16,11 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * Sparse, serializable MLP used only by the opt-in federated MLP engine.
- *
- * The legacy Neuroph MLP remains the default path. This class exists so large
- * TF-IDF corpora can be trained without materializing dense input vectors.
+ * The softmax MLP: tanh hidden layers, a softmax output layer and the
+ * cross-entropy loss, trained by seeded stochastic gradient descent with L2
+ * regularization and early stopping on a validation split. Inputs stay sparse,
+ * so large TF-IDF corpora train without dense vectors. This is the default MLP
+ * engine; the Neuroph engine is kept for comparison with V3.
  */
 final class SparseFederatedMlpModelSupport
 {
@@ -172,6 +173,151 @@ final class SparseFederatedMlpModelSupport
 				}
 			}
 			sampleCount = examples.size();
+		}
+
+		/** What one early-stopped training did, for the run's report. */
+		static final class TrainingReport
+		{
+			final int epochsRun;
+			final int bestEpoch;
+			final double bestValidationLoss;
+			final boolean stoppedEarly;
+
+			TrainingReport(int epochsRun, int bestEpoch, double bestValidationLoss, boolean stoppedEarly)
+			{
+				this.epochsRun = epochsRun;
+				this.bestEpoch = bestEpoch;
+				this.bestValidationLoss = bestValidationLoss;
+				this.stoppedEarly = stoppedEarly;
+			}
+
+			String describe()
+			{
+				if (bestEpoch <= 0)
+				{
+					return epochsRun + " epoch(s) without a validation split";
+				}
+				return epochsRun + " epoch(s); best validation cross-entropy "
+						+ String.format(java.util.Locale.US, "%.4f", bestValidationLoss)
+						+ " at epoch " + bestEpoch
+						+ (stoppedEarly ? " (stopped early)" : " (epoch limit reached)");
+			}
+		}
+
+		/**
+		 * Stochastic gradient descent on the softmax cross-entropy with early
+		 * stopping: after every epoch (one seeded, shuffled pass over the
+		 * training examples) the mean cross-entropy of the validation examples
+		 * is measured, the weights of the best epoch are kept, and training
+		 * stops after {@code patience} epochs without improvement or at
+		 * {@code maxEpochs}. Without validation examples it trains
+		 * {@code maxEpochs} epochs. Deterministic for a given seed.
+		 */
+		TrainingReport trainWithEarlyStopping(
+				List<TrainingExample> training,
+				List<TrainingExample> validation,
+				int maxEpochs,
+				int patience,
+				double learningRate,
+				double l2)
+		{
+			if (training == null || training.isEmpty())
+			{
+				throw new IllegalArgumentException(
+						"MLP training requires at least one example.");
+			}
+			int safeEpochs = Math.max(1, maxEpochs);
+			int safePatience = Math.max(1, patience);
+			double safeLearningRate = Math.max(0.0000001, learningRate);
+			double safeL2 = Math.max(0.0, l2);
+			double[][][] referenceWeights = deepCopy(weights);
+			double[][] referenceBiases = copyBiases(biases);
+			boolean validating = validation != null && !validation.isEmpty();
+			int[] order = new int[training.size()];
+			for (int index = 0; index < order.length; index++)
+			{
+				order[index] = index;
+			}
+			double bestLoss = Double.POSITIVE_INFINITY;
+			int bestEpoch = 0;
+			double[][][] bestWeights = null;
+			double[][] bestBiases = null;
+			int sinceBest = 0;
+			int epochsRun = 0;
+			boolean stoppedEarly = false;
+			for (int epoch = 0; epoch < safeEpochs; epoch++)
+			{
+				//A revoked training unit (drain, crash) stops between epochs.
+				UnitCancellation.check();
+				shuffleOrder(order, new Random(trainingSeed + epoch * 0x9E3779B9L));
+				for (int index : order)
+				{
+					trainOne(training.get(index), safeLearningRate, safeL2, 0.0,
+							referenceWeights, referenceBiases);
+				}
+				epochsRun = epoch + 1;
+				if (!validating)
+				{
+					continue;
+				}
+				double loss = meanCrossEntropy(validation);
+				if (loss < bestLoss - 1e-12)
+				{
+					bestLoss = loss;
+					bestEpoch = epochsRun;
+					bestWeights = deepCopy(weights);
+					bestBiases = copyBiases(biases);
+					sinceBest = 0;
+				}
+				else if (++sinceBest >= safePatience)
+				{
+					stoppedEarly = true;
+					break;
+				}
+			}
+			if (bestWeights != null)
+			{
+				copyInto(bestWeights, weights);
+				copyInto(bestBiases, biases);
+			}
+			sampleCount = training.size();
+			return new TrainingReport(epochsRun, bestEpoch,
+					validating ? bestLoss : Double.NaN, stoppedEarly);
+		}
+
+		/** Mean softmax cross-entropy of the examples' true classes. */
+		double meanCrossEntropy(List<TrainingExample> examples)
+		{
+			double total = 0.0;
+			int counted = 0;
+			for (TrainingExample example : examples)
+			{
+				int label = example.getLabelIndex();
+				if (label < 0 || label >= outputSize)
+				{
+					continue;
+				}
+				double probability = predict(example.getFeatures())[label];
+				total -= Math.log(Math.max(probability, 1e-15));
+				counted++;
+			}
+			return counted == 0 ? Double.NaN : total / counted;
+		}
+
+		private static void copyInto(double[][][] source, double[][][] destination)
+		{
+			for (int layer = 0; layer < source.length; layer++)
+			{
+				copyInto(source[layer], destination[layer]);
+			}
+		}
+
+		private static void copyInto(double[][] source, double[][] destination)
+		{
+			for (int row = 0; row < source.length; row++)
+			{
+				System.arraycopy(source[row], 0, destination[row], 0, source[row].length);
+			}
 		}
 
 		/** Fisher-Yates over an index array, so the caller's list is untouched. */

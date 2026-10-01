@@ -265,6 +265,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private TemporalGraphFoundationPanel temporalGraphFoundationPanel;
 	private RecommendationEvidenceStudioPanel recommendationEvidenceStudioPanel;
 	private NodeLabPanel nodeLabPanel;
+	private SimulatorPanel simulatorPanel;
 	private volatile boolean observatoryAutomationMode;
 	private volatile String observatoryAutomationRunId = "";
 	private volatile ObservatoryAutomationListener observatoryAutomationListener;
@@ -1139,20 +1140,16 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		 */
 		private void publishRecommendationQuality(RecommendationResult result)
 		{
-			if (!RecommendationQualityEvaluator.hasGroundTruth())
-			{
-				return;
-			}
 			int expectedTargets = usersRec == null || usersRec.isEmpty()
 					? recommendationUserCount : usersRec.size();
 			if (recommendationUserCount < expectedTargets
-					|| recommendationQualityReported)
+					|| recommendationQualityReported
+					|| myAgent == null)
 			{
 				return;
 			}
 			RecommendationQualityEvaluator.Report report =
-					RecommendationQualityEvaluator.report(
-							result == null ? 1 : result.getRecommendationLimit());
+					RecommendationQualityEvaluator.reportFor(myAgent.getCurrentRecommendationRunId());
 			if (report == null)
 			{
 				return;
@@ -1161,6 +1158,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			String summary = report.describe();
 			System.out.println(summary);
 			appendResult(summary);
+			showRecommendationQuality(report);
 		}
 
 		private void addRecommendationResult(RecommendationResult result)
@@ -1239,8 +1237,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			recommendationArea.setText("");
 			recommendationUserCount = 0;
 			recommendationQualityReported = false;
-			//Drop the previous run's ranking scores; the ground truth is kept.
-			RecommendationQualityEvaluator.beginRun();
 			recommendationItemCount = 0;
 			recommendationIssueCount = 0;
 			if (recommendationCardsPanel != null)
@@ -4033,7 +4029,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		public void actionPerformed(ActionEvent event)
 		{
 			if (tweetLimitField.getText().equals(""))
-				tweetLimit = 1000;
+				tweetLimit = 0; //An empty field means no limit.
 			else
 				tweetLimit = Integer.parseInt(tweetLimitField.getText());
 
@@ -4246,8 +4242,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		showAgentsList.setVisibleRowCount(28);
 		showAgentsList.setPrototypeCellValue(String.format("%80s", ""));
 		showAgentsList.setLayoutOrientation(JList.VERTICAL);
-			//Only allow one user to be selected for recommendation
-			showAgentsList.setSelectionMode(ListSelectionModel.SINGLE_INTERVAL_SELECTION);
+			//Any set of users can be targets (Selected users mode).
+			showAgentsList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
 			showAgentsList.addListSelectionListener(new AddListListener());
 			styleList();
 
@@ -4261,9 +4257,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			{
 				if (showAgentsList.getSelectedIndex() == -1) 
 				{
-					//No selection, disable start button.
-					//					startButton.setEnabled(false);
-					disableStartButton();
+					//No selection: only the Selected users mode needs one.
+					if (targetSelectionMode == TargetSelection.Mode.SELECTED)
+					{
+						disableStartButton();
+					}
 				}
 				
 				// Code added by Sepide 
@@ -4418,8 +4416,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		recommendationEvidenceStudioPanel =
 				new RecommendationEvidenceStudioPanel(this);
 		nodeLabPanel = new NodeLabPanel(this);
+		//The Simulator tab is the guided flow; it drives the controls built
+		//above (the classic layout is built but no longer shown).
+		simulatorPanel = new SimulatorPanel(this);
 		JComponent simulatorTab =
-				StudioNightTheme.wrapTab(mainPanel, true);
+				StudioNightTheme.wrapTab(simulatorPanel, false);
 		JComponent graphInsightsTab =
 				StudioNightTheme.wrapTab(graphInsightsPanel, true);
 		JComponent tgfStudioTab =
@@ -4499,7 +4500,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		{
 			public void stateChanged(ChangeEvent event)
 			{
-				if (isSelectedApplicationTab(graphInsightsPanel))
+				if (isSelectedApplicationTab(simulatorPanel))
+				{
+					simulatorPanel.refreshFromSimulator();
+				}
+				else if (isSelectedApplicationTab(graphInsightsPanel))
 				{
 					refreshGraphInsightsPanel();
 				}
@@ -5176,6 +5181,13 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				}
 			}
 		}
+		//Automated runs (harness, studies, matrices) recommend for the first n
+		//users of the list, n being the spec's batch size.
+		targetSelectionMode = TargetSelection.Mode.SELECTED;
+		if (showAgentsList != null && agentsList != null && agentsList.size() > 0)
+		{
+			showAgentsList.setSelectionInterval(0, Math.min(agentsList.size(), Math.max(1, run.batchUsers)) - 1);
+		}
 		NodeCapacityRegistry.configureForNodeCount(numNodes, currentHeapSetting());
 		applyObservatorySchedulerPolicy(run);
 		updateNodeCapacitySummary();
@@ -5400,8 +5412,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	/** How many target users the next run recommends for. */
 	int selectedTargetCount()
 	{
-		return agentsList == null || agentsList.isEmpty() ? 0
-				: Math.min(agentsList.size(), Math.max(1, getRecommendationBatchUserCount()));
+		return currentTargets().size();
 	}
 
 	boolean isSimulatorInitialized()
@@ -6854,7 +6865,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			clearRecommendationResults();
 
 		if (tweetLimitField.getText().equals(""))
-			tweetLimit = 1000;
+			tweetLimit = 0; //An empty field means no limit.
 		else
 			tweetLimit = Integer.parseInt(tweetLimitField.getText());
 
@@ -7213,7 +7224,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						: selectedAlgorithm.toString());
 
 		if (tweetLimitField.getText().equals(""))
-			tweetLimit = 1000;
+			tweetLimit = 0; //An empty field means no limit.
 		else
 			tweetLimit = Integer.parseInt(tweetLimitField.getText());
 
@@ -7264,6 +7275,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			ge.addParameter(numTweetsGenerated);
 			ge.addParameter(getRecommendationTargetMode());
 			ge.addParameter(isGraphGenerationEnabled());
+			currentRunId = RecommendationRunLifecycle.createRunId();
+			ge.addParameter(currentRunId);
 				algorithmSelectionBox.setEnabled(false);
 				algorithmSettingsButton.setEnabled(false);
 				setBatchUsersControlEnabled(false);
@@ -7337,60 +7350,101 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		myAgent.postGuiEvent(ge);
 	}
 
+	private TargetSelection.Mode targetSelectionMode = TargetSelection.Mode.SELECTED;
+	private int targetSampleSize = 50;
+	private long targetSampleSeed = TargetSelection.DEFAULT_SEED;
+
+	TargetSelection.Mode getTargetSelectionMode()
+	{
+		return targetSelectionMode;
+	}
+
+	int getTargetSampleSize()
+	{
+		return targetSampleSize;
+	}
+
+	long getTargetSampleSeed()
+	{
+		return targetSampleSeed;
+	}
+
+	/** Chooses how the next run's targets are picked; refreshes everything that shows them. */
+	void setTargetSelection(TargetSelection.Mode mode, int sampleSize, long seed)
+	{
+		targetSelectionMode = mode == null ? TargetSelection.Mode.SELECTED : mode;
+		targetSampleSize = Math.max(1, sampleSize);
+		targetSampleSeed = seed;
+		if (showAgentsList != null && showAgentsList.getSelectedIndex() < 0)
+		{
+			if (targetSelectionMode == TargetSelection.Mode.SELECTED)
+			{
+				disableStartButton();
+			}
+			else if (agentsList != null && !agentsList.isEmpty())
+			{
+				enableStartButton();
+			}
+		}
+		refreshSimulatorHelpPanel();
+	}
+
+	/** The users of the loaded dataset, in list order. */
+	java.util.List<String> loadedUsers()
+	{
+		ArrayList<String> users = new ArrayList<String>();
+		if (agentsList != null)
+		{
+			for (int index = 0; index < agentsList.size(); index++)
+			{
+				users.add(agentsList.getElementAt(index));
+			}
+		}
+		return users;
+	}
+
+	/** The users highlighted in the user list, in list order. */
+	java.util.List<String> selectedUsers()
+	{
+		ArrayList<String> users = new ArrayList<String>();
+		if (showAgentsList != null)
+		{
+			for (Object value : showAgentsList.getSelectedValuesList())
+			{
+				if (value != null)
+				{
+					users.add(value.toString());
+				}
+			}
+		}
+		return users;
+	}
+
+	/** The targets the next run recommends for, under the current target mode. */
+	java.util.List<String> currentTargets()
+	{
+		java.util.Map<String,String> labels = myAgent == null
+				? java.util.Collections.<String,String>emptyMap() : myAgent.getUserFolloweeSnapshot();
+		return TargetSelection.select(targetSelectionMode, selectedUsers(), loadedUsers(), labels,
+				targetSampleSize, targetSampleSeed);
+	}
+
 	public ArrayList<String> getUsersRec()
 	{
-		String userToRecommend;
-		//S String userToRecommend2;  // add the second user by Sepide
-		// S ArrayList<String> usersToRec = new ArrayList<String>();
-		System.out.println("indexToRecommend: "+indexToRecommend);
-		//S System.out.println("indexToRecommend: "+indexToRecommend2);  // added by Sepide
-		// code added by Sepide to allow selecting two users from the GUI
-		/*S agentsList.add(indexToRecommend,usersToRec);
-		agentsList.add(indexToRecommend2,usersToRec); */  // added by Sepide 
-		ArrayList<String> usersRec = new ArrayList<String>();
-		int batchCount = getRecommendationBatchUserCount();
-		int startIndex = indexToRecommend;
-		if (startIndex < 0)
-		{
-			startIndex = 0;
-		}
-		for (int i = startIndex; i < agentsList.size() && usersRec.size() < batchCount; i++)
-		{
-			userToRecommend = agentsList.getElementAt(i);
-			//S userToRecommend2 = userToRecommend2.split("-",2)[0]; // added by Sepide
-			userToRecommend = userToRecommend.split("-",2)[0];
-			usersRec.add(userToRecommend);
-		}
-		//S usersRec.add(userToRecommend2);  // added by Sepide
-		System.out.println("controllerGUI usersRec: "+usersRec);
-		return usersRec;
-
+		ArrayList<String> targets = new ArrayList<String>(currentTargets());
+		System.out.println("controllerGUI usersRec (" + targetSelectionMode + "): " + targets.size()
+				+ " target(s)");
+		return targets;
 	}
 
 	public int getSvmBatchUserCount()
 	{
-		if (algorithmSelectionBox == null
-				|| !RecommendationModeSupport.isSvmFamilyAlgorithm(
-						algorithmSelectionBox.getSelectedIndex()))
-		{
-			return 1;
-		}
-		return parseBatchUserCount();
+		return Math.max(1, currentTargets().size());
 	}
 
 	public int getRecommendationBatchUserCount()
 	{
-		if (algorithmSelectionBox == null)
-		{
-			return 1;
-		}
-		int selectedAlgorithm = algorithmSelectionBox.getSelectedIndex();
-		if (!RecommendationModeSupport.isSvmFamilyAlgorithm(selectedAlgorithm)
-				&& selectedAlgorithm != Doc2Vec)
-		{
-			return 1;
-		}
-		return parseBatchUserCount();
+		return Math.max(1, currentTargets().size());
 	}
 
 	public int getCandidateUserCountEstimate()
@@ -7450,9 +7504,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				RecommendationModeSupport.requiresConvertedPipeline(
 						targetMode,
 						selectedAlgorithm);
-		boolean batchEnabled =
-				RecommendationModeSupport.isSvmFamilyAlgorithm(selectedAlgorithm)
-				|| selectedAlgorithm == Doc2Vec;
+		//Every algorithm recommends for any number of targets.
+		boolean batchEnabled = true;
 		AlgorithmParameterSettings settings = getAlgorithmParameterSettings();
 		return new SimulatorHelpPanel.Snapshot(
 				selectedAlgorithm,
@@ -7963,6 +8016,320 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 	}
 
+	/**
+	 * The run this window asked for last. Every run notification names its
+	 * run; one for any other run (a superseded run still winding down) is
+	 * ignored, so it can never fail, finish or redefine the current run.
+	 */
+	private volatile String currentRunId = "";
+
+	String getCurrentRunId()
+	{
+		return currentRunId;
+	}
+
+	private boolean isCurrentRun(String runId, String what)
+	{
+		if (runId == null || runId.length() == 0 || runId.equals(currentRunId))
+		{
+			return true;
+		}
+		System.out.println("Ignored " + what + " of superseded run " + runId
+				+ " (current run " + currentRunId + ").");
+		return false;
+	}
+
+	private volatile RecommendationQualityEvaluator.Report latestQualityReport;
+	private final java.util.List<java.util.function.Consumer<RecommendationQualityEvaluator.Report>> qualityListeners =
+			new java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<RecommendationQualityEvaluator.Report>>();
+
+	// ------------------------------------------------------------ Simulator tab bindings
+	//The Simulator tab drives these controls; they stay the single source of
+	//truth that the controller, the help panel and automation read.
+
+	JTextField simulatorNodesField()
+	{
+		return numNodesField;
+	}
+
+	JTextField simulatorTweetLimitField()
+	{
+		return tweetLimitField;
+	}
+
+	JTextField simulatorTopKField()
+	{
+		return recommendationField;
+	}
+
+	JTextField simulatorBeginDateField()
+	{
+		return beginDateField;
+	}
+
+	JTextField simulatorEndDateField()
+	{
+		return endDateField;
+	}
+
+	JTextField simulatorLabelField()
+	{
+		return enterDatasetField;
+	}
+
+	JTextField simulatorHeapField()
+	{
+		return maxHeapField;
+	}
+
+	JComboBox<String> simulatorAlgorithmBox()
+	{
+		return algorithmSelectionBox;
+	}
+
+	JComboBox<RecommendationTargetMode> simulatorTargetModeBox()
+	{
+		return recommendationTargetModeBox;
+	}
+
+	JComboBox<String> simulatorIterationBox()
+	{
+		return simulationSelectionBox;
+	}
+
+	JCheckBox simulatorRemoveHashTags()
+	{
+		return removeHashTags;
+	}
+
+	JCheckBox simulatorRemoveRetweets()
+	{
+		return removeRetweets;
+	}
+
+	JCheckBox simulatorRemoveStopWords()
+	{
+		return removeStopWords;
+	}
+
+	JCheckBox simulatorTweetDelay()
+	{
+		return simulateTweetDelay;
+	}
+
+	JCheckBox simulatorGraphOutput()
+	{
+		return generateGraphOutput;
+	}
+
+	JButton simulatorLoadUsersButton()
+	{
+		return getUsersButton;
+	}
+
+	JButton simulatorInitializeButton()
+	{
+		return initializeButton;
+	}
+
+	JButton simulatorStartButton()
+	{
+		return startButton;
+	}
+
+	JButton simulatorIterationButton()
+	{
+		return simulationButton;
+	}
+
+	JButton simulatorResetButton()
+	{
+		return resetExperimentButton;
+	}
+
+	JButton simulatorApplyHeapButton()
+	{
+		return applyHeapButton;
+	}
+
+	JButton simulatorParametersButton()
+	{
+		return algorithmSettingsButton;
+	}
+
+	JButton simulatorNodeLabButton()
+	{
+		return nodeCapacityButton;
+	}
+
+	JButton simulatorDoc2VecRefreshButton()
+	{
+		return simulatorDoc2VecRefreshButton;
+	}
+
+	JButton simulatorDoc2VecRemoveButton()
+	{
+		return simulatorDoc2VecRemoveButton;
+	}
+
+	JList simulatorUserList()
+	{
+		return showAgentsList;
+	}
+
+	JTabbedPane simulatorOutputTabs()
+	{
+		return outputTabs;
+	}
+
+	/** Chooses a dataset source (FROM_TEXT opens the file chooser). */
+	void simulatorChooseSource(int source)
+	{
+		switch (source)
+		{
+			case FROM_DB:
+				fromDbMenu.doClick();
+				break;
+			case FROM_GENERATION:
+				fromGenerationMenu.doClick();
+				break;
+			case FROM_ARTIFICIAL:
+				fromArtificialMenu.doClick();
+				break;
+			default:
+				fromTextMenu.doClick();
+				break;
+		}
+	}
+
+	int simulatorSourceMode()
+	{
+		return selectedSourceMode;
+	}
+
+	String simulatorSourceTitle()
+	{
+		return sourceSelectionTitleLabel == null ? sourceModeName() : sourceSelectionTitleLabel.getText();
+	}
+
+	String simulatorSourceDetail()
+	{
+		return sourceSelectionDetailLabel == null ? "" : sourceSelectionDetailLabel.getText();
+	}
+
+	String simulatorDatasetName()
+	{
+		return getSelectedDatasetName();
+	}
+
+	String simulatorDatasetPath()
+	{
+		return getSelectedDatasetPath();
+	}
+
+	String simulatorStatusTitle()
+	{
+		return performanceStatusPill == null ? "" : performanceStatusPill.getText();
+	}
+
+	String simulatorStatusDetail()
+	{
+		return performanceProgressLabel == null ? "" : performanceProgressLabel.getText();
+	}
+
+	/** The status tone: READY, RUNNING, SUCCESS, WARNING or ERROR. */
+	String simulatorStatusTone()
+	{
+		return performanceStatusPill == null || performanceStatusPill.tone == null
+				? "READY" : performanceStatusPill.tone.name();
+	}
+
+	String simulatorParameterSummary()
+	{
+		return algorithmSettingsSummaryLabel == null ? "" : algorithmSettingsSummaryLabel.getText();
+	}
+
+	String simulatorParameterProfile()
+	{
+		return algorithmSettingsProfileLabel == null ? "" : algorithmSettingsProfileLabel.getText();
+	}
+
+	String simulatorDoc2VecCacheStatus()
+	{
+		return simulatorDoc2VecCacheBadge == null ? "" : simulatorDoc2VecCacheBadge.getText();
+	}
+
+	String simulatorDoc2VecCacheDetail()
+	{
+		return simulatorDoc2VecCacheDetailLabel == null ? "" : simulatorDoc2VecCacheDetailLabel.getText();
+	}
+
+	String simulatorRuntimeMemory()
+	{
+		return runtimeMemoryLabel == null ? "" : runtimeMemoryLabel.getText();
+	}
+
+	String simulatorRuntimeScheduler()
+	{
+		return runtimeSchedulerLabel == null ? "" : runtimeSchedulerLabel.getText();
+	}
+
+	String simulatorRuntimeStatus()
+	{
+		return runtimeStatusPill == null ? "" : runtimeStatusPill.getText();
+	}
+
+	boolean simulatorInitialized()
+	{
+		return simulatorInitialized && !simulatorInitializationInProgress;
+	}
+
+	boolean simulatorInitializing()
+	{
+		return simulatorInitializationInProgress;
+	}
+
+	/** Each loaded user's followee (empty before users are loaded). */
+	java.util.Map<String,String> simulatorFollowees()
+	{
+		return myAgent == null ? java.util.Collections.<String,String>emptyMap()
+				: myAgent.getUserFolloweeSnapshot();
+	}
+
+	/** Recommendation cards and messages of the current run, for the Results page. */
+	int simulatorResultTargets()
+	{
+		return recommendationUserCount;
+	}
+
+	/** The evaluation of the last run whose every target has reported, or null. */
+	RecommendationQualityEvaluator.Report getLatestQualityReport()
+	{
+		return latestQualityReport;
+	}
+
+	/** Called on the event thread with each run's evaluation once it is complete. */
+	void addQualityListener(java.util.function.Consumer<RecommendationQualityEvaluator.Report> listener)
+	{
+		qualityListeners.add(listener);
+	}
+
+	private void showRecommendationQuality(RecommendationQualityEvaluator.Report report)
+	{
+		latestQualityReport = report;
+		for (java.util.function.Consumer<RecommendationQualityEvaluator.Report> listener : qualityListeners)
+		{
+			try
+			{
+				listener.accept(report);
+			}
+			catch (RuntimeException listenerFailure)
+			{
+				System.err.println("A quality view could not update: " + listenerFailure);
+			}
+		}
+	}
+
 	public void appendRecommendationResult(final RecommendationResultPayload payload, final int recommendationLimit)
 	{
 		if (!SwingUtilities.isEventDispatchThread())
@@ -7980,18 +8347,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		if (payload == null)
 		{
 			return;
-		}
-		//Score the delivered list against the dataset's own ground truth. This only
-		//observes, and a fault in measurement must never stop a result reaching the
-		//user, so it cannot throw into the delivery path.
-		try
-		{
-			RecommendationQualityEvaluator.record(payload, recommendationLimit);
-		}
-		catch (RuntimeException measurementFailure)
-		{
-			System.err.println("Recommendation quality measurement skipped: "
-					+ measurementFailure);
 		}
 		Runnable update = new Runnable() {
 			public void run()
@@ -8269,6 +8624,25 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		return String.format(Locale.US, "%.1f %s", value, units[unit]);
 	}
 
+	/** A run's milestone ("initialize", "finished simulation"); other runs' milestones are ignored. */
+	public void showRunMessage(final String runId, final String phase)
+	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			SwingUtilities.invokeLater(new Runnable() {
+				public void run()
+				{
+					showRunMessage(runId, phase);
+				}
+			});
+			return;
+		}
+		if (isCurrentRun(runId, "the milestone \"" + phase + "\""))
+		{
+			showMessageBox(phase);
+		}
+	}
+
 	public void showMessageBox(String phase)
 	{
 		if (!SwingUtilities.isEventDispatchThread())
@@ -8372,11 +8746,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		
 		}
 
-	public void handleSimulationStartFailure(final String message)
+	public void handleSimulationStartFailure(final String runId, final String message)
 	{
 		SwingUtilities.invokeLater(new Runnable() {
 			public void run()
 			{
+				if (!isCurrentRun(runId, "a start failure"))
+				{
+					return;
+				}
 				enableAllButtons();
 				enableList();
 				appendResult(message);
@@ -8396,11 +8774,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		});
 	}
 
-	public void handleSimulationRunFailure(final String message)
+	public void handleSimulationRunFailure(final String runId, final String message)
 	{
 		SwingUtilities.invokeLater(new Runnable() {
 			public void run()
 			{
+				if (!isCurrentRun(runId, "a run failure"))
+				{
+					return;
+				}
 				enableAllButtons();
 				enableList();
 				appendResult("[FAILED] " + message);
@@ -8423,11 +8805,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		});
 	}
 
-	public void handleInitializationFailure(final String message)
+	public void handleInitializationFailure(final String runId, final String message)
 	{
 		SwingUtilities.invokeLater(new Runnable() {
 			public void run()
 			{
+				if (!isCurrentRun(runId, "an initialization failure"))
+				{
+					return;
+				}
 				simulatorInitialized = false;
 				simulatorInitializationInProgress = false;
 				getUsersButton.setEnabled(true);

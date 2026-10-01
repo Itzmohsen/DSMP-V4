@@ -170,6 +170,7 @@ final class SchedulingRunContext
 	private final int[] crashEpoch;
 	private final double[] downSince;
 	private final int[] crashCount;
+	private final int[] waitingForRepair;
 	private final double[] capacityScales;
 	private SchedulerLabEngine.SchedulingPolicy policyOverride;
 	private int pacingMs;
@@ -252,6 +253,7 @@ final class SchedulingRunContext
 		crashEpoch = new int[this.nodeCount];
 		downSince = new double[this.nodeCount];
 		crashCount = new int[this.nodeCount];
+		waitingForRepair = new int[this.nodeCount];
 		capacityScales = new double[this.nodeCount];
 		java.util.Arrays.fill(capacityScales, 1.0);
 		reroutedWork = new double[this.nodeCount];
@@ -1131,6 +1133,8 @@ final class SchedulingRunContext
 							" (repair in %s)", Scenario.formatDuration(outageMs))));
 			open = openPhases();
 		}
+		//A crash stops the node's emulated work now, not when a sleep ends.
+		emulators[node - 1].wakeSleepers();
 		for (PhaseEntry entry : open)
 		{
 			entry.phase.crash(node);
@@ -1216,21 +1220,35 @@ final class SchedulingRunContext
 	{
 		synchronized (this)
 		{
-			while (down[node - 1])
+			waitingForRepair[node - 1]++;
+			try
 			{
-				requireActive();
-				try
+				while (down[node - 1])
 				{
-					wait(100L);
-				}
-				catch (InterruptedException interrupted)
-				{
-					Thread.currentThread().interrupt();
-					throw new IllegalStateException(
-							"Interrupted while node " + node + " was down.", interrupted);
+					requireActive();
+					try
+					{
+						wait(100L);
+					}
+					catch (InterruptedException interrupted)
+					{
+						Thread.currentThread().interrupt();
+						throw new IllegalStateException(
+								"Interrupted while node " + node + " was down.", interrupted);
+					}
 				}
 			}
+			finally
+			{
+				waitingForRepair[node - 1]--;
+			}
 		}
+	}
+
+	/** How many of the node's threads are stalled by its outage right now. */
+	synchronized int threadsWaitingForRepair(int node)
+	{
+		return waitingForRepair[node - 1];
 	}
 
 	synchronized int getRedirectTarget()

@@ -94,7 +94,6 @@ final class RecommendationPostProcessor
 
 		int selectedRecommendationIndex = BatchRecommendationSelector.selectIndex(
 				recommendationWeights,
-				request.adjustDoc2VecFirstWeight,
 				request.random);
 		String selectedRecommendation = selectedRecommendationIndex >= 0
 				? recommendationNames.get(selectedRecommendationIndex)
@@ -487,7 +486,6 @@ final class RecommendationPostProcessor
 		private final String userScoresText;
 		private final LinkedHashMap<String, Double> scores;
 		private final int recommendationCount;
-		private final boolean adjustDoc2VecFirstWeight;
 		private final Random random;
 		private final RecommendationDatasetContext datasetContext;
 
@@ -500,7 +498,6 @@ final class RecommendationPostProcessor
 				String userScoresText,
 				LinkedHashMap<String, Double> scores,
 				int recommendationCount,
-				boolean adjustDoc2VecFirstWeight,
 				Random random,
 				RecommendationDatasetContext datasetContext)
 		{
@@ -512,7 +509,6 @@ final class RecommendationPostProcessor
 			this.userScoresText = userScoresText;
 			this.scores = scores;
 			this.recommendationCount = recommendationCount;
-			this.adjustDoc2VecFirstWeight = adjustDoc2VecFirstWeight;
 			this.random = random;
 			this.datasetContext = datasetContext == null
 					? RecommendationDatasetContext.empty()

@@ -37,17 +37,17 @@ public final class AlgorithmParameterSettingsSelfTest
 				"scalable SVM default aggressiveness changed");
 			require(defaults.getMlpHiddenNeurons() == 10,
 					"MLP default hidden-neuron count changed");
-			require(AlgorithmParameterSettings.MLP_ENGINE_LEGACY_NEUROPH.equals(
+			require(AlgorithmParameterSettings.MLP_ENGINE_SPARSE_FEDERATED.equals(
 					defaults.getMlpEngine()),
-					"MLP default engine changed");
+					"the default MLP engine is the softmax engine with early stopping");
 			require(defaults.getMlpHiddenLayers() == 1,
 					"MLP default hidden-layer count changed");
 			requireClose(defaults.getMlpLearningRate(), 0.1,
 					"MLP default learning rate changed");
 			requireClose(defaults.getMlpMaxError(), 0.01,
 					"MLP default max error changed");
-			require(defaults.getMlpSparseEpochs() == 8,
-					"MLP sparse default epoch count changed");
+			require(defaults.getMlpSparseEpochs() == AlgorithmParameterSettings.DEFAULT_MLP_SPARSE_EPOCHS,
+					"the softmax MLP's epoch limit changed");
 			requireClose(defaults.getMlpSparseL2(), 0.0001,
 					"MLP sparse default L2 changed");
 			requireClose(defaults.getMlpFedProxMu(), 0.0,

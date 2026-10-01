@@ -74,7 +74,6 @@ public final class RecommendationPostProcessorSelfTest
 								"recommendations",
 								scores,
 								2,
-								false,
 								new Random(1L),
 								context));
 
@@ -113,7 +112,6 @@ public final class RecommendationPostProcessorSelfTest
 						"recommendations",
 						secondScores,
 						1,
-						false,
 						new Random(2L),
 						context));
 		require(read(new File(
@@ -155,7 +153,6 @@ public final class RecommendationPostProcessorSelfTest
 								"recommendations",
 								scores,
 								1,
-								false,
 								new Random(1L),
 								RecommendationDatasetContext.empty()));
 

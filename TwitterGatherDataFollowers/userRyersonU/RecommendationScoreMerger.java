@@ -240,13 +240,16 @@ final class RecommendationScoreMerger
 		}
 		if (!normalized.isEmpty())
 		{
+			//A node's "nothing here" is not an error once another node scored the
+			//target: each candidate lives on one node, so in a multi-node run most
+			//nodes hold none of a given target's candidates.
 			return new RecommendationResultPayload(
 					target,
 					mode,
 					candidateType,
 					RecommendationResultStatus.OK,
 					resultLabel,
-					error,
+					null,
 					normalized,
 					sortedDetails);
 		}

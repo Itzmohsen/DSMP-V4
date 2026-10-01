@@ -130,16 +130,26 @@ public final class SvmTargetPreflightSelfTest
 						"2007-01-01",
 						"2017-01-01"),
 				"valid date inside the configured window should still pass");
-		require(!controller.checkDateRange(
+		require(controller.checkDateRange(
 						"2007-01-01",
 						"2007-01-01",
 						"2017-01-01"),
-				"begin boundary should remain exclusive");
-		require(!controller.checkDateRange(
+				"the first day of the window is inside it");
+		require(controller.checkDateRange(
 						"2017-01-01",
 						"2007-01-01",
 						"2017-01-01"),
-				"end boundary should remain exclusive");
+				"the last day of the window is inside it");
+		require(!controller.checkDateRange(
+						"2006-12-31",
+						"2007-01-01",
+						"2017-01-01"),
+				"the day before the window is outside it");
+		require(!controller.checkDateRange(
+						"2017-01-02",
+						"2007-01-01",
+						"2017-01-01"),
+				"the day after the window is outside it");
 		require(!controller.checkDateRange(
 						"2010-01-01",
 						null,

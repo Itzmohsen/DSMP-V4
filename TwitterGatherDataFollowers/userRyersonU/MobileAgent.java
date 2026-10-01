@@ -145,8 +145,11 @@ public class MobileAgent extends Agent {
 	LinkedHashMap<Double,ArrayList<String>> userTfidfWordsBins; //tf-idf word bins of user
 	//public Map<String,String> userFollowee = new LinkedHashMap<String,String>(); //list of users and their followee names before processing (may have extra since processing can remove users)   // added by Sepide 
 	
-	private static Random r = new Random(); //should not construct in method, make it static
-	private static RandomDataGenerator randomDataGenerator = new RandomDataGenerator(); //should not construct in method, make it static
+	//Synthetic text generators, seeded by this agent's user name in
+	//generateArtificialTweets so the text is the same on every run and every
+	//node split (shared static generators made it depend on thread order).
+	private final Random r = new Random();
+	private final RandomDataGenerator randomDataGenerator = new RandomDataGenerator();
 	
 	private String followeeName;
 	private RecommendationExperimentConfig recommendationConfig;
@@ -283,9 +286,7 @@ public class MobileAgent extends Agent {
 				MessageTemplate.MatchSender( new AID("Organizing Agent1", AID.ISLOCALNAME))) ;
 		final MessageTemplate mt_scoresForUser = MessageTemplate.and(
 				mt_organizingAgent,
-				MessageTemplate.or(
-						MessageTemplate.MatchOntology("Scores for User"),
-						MessageTemplate.MatchOntology("Recommendation Result V2")));
+				MessageTemplate.MatchOntology("Recommendation Result V2"));
 		final MessageTemplate mt_communication = MessageTemplate.not(mt_scoresForUser);
 
 		if (readFrom == FROM_DB)
@@ -296,29 +297,19 @@ public class MobileAgent extends Agent {
 				con = DriverManager.getConnection(url, user, pass);
 
 				//@Jason change to allow limit of tweets
-				String queryCount;
-				if (totalTweetLimit > 0)
-					queryCount="select count(*) AS rowcount from (select * from usertweet where referenceUser='"+twitter_referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "' ORDER BY tweetid DESC limit "+totalTweetLimit+") AS T1 where screen_name='"+twitterUserName+"'";
-				else
-					queryCount="select count(*) AS rowcount from (select * from usertweet where referenceUser='"+twitter_referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "' ORDER BY tweetid) AS T1 where screen_name='"+twitterUserName+"'";
-
-
-				stmt = con.createStatement();
-				resultSet = stmt.executeQuery(queryCount);
+				PreparedStatement countQuery = TweetDatabaseQueries.userTweetCount(con,
+						twitter_referenceUser, beginDate, endDate, totalTweetLimit, twitterUserName);
+				resultSet = countQuery.executeQuery();
 				resultSet.next();
 				tweetCount = resultSet.getInt("rowcount");
 				totalTweet = tweetCount;
 				resultSet.close();
+				countQuery.close();
 
-				//@Jason change limit of tweets
-				String query;
-				if (totalTweetLimit > 0)
-					query="select * from (select * from usertweet where referenceUser='"+twitter_referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "' ORDER BY tweetid DESC limit "+totalTweetLimit+") AS T1 where screen_name='"+twitterUserName+"'";
-				else
-					query="select * from (select * from usertweet where referenceUser='"+twitter_referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "' ORDER BY tweetid) AS T1 where screen_name='"+twitterUserName+"'";
-
-				stmt = con.createStatement();
-				resultSet = stmt.executeQuery(query);
+				PreparedStatement query = TweetDatabaseQueries.userTweets(con,
+						twitter_referenceUser, beginDate, endDate, totalTweetLimit, twitterUserName);
+				stmt = query;
+				resultSet = query.executeQuery();
 
 			} catch (SQLException e1) {
 				// TODO Auto-generated catch block
@@ -812,8 +803,7 @@ public class MobileAgent extends Agent {
 					return;
 				}
 
-				if (msg!=null && ("Scores for User".equals(msg.getOntology())
-						|| "Recommendation Result V2".equals(msg.getOntology())))
+				if (msg!=null && "Recommendation Result V2".equals(msg.getOntology()))
 				{
 					if (!runLifecycle.isActive(msg.getConversationId()))
 					{
@@ -829,44 +819,26 @@ public class MobileAgent extends Agent {
 						String outputFileName = getRecommendationOutputFileName();
 
 					try {
-						if ("Recommendation Result V2".equals(msg.getOntology()))
+						Object content = msg.getContentObject();
+						if (!(content instanceof RecommendationResultPayload))
 						{
-							Object content = msg.getContentObject();
-							if (!(content instanceof RecommendationResultPayload))
-							{
-								throw new IOException("Unexpected converted recommendation payload");
-							}
-							structuredResult = (RecommendationResultPayload) content;
-							scoreReceived = new LinkedHashMap<String,Double>(
-									structuredResult.getScores());
-							if (structuredResult.getStatus() != RecommendationResultStatus.OK)
-							{
-								myGui.appendRecommendationResult(structuredResult, kRecommend);
-								myGui.appendResult(
-										"No recommendations for " + structuredResult.getTargetUser()
-										+ ": " + structuredResult.getMessage());
-								return;
-							}
+							throw new IOException("Unexpected recommendation payload");
 						}
-						else
+						structuredResult = (RecommendationResultPayload) content;
+						scoreReceived = new LinkedHashMap<String,Double>(
+								structuredResult.getScores());
+						if (structuredResult.getStatus() != RecommendationResultStatus.OK)
 						{
-							scoreReceived = (LinkedHashMap<String,Double>) msg.getContentObject();
+							myGui.appendRecommendationResult(structuredResult, kRecommend);
+							myGui.appendResult(
+									"No recommendations for " + structuredResult.getTargetUser()
+									+ ": " + structuredResult.getMessage());
+							return;
 						}
-						if (scoreReceived == null || scoreReceived.isEmpty())
+						if (scoreReceived.isEmpty())
 						{
 							String targetUser = getLocalName().split("-", 2)[0];
-							RecommendationResultPayload emptyResult =
-									structuredResult == null
-									? new RecommendationResultPayload(
-											targetUser,
-											recommendationConfig.getTargetMode(),
-											recommendationConfig.getCandidateType(),
-											RecommendationResultStatus.NO_CANDIDATES,
-											"The algorithm returned no recommendation candidates. "
-													+ "Review Live Timing for the model diagnostic.",
-											Collections.<String,Double>emptyMap())
-									: structuredResult;
-							myGui.appendRecommendationResult(emptyResult, kRecommend);
+							myGui.appendRecommendationResult(structuredResult, kRecommend);
 							myGui.appendResult(
 									"No recommendations for " + targetUser
 									+ ": the score map was empty.");
@@ -909,14 +881,7 @@ public class MobileAgent extends Agent {
 						writer.newLine();
 						writer.close();
 
-						if (structuredResult == null)
-						{
-							myGui.appendRecommendation(userScoresText);
-						}
-							else
-							{
-								myGui.appendRecommendationResult(structuredResult, kRecommend);
-							}
+						myGui.appendRecommendationResult(structuredResult, kRecommend);
 							recCount = 0;
 
 							long postProcessingStartTime = System.currentTimeMillis();
@@ -936,8 +901,7 @@ public class MobileAgent extends Agent {
 														userScoresText,
 														scoreReceived,
 														kRecommend,
-														algorithmRec == Doc2Vec,
-														r,
+														new Random(SimulationSeeds.forName(getCurrentUserName())),
 														recommendationDatasetContext));
 								int persistedSelectionBoxIndex =
 										postProcessingResult.getSelectedRecommendationIndex() + 1;
@@ -1298,8 +1262,7 @@ public class MobileAgent extends Agent {
 							}
 							int selectedRecommendationIndex = BatchRecommendationSelector.selectIndex(
 									recommendationWeights,
-									myGui.algorithmSelectionBox.getSelectedIndex() == Doc2Vec,
-									r);
+									new Random(SimulationSeeds.forName(getCurrentUserName())));
 							String selectedRecommendation = selectedRecommendationIndex >= 0
 									? recommendationNames.get(selectedRecommendationIndex)
 									: null;
@@ -2650,6 +2613,9 @@ public class MobileAgent extends Agent {
 	
 	public void generateArtificialTweets()
 	{
+		long seed = SimulationSeeds.forName(getLocalName().split("-", 2)[0]);
+		r.setSeed(seed);
+		randomDataGenerator.reSeed(seed);
 		ArrayList<Tweet> artificialTweets = new ArrayList<Tweet>();
 		for (Tweet currentRealTweet : usersTweetFromDb )
 		{

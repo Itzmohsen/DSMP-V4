@@ -2,6 +2,7 @@ package TwitterGatherDataFollowers.userRyersonU;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -243,8 +244,10 @@ public class ControllerAgent extends GuiAgent {
 	private double[][] topicsMinMax = new double[TOTAL_ORIGINAL_USERS][2];
 	private	double[][] topicsWordsIndex = new double[TOTAL_ORIGINAL_USERS][TOTAL_ORIGINAL_WORDS];
 	private ArrayList<String> currentBagWords = new ArrayList<String>(); //words already used in random generation
-	private static RandomDataGenerator randomDataGenerator = new RandomDataGenerator(); //should not construct in method, make it static
-	private static Random r = new Random(); //should not construct in method, make it static
+	//Generators of the synthetic dataset modes, reseeded before each generation
+	//so the same settings always generate the same dataset.
+	private final RandomDataGenerator randomDataGenerator = new RandomDataGenerator();
+	private final Random r = new Random();
 	
 	private double[] topicsWordsTfidfDemo = new double[TOTAL_ORIGINAL_WORDS_DEMO];
 	private String[] topicsWordsDemo = new String[TOTAL_ORIGINAL_WORDS_DEMO];
@@ -272,6 +275,8 @@ public class ControllerAgent extends GuiAgent {
 	private LinkedHashMap<String,LinkedHashMap<Double,ArrayList<String>>> allUserTfidfWordsBins = new LinkedHashMap<String,LinkedHashMap<Double,ArrayList<String>>>(); //All bins for each user
 	
 	private HashMap<String,String> userFollowee;
+	/** A copy of {@link #userFollowee} for other threads, refreshed when users are loaded. */
+	private volatile Map<String,String> userFolloweeSnapshot = Collections.<String,String>emptyMap();
 	
 	private int tweetsReadCount = 0;
 
@@ -652,6 +657,8 @@ public class ControllerAgent extends GuiAgent {
 		
 		if (readFrom == FROM_GENERATION)
 		{
+			r.setSeed(SimulationSeeds.GENERATION);
+			randomDataGenerator.reSeed(SimulationSeeds.GENERATION);
 			generateUserNames();
 			
 			int tweetCount = 0;
@@ -803,26 +810,14 @@ public class ControllerAgent extends GuiAgent {
 				String url = "jdbc:mysql://" + serverName + ":" + portNumber + "/" + sid + "?useSSL=false";
 				con = DriverManager.getConnection(url, user, pass);
 
-				String query;
+				PreparedStatement query = TweetDatabaseQueries.usersByTweetCount(
+						con, referenceUser, beginDate, endDate, totalTweetLimit);
+				stmt = query;
+				resultSet = query.executeQuery();
 
-				if (totalTweetLimit > 0)
-					query = "select screen_name,referenceUser,count(*) from (select * from usertweet where referenceUser='"+referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "' order by tweetid DESC LIMIT "+ totalTweetLimit +") as T1 group by screen_name order by count(*) DESC";				  
-				else
-					query = "select screen_name,referenceUser,count(*) from (select * from usertweet where referenceUser='"+referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "') as T1 group by screen_name order by count(*) DESC";
-
-				//String queryst = "select * from ryersontop41users";
-
-				stmt = con.createStatement();
-				resultSet = stmt.executeQuery(query);
-
-				String currentTwitterUser;
-
-				resultSet.beforeFirst();
-				while(!resultSet.isLast())
+				while (resultSet.next())
 				{
-					resultSet.next();
-					currentTwitterUser = resultSet.getString(1);
-					listOfUsers.add(currentTwitterUser);
+					listOfUsers.add(resultSet.getString(1));
 				}
 
 				resultSet.close();
@@ -839,6 +834,8 @@ public class ControllerAgent extends GuiAgent {
 
 		if (readyToInitialize)
 		{
+			userFolloweeSnapshot = userFollowee == null ? Collections.<String,String>emptyMap()
+					: Collections.unmodifiableMap(new LinkedHashMap<String,String>(userFollowee));
 			myGui.updateList(listOfUsers);
 			myGui.enableAllButtons();
 			myGui.enableList();
@@ -966,6 +963,7 @@ public class ControllerAgent extends GuiAgent {
 		aggregatedUserTweets.clear();
 
 		userFollowee = null;
+		userFolloweeSnapshot = Collections.<String,String>emptyMap();
 		testSetUsers = null;
 		trainSetUsers = null;
 			allUserDocumentsTFIDF = null;
@@ -1017,6 +1015,14 @@ public class ControllerAgent extends GuiAgent {
 
 	private String validateRecommendationModeForTextDataset()
 	{
+		if (RecommendationModeSupport.isClassifierAlgorithm(algorithmRec))
+		{
+			String trainingError = validateHeldOutClassifierTraining();
+			if (trainingError != null)
+			{
+				return trainingError;
+			}
+		}
 		if (recommendationConfig.getTargetMode() == RecommendationTargetMode.ALGORITHM_DEFAULT)
 		{
 			return null;
@@ -1041,22 +1047,42 @@ public class ControllerAgent extends GuiAgent {
 		{
 			return "Followee Accounts mode needs field-0 followee labels for active users.";
 		}
-		if (RecommendationModeSupport.isClassifierAlgorithm(algorithmRec)
-				&& activeFolloweeCount < 2)
+		return null;
+	}
+
+	/**
+	 * The classifiers (SVM, Scalable SVM, MLP) never train on the targets they
+	 * predict: the targets are held out in the folds of {@link TargetFolds}.
+	 * Every fold's model must still see at least two followee classes, in every
+	 * mode, or the run would fail (or predict one class) only after the agents
+	 * have started.
+	 */
+	private String validateHeldOutClassifierTraining()
+	{
+		String algorithm = RecommendationModeSupport.algorithmName(algorithmRec);
+		ArrayList<String> labelled = new ArrayList<String>();
+		for (String candidate : listOfUsers)
 		{
-			return RecommendationModeSupport.algorithmName(algorithmRec)
-					+ " needs at least two followee classes in this dataset.";
-		}
-		if (recommendationConfig.usesConvertedPipeline()
-				&& RecommendationModeSupport.isClassifierAlgorithm(algorithmRec))
-		{
-			ArrayList<String> trainingCandidates = new ArrayList<String>(listOfUsers);
-			trainingCandidates.removeAll(usersRec);
-			if (countDistinctFollowees(trainingCandidates) < 2)
+			String followee = userFollowee == null ? null : userFollowee.get(candidate);
+			if (followee != null && followee.length() > 0)
 			{
-				return RecommendationModeSupport.algorithmName(algorithmRec)
-						+ " Similar Users mode needs at least two followee classes after "
-						+ "recommendation targets are held out.";
+				labelled.add(candidate);
+			}
+		}
+		if (countDistinctFollowees(labelled) < 2)
+		{
+			return algorithm + " needs at least two followee classes in this dataset.";
+		}
+		List<List<String>> folds = TargetFolds.of(usersRec, userFollowee, labelled.size());
+		for (List<String> fold : folds)
+		{
+			ArrayList<String> training = new ArrayList<String>(labelled);
+			training.removeAll(fold);
+			if (countDistinctFollowees(training) < 2)
+			{
+				return algorithm + " needs at least two followee classes after the targets are held out"
+						+ " of training (" + TargetFolds.describe(folds, labelled.size())
+						+ "). Select fewer targets or a dataset with more labelled users.";
 			}
 		}
 		return null;
@@ -1231,7 +1257,7 @@ public class ControllerAgent extends GuiAgent {
 		System.err.println("Initialization rejected: " + message);
 		if (myGui != null)
 		{
-			myGui.handleInitializationFailure(message);
+			myGui.handleInitializationFailure(currentRecommendationRunId, message);
 		}
 	}
 
@@ -1370,7 +1396,7 @@ public class ControllerAgent extends GuiAgent {
 			} catch (Exception e) {
 				String message = "Simulation could not start: " + e.getMessage();
 				System.err.println(message);
-				myGui.handleSimulationStartFailure(message);
+				myGui.handleSimulationStartFailure(currentRecommendationRunId, message);
 				return;
 			}
 
@@ -1437,6 +1463,21 @@ public class ControllerAgent extends GuiAgent {
 		beginDate = (String) ev.getParameter(2);
 		endDate = (String) ev.getParameter(3);	
 		int kRecommend = (Integer) ev.getParameter(4);
+		//The window names the run it asked for, so every notification of this
+		//run can be told apart from those of a superseded run.
+		currentRecommendationRunId = RecommendationRunLifecycle.createRunId();
+		try
+		{
+			Object requestedRunId = ev.getParameter(15);
+			if (requestedRunId instanceof String && ((String) requestedRunId).trim().length() > 0)
+			{
+				currentRecommendationRunId = ((String) requestedRunId).trim();
+			}
+		}
+		catch (RuntimeException ignored)
+		{
+			//Older callers omit the run id; the controller names the run.
+		}
 		int hashtags_temp = (Integer) ev.getParameter(6); //1 to remove hash tags	
 		int retweetedby_temp = (Integer) ev.getParameter(7); //1 if it is retweeted	
 		int stopWordFlag_temp = (Integer) ev.getParameter(8); //remove stop words			
@@ -1467,7 +1508,6 @@ public class ControllerAgent extends GuiAgent {
 		tweetDelay = TWEET_DELAY;
 
 		usersRec = myGui.getUsersRec();
-		currentRecommendationRunId = RecommendationRunLifecycle.createRunId();
 		RecommendationSchedulerRegistry.beginRun(
 				currentRecommendationRunId,
 				numRecAgents,
@@ -1668,7 +1708,7 @@ public class ControllerAgent extends GuiAgent {
 							if (user.equals(referenceUser))
 							{
 								int tweetCountToFollow;
-								tweetCountToFollow = calculateTweetsToFollow(availableDb.getTweetCountFromUser(otherUser));
+								tweetCountToFollow = calculateTweetsToFollow(user, otherUser, availableDb.getTweetCountFromUser(otherUser));
 								userFollowTweetCounts.put(otherUser, tweetCountToFollow);
 							}
 							
@@ -1917,7 +1957,7 @@ public class ControllerAgent extends GuiAgent {
 							if (user.equals(referenceUser))
 							{
 								int tweetCountToFollow;
-								tweetCountToFollow = calculateTweetsToFollow(availableDb.getTweetCountFromUser(otherUser));
+								tweetCountToFollow = calculateTweetsToFollow(user, otherUser, availableDb.getTweetCountFromUser(otherUser));
 								userFollowTweetCounts.put(otherUser, tweetCountToFollow);
 							}
 							
@@ -2112,6 +2152,42 @@ public class ControllerAgent extends GuiAgent {
 						usersRec,
 						graphGenerationEnabled,
 						readFrom == FROM_TEXT ? textFile : null);
+				//Algorithms that read text outside the agents (Doc2Vec's worker, the
+				//temporal graph model) read the run's canonical corpus: the same
+				//users, tweets and tokens every other algorithm receives.
+				if (algorithmRec == Doc2Vec || algorithmRec == TEMPORAL_GRAPH_FOUNDATION)
+				{
+					try
+					{
+						java.util.LinkedHashMap<String,java.util.List<Tweet>> runTweets =
+								new java.util.LinkedHashMap<String,java.util.List<Tweet>>();
+						for (String user : listOfUsers)
+						{
+							runTweets.put(user, availableDb.getTweetsFromUser(user));
+						}
+						File runCorpus = RunCorpus.write(
+								RunCorpus.defaultDirectory(),
+								listOfUsers,
+								runTweets,
+								userFollowee,
+								retweetedby_temp == RE_TWEETS,
+								hashtags_temp == HASH_TAGS,
+								stopWordFlag_temp == STOP_WORDS,
+								STOP_WORD_SET);
+						recommendationConfig = recommendationConfig.withRunCorpus(runCorpus);
+						System.out.println("Run corpus: " + runCorpus.getPath());
+					}
+					catch (IOException corpusFailure)
+					{
+						failInitialization("Could not write the run's normalised corpus: "
+								+ corpusFailure.getMessage());
+						return;
+					}
+				}
+
+				//The evaluation's candidate set needs the run's tweets, which are
+				//released once the recommender agents hold them.
+				prepareQualityEvaluation(kRecommend, retweetedby_temp, hashtags_temp, stopWordFlag_temp);
 
 				//Input delivery depends only on the dataset and the algorithm, never
 				//on the scheduler plan, so the original and scheduled modes of an
@@ -2427,7 +2503,7 @@ public class ControllerAgent extends GuiAgent {
 								if (!otherUser.equals(user))
 								{
 									int tweetCountToFollow;
-									tweetCountToFollow = calculateTweetsToFollow(availableDb.getTweetCountFromUser(otherUser));
+									tweetCountToFollow = calculateTweetsToFollow(user, otherUser, availableDb.getTweetCountFromUser(otherUser));
 									userFollowTweetCounts.put(otherUser, tweetCountToFollow);
 								}
 							}
@@ -2647,14 +2723,10 @@ public class ControllerAgent extends GuiAgent {
 
 					//@Jason Change the top* tables queryst
 
-					String query;
-
-					if (totalTweetLimit > 0)
-						query = "select screen_name,referenceUser,count(*) from (select * from usertweet where referenceUser='"+referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "' order by tweetid DESC LIMIT "+ totalTweetLimit +") as T1 group by screen_name order by count(*) DESC";				  
-					else
-						query = "select screen_name,referenceUser,count(*) from (select * from usertweet where referenceUser='"+referenceUser+"' AND CAST(created_at AS DATE) BETWEEN '" + beginDate + "' AND '" + endDate + "') as T1 group by screen_name order by count(*) DESC";
-					stmt = con.createStatement();
-					resultSet = stmt.executeQuery(query);
+					PreparedStatement query = TweetDatabaseQueries.usersByTweetCount(
+							con, referenceUser, beginDate, endDate, totalTweetLimit);
+					stmt = query;
+					resultSet = query.executeQuery();
 
 
 				} catch (SQLException e1) {
@@ -2662,9 +2734,8 @@ public class ControllerAgent extends GuiAgent {
 				}
 
 				resultSet.beforeFirst();
-				while(!resultSet.isLast())
+				while (resultSet.next())
 				{
-					resultSet.next();
 					currentTwitterUser = resultSet.getString(1);
 					listOfUsers.add(currentTwitterUser);
 				}
@@ -2681,19 +2752,16 @@ public class ControllerAgent extends GuiAgent {
 
 				LinkedHashMap<String,Integer> databaseCounts = new LinkedHashMap<String,Integer>();
 				resultSet.beforeFirst();
-				while(!resultSet.isLast())
+				while (resultSet.next())
 				{
-					resultSet.next();
 					databaseCounts.put(resultSet.getString(1), Integer.valueOf(resultSet.getInt(3)));
 				}
 				Map<String,Integer> plannedNodes = planPrimaryNodesForCounts(
 						new ArrayList<String>(databaseCounts.keySet()), databaseCounts);
 
 				resultSet.beforeFirst();
-				while(!resultSet.isLast())
+				while (resultSet.next())
 				{
-
-					resultSet.next();
 					currentTwitterUser = resultSet.getString(1);
 					//if(!currentTwitterUser.equalsIgnoreCase(referenceUser))			
 					//{
@@ -2716,7 +2784,7 @@ public class ControllerAgent extends GuiAgent {
 					//Add list of recommender servers and increase bins accordingly if distributed
 					//ie. add the tweet count to all recommenders if there are 2 for the user looking for recommendation
 					ArrayList<Integer> recServers = new ArrayList<Integer>();
-					if (usersRec.contains(user))
+					if (usersRec.contains(currentTwitterUser))
 					{	
 						for (int i = 0; i < numRecAgents; i++)
 						{
@@ -2764,7 +2832,7 @@ public class ControllerAgent extends GuiAgent {
 					userAgentArgs[18] = algorithmRec;
 					userAgentArgs[19] = myGui;
 					userAgentArgs[20] = readFrom;
-					userAgentArgs[29] = userFollowee.get(user); //followee of User
+					userAgentArgs[29] = userFollowee.get(currentTwitterUser); //followee of User
 					userAgentArgs[30] = recommendationDatasetContext;
 
 
@@ -2881,12 +2949,70 @@ public class ControllerAgent extends GuiAgent {
 		// myGui.enableAllButtons();
 		// myGui.reselectRecommendee();
 		// myGui.enableList();
+		prepareQualityEvaluation(kRecommend, retweetedby_temp, hashtags_temp, stopWordFlag_temp);
 		long endTime = System.currentTimeMillis();
 		System.out.println("Initialize time: "+(endTime-startTime)+"ms");
 		logStageDuration("INITIALIZE total", startTime, endTime);
 		// myGui.showMessageBox("initialize");
 
 	} //inititalize
+
+	/** Each loaded user's followee (read-only; safe from any thread). */
+	public Map<String,String> getUserFolloweeSnapshot()
+	{
+		return userFolloweeSnapshot;
+	}
+
+	/** The id of the run initialised last (the run the GUI is showing). */
+	public String getCurrentRecommendationRunId()
+	{
+		return currentRecommendationRunId;
+	}
+
+	/**
+	 * Installs what this run's lists are evaluated against: its targets, its
+	 * users with a usable document (the user candidate set), their followees
+	 * and the cutoff k. The evaluation only observes the run's merged lists.
+	 */
+	private void prepareQualityEvaluation(int cutoff, int retweetsFlag, int hashTagsFlag, int stopWordsFlag)
+	{
+		if (listOfUsers == null || listOfUsers.isEmpty() || recommendationConfig == null
+				|| RecommendationQualityEvaluator.isPrepared(currentRecommendationRunId))
+		{
+			return;
+		}
+		ArrayList<String> usable = new ArrayList<String>();
+		LinkedHashMap<String,String> labels = new LinkedHashMap<String,String>();
+		for (String runUser : listOfUsers)
+		{
+			if (hasSvmUsableTargetDocument(runUser, retweetsFlag, hashTagsFlag, stopWordsFlag))
+			{
+				usable.add(runUser);
+			}
+			String followee = userFollowee == null ? null : userFollowee.get(runUser);
+			if (followee != null && followee.length() > 0)
+			{
+				labels.put(runUser, followee);
+			}
+		}
+		RecommendationCandidateType candidateType = recommendationConfig.getCandidateType();
+		if (candidateType == null)
+		{
+			candidateType = RecommendationModeSupport.nativeCandidateType(algorithmRec);
+		}
+		RecommendationQualityEvaluator.prepare(new RecommendationQualityEvaluator.Setup(
+				currentRecommendationRunId,
+				RecommendationModeSupport.algorithmName(algorithmRec),
+				String.valueOf(recommendationConfig.getTargetMode()),
+				candidateType,
+				cutoff,
+				usersRec,
+				usable,
+				labels));
+		System.out.println("Recommendation quality: " + (usersRec == null ? 0 : usersRec.size())
+				+ " target(s), " + usable.size() + " candidate user(s), " + labels.size()
+				+ " labelled user(s), k=" + cutoff + ".");
+	}
 
 	/**
 	 * Ends the experiment's agents before a new initialization. The container
@@ -3843,12 +3969,14 @@ public class ControllerAgent extends GuiAgent {
 		return r.nextInt(numFollowees);
 	}
 
-	//Returns how many tweets before user follows a followee
-	public int calculateTweetsToFollow(int tweetCount)
+	//Returns how many of the other user's tweets the followee sees before following
+	//it. The Weibull draw is seeded by the pair, so it is the same on every run
+	//and does not depend on the order users are visited in.
+	public int calculateTweetsToFollow(String followee, String otherUser, int tweetCount)
 	{
 		int tweetsToFollow = 0;
-//		double value = weibull2(DEFAULT_SHAPE,DEFAULT_SCALE);
-		double value = randomDataGenerator.nextWeibull(DEFAULT_SHAPE,DEFAULT_SCALE);
+		double value = SimulationSeeds.weibull(SimulationSeeds.forPair(followee, otherUser),
+				DEFAULT_SHAPE, DEFAULT_SCALE);
 		tweetsToFollow = (int) Math.round(tweetCount * value);
 		if (tweetsToFollow > tweetCount)
 			tweetsToFollow = tweetCount;
@@ -3874,14 +4002,13 @@ public class ControllerAgent extends GuiAgent {
 			beginDateFormat = sdf.parse(beginDate);
 			endDateFormat = sdf.parse(endDate);
 
-			if (beginDateFormat.before(tweetDateFormat) && endDateFormat.after(tweetDateFormat))
-				dateRangeValid = true;
-			else
-				dateRangeValid = false;
+			//Both boundary days are inside the range.
+			dateRangeValid = !tweetDateFormat.before(beginDateFormat)
+					&& !tweetDateFormat.after(endDateFormat);
 
 		} catch (ParseException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			//A row whose date cannot be read is kept: the range filters dated rows only.
+			dateRangeValid = true;
 		}
 
 		return dateRangeValid;
@@ -3995,11 +4122,6 @@ public class ControllerAgent extends GuiAgent {
 					datasetReferenceUsers,
 					datasetGraphNodeNames);
 
-			//Install the user -> followee ground truth so the delivered top-N lists
-			//can be scored for ranking quality, not just classifier accuracy.
-			RecommendationQualityEvaluator.startRun(userFolloweeMap);
-			System.out.println("Recommendation quality ground truth: "
-					+ userFolloweeMap.size() + " user(s) with a known followee.");
 
 			if (malformedRows > 0)
 			{
@@ -4081,7 +4203,21 @@ public class ControllerAgent extends GuiAgent {
 		ArrayList<Tweet> tweetsFromDb = localDb.getTweets();
 		ArrayList<Tweet> datasetAvailable = new ArrayList<Tweet>();
 
-		Collections.sort(tweetsFromDb); //Sort by tweetId
+		//Oldest first by timestamp (UTC), tweet id breaking ties, so a tweet
+		//limit keeps the most recent tweets; undated tweets sort first.
+		final java.util.HashMap<Tweet,Long> timestamps = new java.util.HashMap<Tweet,Long>();
+		for (Tweet tweet : tweetsFromDb)
+		{
+			timestamps.put(tweet, Long.valueOf(RunCorpus.parseTimestamp(tweet.getDateString())));
+		}
+		Collections.sort(tweetsFromDb, new java.util.Comparator<Tweet>()
+		{
+			public int compare(Tweet first, Tweet second)
+			{
+				int byTime = Long.compare(timestamps.get(first).longValue(), timestamps.get(second).longValue());
+				return byTime != 0 ? byTime : Long.compare(first.getTweetId(), second.getTweetId());
+			}
+		});
 		localDb.refreshUserIndex();
 
 		int tweetToLimitCount = 0;
