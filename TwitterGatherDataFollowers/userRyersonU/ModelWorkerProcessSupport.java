@@ -51,8 +51,33 @@ final class ModelWorkerProcessSupport
 		outputDrainer.setDaemon(true);
 		outputDrainer.start();
 
-		boolean finished = process.waitFor(
-				Math.max(1L, timeoutSeconds), TimeUnit.SECONDS);
+		//Poll so a revoked work unit (a drain or a crash of its node) stops its
+		//worker at once instead of waiting for it to finish.
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(1L, timeoutSeconds));
+		boolean finished = false;
+		boolean revoked = false;
+		while (!finished)
+		{
+			long remaining = deadline - System.nanoTime();
+			if (remaining <= 0L)
+			{
+				break;
+			}
+			finished = process.waitFor(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100L)),
+					TimeUnit.NANOSECONDS);
+			if (!finished && UnitCancellation.isRevoked())
+			{
+				revoked = true;
+				break;
+			}
+		}
+		if (revoked)
+		{
+			process.destroyForcibly();
+			process.waitFor(5L, TimeUnit.SECONDS);
+			outputDrainer.join(1000L);
+			UnitCancellation.check();
+		}
 		if (!finished)
 		{
 			process.destroy();

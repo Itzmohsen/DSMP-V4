@@ -4,29 +4,41 @@ import java.util.List;
 
 /**
  * Blocking, thread-safe facade over a {@link WorkDispatcher} for real threads
- * (live recommender nodes and the Dynamic Queue Lab).
+ * (live recommender nodes and the Dynamic Queue demo).
  *
  * Every dispatcher call and every wait happen while holding this phase's
  * monitor, and every state change ends with {@code notifyAll()}, so a lane can
  * never miss the assignment made for it. Waits wake up at least every 250 ms to
  * honour run aborts, and a phase that makes no progress for
- * {@code stallTimeoutMs} while no operator action is holding it fails instead
- * of hanging.
+ * {@code stallTimeoutMs} while no operator action or crash repair is holding it
+ * fails instead of hanging.
+ *
+ * The dispatcher's clock is the run's model clock when the phase belongs to a
+ * run context, else milliseconds since the phase opened.
  */
 final class WorkPhase
 {
 	private final WorkDispatcher dispatcher;
 	private final String runId;
+	private final SchedulingRunContext context;
 	private final long startNanos;
 	private final long stallTimeoutMs;
 	private long lastProgressNanos;
 	private volatile boolean closed;
 	private String closeReason = "";
+	private boolean finishReported;
 
 	WorkPhase(WorkDispatcher dispatcher, String runId, long stallTimeoutMs)
 	{
+		this(dispatcher, runId, stallTimeoutMs, null);
+	}
+
+	WorkPhase(WorkDispatcher dispatcher, String runId, long stallTimeoutMs,
+			SchedulingRunContext context)
+	{
 		this.dispatcher = dispatcher;
 		this.runId = runId;
+		this.context = context;
 		this.startNanos = System.nanoTime();
 		this.lastProgressNanos = startNanos;
 		this.stallTimeoutMs = stallTimeoutMs <= 0L ? Long.MAX_VALUE : stallTimeoutMs;
@@ -37,9 +49,13 @@ final class WorkPhase
 		return dispatcher;
 	}
 
-	/** Milliseconds since the phase opened: the dispatcher's clock. */
+	/** The dispatcher's clock: model milliseconds of the run, or since the phase opened. */
 	double now()
 	{
+		if (context != null)
+		{
+			return context.now();
+		}
 		return (System.nanoTime() - startNanos) / 1.0e6;
 	}
 
@@ -74,7 +90,8 @@ final class WorkPhase
 							+ dispatcher.getFailureReason());
 				}
 				long idleMs = (System.nanoTime() - lastProgressNanos) / 1000000L;
-				if (idleMs > stallTimeoutMs && !dispatcher.isBlockedByOperator())
+				if (idleMs > stallTimeoutMs && !dispatcher.isBlockedByOperator()
+						&& !dispatcher.isWaitingForRepair())
 				{
 					dispatcher.withdraw(node, lane);
 					throw new IllegalStateException(
@@ -90,27 +107,31 @@ final class WorkPhase
 
 	WorkDispatcher.Outcome complete(WorkDispatcher.Assignment assignment)
 	{
+		WorkDispatcher.Outcome outcome;
 		synchronized (this)
 		{
-			WorkDispatcher.Outcome outcome = dispatcher.complete(assignment, now());
+			outcome = dispatcher.complete(assignment, now());
 			noteProgress();
 			notifyAll();
-			return outcome;
 		}
+		afterChange();
+		return outcome;
 	}
 
 	WorkDispatcher.Outcome fail(WorkDispatcher.Assignment assignment, Throwable cause)
 	{
+		WorkDispatcher.Outcome outcome;
 		synchronized (this)
 		{
 			String reason = cause == null ? "failure"
 					: cause.getClass().getSimpleName()
 							+ (cause.getMessage() == null ? "" : ": " + cause.getMessage());
-			WorkDispatcher.Outcome outcome = dispatcher.fail(assignment, now(), reason);
+			outcome = dispatcher.fail(assignment, now(), reason);
 			noteProgress();
 			notifyAll();
-			return outcome;
 		}
+		afterChange();
+		return outcome;
 	}
 
 	/** A lane that stops for good must withdraw so nothing waits for it. */
@@ -149,6 +170,37 @@ final class WorkPhase
 			noteProgress();
 			notifyAll();
 			return revoked;
+		}
+	}
+
+	List<Integer> crash(int node)
+	{
+		synchronized (this)
+		{
+			List<Integer> lost = dispatcher.crash(node, now());
+			noteProgress();
+			notifyAll();
+			return lost;
+		}
+	}
+
+	void detectCrash(int node)
+	{
+		synchronized (this)
+		{
+			dispatcher.detectCrash(node, now());
+			noteProgress();
+			notifyAll();
+		}
+	}
+
+	void recover(int node)
+	{
+		synchronized (this)
+		{
+			dispatcher.recover(node, now());
+			noteProgress();
+			notifyAll();
 		}
 	}
 
@@ -196,6 +248,30 @@ final class WorkPhase
 	boolean isClosed()
 	{
 		return closed;
+	}
+
+	private void afterChange()
+	{
+		if (context == null)
+		{
+			return;
+		}
+		boolean report = false;
+		boolean failed = false;
+		synchronized (this)
+		{
+			if (!finishReported && (dispatcher.isComplete() || dispatcher.hasFailed()))
+			{
+				finishReported = true;
+				report = true;
+				failed = dispatcher.hasFailed();
+			}
+		}
+		if (report)
+		{
+			context.phaseFinished(this, failed, dispatcher.getFailureReason());
+		}
+		context.progressMade();
 	}
 
 	private void requireOpen()

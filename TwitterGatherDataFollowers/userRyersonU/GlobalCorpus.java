@@ -25,7 +25,7 @@ import java.util.TreeSet;
 final class GlobalCorpus
 {
 	/** One node's share: the users it owns. */
-	static final class Contribution
+	static final class Contribution implements PayloadSize.Sized
 	{
 		private final Map<String,? extends Map<String,Double>> vectors;
 		private final Map<String,String> labels;
@@ -35,6 +35,21 @@ final class GlobalCorpus
 			this.vectors = vectors == null
 					? Collections.<String,Map<String,Double>>emptyMap() : vectors;
 			this.labels = labels == null ? Collections.<String,String>emptyMap() : labels;
+		}
+
+		/** Wire size: every owned user's name, vector and followee label. */
+		public long payloadBytes()
+		{
+			long total = 8L;
+			for (Map.Entry<String,? extends Map<String,Double>> entry : vectors.entrySet())
+			{
+				total += PayloadSize.string(entry.getKey()) + PayloadSize.sparseVector(entry.getValue());
+			}
+			for (Map.Entry<String,String> entry : labels.entrySet())
+			{
+				total += PayloadSize.string(entry.getKey()) + PayloadSize.string(entry.getValue());
+			}
+			return total;
 		}
 	}
 
@@ -58,16 +73,19 @@ final class GlobalCorpus
 		this.owners = owners;
 	}
 
-	/** Exchanges contributions; every node gets the same combined corpus. */
+	/**
+	 * Exchanges contributions; every node gets the same combined corpus. On the
+	 * wire each node uploads its share and downloads everyone else's.
+	 */
 	static GlobalCorpus gather(RunCollectives collectives, String step, int node, Contribution own)
 	{
-		return collectives.allReduce(step, node, own, new RunCollectives.Reducer<GlobalCorpus>()
+		return collectives.allReduce(step, node, own, -1L, new RunCollectives.Reducer<GlobalCorpus>()
 		{
 			public GlobalCorpus reduce(List<Object> contributionsByNode)
 			{
 				return combine(contributionsByNode);
 			}
-		});
+		}, RunCollectives.OTHERS_CONTRIBUTIONS);
 	}
 
 	/** Combines node contributions (index = node - 1); ownership must be exclusive. */

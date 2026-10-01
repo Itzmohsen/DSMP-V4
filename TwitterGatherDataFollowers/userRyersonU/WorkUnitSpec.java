@@ -4,15 +4,23 @@ import java.util.Arrays;
 import java.util.Comparator;
 
 /**
- * One schedulable unit of work: an input user, a candidate shard, a target
- * job, or a model-training job.
+ * One schedulable unit of work: a candidate shard, a target job, or a model
+ * training job.
  *
- * {@code cost} is estimated reference work (the time the unit would take on a
- * speed-1.0 node, in the caller's time unit). {@code homeNode} names the node
- * that already holds the unit's input data (0 when the data is equally
- * available everywhere); running it elsewhere costs a transfer. A non-null
- * {@code allowedNodes} restricts the unit to those nodes, for work that cannot
- * move at all.
+ * <ul>
+ * <li>{@code cost}: estimated reference work, the milliseconds the unit takes
+ *     on a speed-1 node; it runs for cost / speed on a node of that speed.</li>
+ * <li>{@code fixedMs}: a part of the duration that does not scale with CPU
+ *     speed (process start-up, disk), in the same time unit as the cost
+ *     (milliseconds in live runs); 0 for pure computation.</li>
+ * <li>{@code homeNode}: the node that holds the unit's input data (0 when the
+ *     data is equally available everywhere). Running the unit elsewhere moves
+ *     {@code inputBytes} from the home node over the network; while the home
+ *     node is down its data cannot be read.</li>
+ * <li>{@code outputBytes}: bytes the executing node sends to the coordinator
+ *     when the unit completes.</li>
+ * <li>{@code allowedNodes}: when non-null, the only nodes the unit may run on.</li>
+ * </ul>
  */
 final class WorkUnitSpec
 {
@@ -25,6 +33,9 @@ final class WorkUnitSpec
 	private final int homeNode;
 	private final int[] allowedNodes;
 	private final int maxFailures;
+	private final long inputBytes;
+	private final long outputBytes;
+	private final double fixedMs;
 
 	WorkUnitSpec(int id, String key, double cost)
 	{
@@ -59,6 +70,24 @@ final class WorkUnitSpec
 			int[] allowedNodes,
 			int maxFailures)
 	{
+		this(id, key, cost, memoryMb, priority, deadline, homeNode, allowedNodes,
+				maxFailures, 0L, 0L, 0.0);
+	}
+
+	WorkUnitSpec(
+			int id,
+			String key,
+			double cost,
+			int memoryMb,
+			int priority,
+			double deadline,
+			int homeNode,
+			int[] allowedNodes,
+			int maxFailures,
+			long inputBytes,
+			long outputBytes,
+			double fixedMs)
+	{
 		if (id <= 0)
 		{
 			throw new IllegalArgumentException("Work unit ids start at 1.");
@@ -81,6 +110,37 @@ final class WorkUnitSpec
 			this.allowedNodes = copy;
 		}
 		this.maxFailures = Math.max(0, maxFailures);
+		this.inputBytes = Math.max(0L, inputBytes);
+		this.outputBytes = Math.max(0L, outputBytes);
+		this.fixedMs = Double.isNaN(fixedMs) || fixedMs < 0.0 ? 0.0 : fixedMs;
+	}
+
+	/** The same unit with data volumes. */
+	WorkUnitSpec withData(long input, long output)
+	{
+		return new WorkUnitSpec(id, key, cost, memoryMb, priority, deadline, homeNode,
+				allowedNodes, maxFailures, input, output, fixedMs);
+	}
+
+	/** The same unit with another reference cost and speed-independent part. */
+	WorkUnitSpec withCost(double newCost, double newFixedMs)
+	{
+		return new WorkUnitSpec(id, key, newCost, memoryMb, priority, deadline, homeNode,
+				allowedNodes, maxFailures, inputBytes, outputBytes, newFixedMs);
+	}
+
+	/** The same unit restricted to {@code nodes} (null lifts the restriction). */
+	WorkUnitSpec withAllowedNodes(int[] nodes)
+	{
+		return new WorkUnitSpec(id, key, cost, memoryMb, priority, deadline, homeNode,
+				nodes, maxFailures, inputBytes, outputBytes, fixedMs);
+	}
+
+	/** The same unit renumbered onto another node index space. */
+	WorkUnitSpec withNodes(int newHome, int[] newAllowed)
+	{
+		return new WorkUnitSpec(id, key, cost, memoryMb, priority, deadline, newHome,
+				newAllowed, maxFailures, inputBytes, outputBytes, fixedMs);
 	}
 
 	/** Failure budget for this unit; 0 means the dispatcher default. */
@@ -124,6 +184,27 @@ final class WorkUnitSpec
 		return homeNode;
 	}
 
+	long getInputBytes()
+	{
+		return inputBytes;
+	}
+
+	long getOutputBytes()
+	{
+		return outputBytes;
+	}
+
+	double getFixedMs()
+	{
+		return fixedMs;
+	}
+
+	/** Duration on a node of {@code speed}: cost / speed + the fixed part. */
+	double durationOn(double speed)
+	{
+		return cost / Math.max(1.0e-9, speed) + fixedMs;
+	}
+
 	boolean isAllowedOn(int node)
 	{
 		return allowedNodes == null || Arrays.binarySearch(allowedNodes, node) >= 0;
@@ -132,6 +213,11 @@ final class WorkUnitSpec
 	boolean isRestricted()
 	{
 		return allowedNodes != null;
+	}
+
+	int[] allowedNodesCopy()
+	{
+		return allowedNodes == null ? null : Arrays.copyOf(allowedNodes, allowedNodes.length);
 	}
 
 	/** Canonical order: by key, then id. Independent of submission order. */
@@ -149,7 +235,7 @@ final class WorkUnitSpec
 	{
 		public int compare(WorkUnitSpec first, WorkUnitSpec second)
 		{
-			int byCost = Double.compare(second.cost, first.cost);
+			int byCost = Double.compare(second.cost + second.fixedMs, first.cost + first.fixedMs);
 			return byCost != 0 ? byCost : CANONICAL.compare(first, second);
 		}
 	};

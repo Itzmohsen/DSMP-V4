@@ -730,7 +730,8 @@ final class DynamicQueueSchedulerEngine
 					node.runningJobs++;
 					node.currentJob = job.getId();
 				}
-				sleep((long)Math.round(assignment.getTransferDelayMs()), cancelled);
+				//Wait until the unit's descriptor and data have arrived (phase clock, ms).
+				sleep((long)Math.max(0L, Math.round(assignment.getReadyAt() - phase.now())), cancelled);
 				long start = state.elapsedMillis();
 				//Reference work c * ms, spent at this node's speed.
 				double millis = assignment.getUnit().getCost() * state.msPerCost

@@ -7,12 +7,18 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Runs one node's lanes over a live {@link WorkPhase}.
  *
- * Each lane repeatedly claims a unit, pays the emulated transfer latency (and
- * the interactive action window, if armed), executes the unit while its work is
- * measured, dilates that work by the node's speed, and commits. A result is
- * handed to the sink only after the dispatcher accepted the commit, and the
- * commit cannot be revoked once accepted, so every unit's result is published
- * by exactly one node, however units are retried, drained or redirected.
+ * Each lane repeatedly claims a unit, waits until the unit is ready on the
+ * node (its descriptor and, away from home, its input data have crossed the
+ * emulated network), executes it while its work is measured, pays the node's
+ * speed emulation, and commits. A result is handed to the sink only after the
+ * dispatcher accepted the commit, and the commit cannot be revoked once
+ * accepted, so every unit's result is published by exactly one node, however
+ * units are retried, drained, redirected or lost in crashes.
+ *
+ * While a lane executes a unit the unit is registered with
+ * {@link UnitCancellation}; a revoked execution stops at its next check.
+ * Every execution is recorded in the run's {@link RunRecorder} with its model
+ * times and measured host CPU.
  *
  * The calling thread is lane 0; extra lanes are daemon threads. The executor
  * must be safe to call from several lanes at once, and the sink is called under
@@ -87,7 +93,7 @@ final class NodeWorkRunner
 
 		public String toString()
 		{
-			return committed.get() + " committed, " + injected.get() + " lost to injected failures, "
+			return committed.get() + " committed, " + injected.get() + " lost to injected faults, "
 					+ retried.get() + " retried after errors, " + stale.get() + " revoked";
 		}
 	}
@@ -152,6 +158,13 @@ final class NodeWorkRunner
 		return stats;
 	}
 
+	private static String phaseKeyOf(WorkPhase phase, SchedulingRunContext context)
+	{
+		String key = phase.getDispatcher().getPhaseKey();
+		String prefix = context.getRunId() + "/";
+		return key.startsWith(prefix) ? key.substring(prefix.length()) : key;
+	}
+
 	private static void runLane(
 			SchedulingRunContext context,
 			WorkPhase phase,
@@ -164,6 +177,9 @@ final class NodeWorkRunner
 			AtomicReference<Throwable> fatal)
 	{
 		NodeEmulator emulator = context.emulator(node);
+		String phaseKey = phaseKeyOf(phase, context);
+		//The node joins the phase when its first lane asks for work.
+		context.recorder().phaseJoined(phaseKey, node, context.now());
 		try
 		{
 			while (fatal.get() == null)
@@ -173,29 +189,80 @@ final class NodeWorkRunner
 				{
 					return;
 				}
-				emulator.transfer(assignment.getTransferDelayMs());
-				emulator.pacing(context.getPacingMs());
-				if (!phase.isLive(assignment))
+				double startAt;
+				UnitCancellation.enter(assignment);
+				try
+				{
+					//The unit's descriptor and data cross the emulated network.
+					startAt = emulator.awaitModelTime(assignment.getReadyAt(), true);
+					emulator.pacing(context.getPacingMs());
+				}
+				catch (UnitCancellation.Revoked revoked)
+				{
+					startAt = context.now();
+				}
+				finally
+				{
+					UnitCancellation.exit();
+				}
+				if (assignment.isRevoked() || !phase.isLive(assignment))
 				{
 					//Revoked while in transit: report it so its lane slot frees up.
 					phase.complete(assignment);
+					record(context, phaseKey, assignment, startAt, context.now(), 0L, 0L, 0L, "revoked");
 					stats.stale.incrementAndGet();
 					continue;
 				}
-				NodeEmulator.Span span = emulator.begin();
-				UnitOutput output;
+				long wallStart = System.nanoTime();
+				NodeEmulator.Span span = emulator.beginUnit();
+				UnitOutput output = null;
+				Throwable error = null;
+				long external = 0L;
+				long cpu = 0L;
+				//The unit stays registered through its speed emulation, so a drain
+				//or crash also cuts that sleep short.
+				UnitCancellation.enter(assignment);
 				try
 				{
-					output = executor.execute(assignment, lane);
+					try
+					{
+						output = executor.execute(assignment, lane);
+					}
+					catch (Throwable thrown)
+					{
+						error = thrown;
+					}
+					external = output == null ? 0L : Math.max(0L, output.externalWorkNanos);
+					try
+					{
+						cpu = emulator.end(span, external, true);
+					}
+					catch (UnitCancellation.Revoked revoked)
+					{
+						error = error == null ? revoked : error;
+					}
 				}
-				catch (Throwable error)
+				finally
 				{
-					emulator.end(span);
+					UnitCancellation.exit();
+				}
+				long wall = System.nanoTime() - wallStart;
+				double endAt = context.now();
+				if (error instanceof UnitCancellation.Revoked || assignment.isRevoked())
+				{
+					phase.complete(assignment);
+					record(context, phaseKey, assignment, startAt, endAt, cpu, external, wall, "revoked");
+					stats.stale.incrementAndGet();
+					continue;
+				}
+				if (error != null)
+				{
 					if (error instanceof InterruptedException)
 					{
 						Thread.currentThread().interrupt();
 					}
 					WorkDispatcher.Outcome outcome = phase.fail(assignment, error);
+					record(context, phaseKey, assignment, startAt, endAt, cpu, external, wall, "error");
 					if (outcome == WorkDispatcher.Outcome.FINAL_FAILURE)
 					{
 						fatal.compareAndSet(null, new IllegalStateException(
@@ -205,33 +272,27 @@ final class NodeWorkRunner
 					stats.retried.incrementAndGet();
 					continue;
 				}
-				if (output == null)
-				{
-					output = UnitOutput.measured(null);
-				}
-				emulator.end(span);
-				if (output.externalWorkNanos > 0L)
-				{
-					//Work a worker process did for this unit, on top of this lane's own.
-					emulator.dilate(output.externalWorkNanos);
-				}
 				WorkDispatcher.Outcome outcome = phase.complete(assignment);
 				switch (outcome)
 				{
 					case COMMITTED:
 						synchronized (sinkLock)
 						{
-							sink.commit(assignment, output.value);
+							sink.commit(assignment, output == null ? null : output.value);
 						}
 						stats.committed.incrementAndGet();
+						record(context, phaseKey, assignment, startAt, endAt, cpu, external, wall, "committed");
 						break;
 					case INJECTED_FAILURE:
 						stats.injected.incrementAndGet();
+						record(context, phaseKey, assignment, startAt, endAt, cpu, external, wall, "fault");
 						break;
 					case STALE:
 						stats.stale.incrementAndGet();
+						record(context, phaseKey, assignment, startAt, endAt, cpu, external, wall, "revoked");
 						break;
 					case FINAL_FAILURE:
+						record(context, phaseKey, assignment, startAt, endAt, cpu, external, wall, "fault");
 						fatal.compareAndSet(null, new IllegalStateException(
 								phase.getDispatcher().getFailureReason()));
 						return;
@@ -249,5 +310,31 @@ final class NodeWorkRunner
 			fatal.compareAndSet(null, error);
 			phase.withdraw(node, lane);
 		}
+	}
+
+	private static void record(SchedulingRunContext context, String phaseKey,
+			WorkDispatcher.Assignment assignment, double startAt, double endAt,
+			long cpu, long external, long wall, String outcome)
+	{
+		WorkUnitSpec unit = assignment.getUnit();
+		context.recorder().execution(new RunRecorder.UnitExecution(
+				phaseKey,
+				unit.getId(),
+				unit.getKey(),
+				assignment.getExecution(),
+				assignment.getNode(),
+				assignment.getLane(),
+				unit.getHomeNode(),
+				assignment.getSource().name().toLowerCase(java.util.Locale.US),
+				unit.getCost(),
+				assignment.getAssignedAt(),
+				assignment.getReadyAt(),
+				startAt,
+				endAt,
+				cpu,
+				external,
+				wall,
+				assignment.getTransferredBytes(),
+				outcome));
 	}
 }

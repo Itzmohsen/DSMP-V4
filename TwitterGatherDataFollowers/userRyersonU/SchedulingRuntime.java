@@ -45,6 +45,11 @@ final class SchedulingRuntime
 			}
 			for (SchedulingRunContext earlier : RUNS.values())
 			{
+				if (!earlier.isFinished())
+				{
+					//A run that never finished (aborted, stopped) still leaves a record.
+					RunRecords.finish(earlier.getRunId(), "superseded by run " + context.getRunId());
+				}
 				if (!earlier.isClosed())
 				{
 					earlier.close("superseded by run " + context.getRunId());

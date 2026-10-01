@@ -95,11 +95,16 @@ final class DistributedKMeans
 	}
 
 	/** A node's farthest candidate in one seeding or repair round. */
-	private static final class Proposal
+	private static final class Proposal implements PayloadSize.Sized
 	{
 		private final String user;
 		private final double distance;
 		private final Map<String,Double> vector;
+
+		public long payloadBytes()
+		{
+			return PayloadSize.string(user) + 8L + PayloadSize.sparseVector(vector);
+		}
 
 		private Proposal(String user, double distance, Map<String,Double> vector)
 		{
@@ -110,11 +115,17 @@ final class DistributedKMeans
 	}
 
 	/** Partial centroid sums of one node for one iteration. */
-	private static final class Partial
+	private static final class Partial implements PayloadSize.Sized
 	{
 		private final List<Map<String,ExactSum>> sums;
 		private final int[] counts;
 		private final int changed;
+
+		/** Per-cluster exact partial sums per term, cluster counts, changed count. */
+		public long payloadBytes()
+		{
+			return PayloadSize.of(sums) + PayloadSize.of(counts) + 4L;
+		}
 
 		private Partial(List<Map<String,ExactSum>> sums, int[] counts, int changed)
 		{
@@ -125,11 +136,17 @@ final class DistributedKMeans
 	}
 
 	/** Centroids and global counts after one iteration, shared by every node. */
-	private static final class Round
+	private static final class Round implements PayloadSize.Sized
 	{
 		private final List<Map<String,Double>> centroids;
 		private final int[] sizes;
 		private final int changed;
+
+		/** The new centroids (term weights), cluster sizes and changed count. */
+		public long payloadBytes()
+		{
+			return PayloadSize.of(centroids) + PayloadSize.of(sizes) + 4L;
+		}
 
 		private Round(List<Map<String,Double>> centroids, int[] sizes, int changed)
 		{

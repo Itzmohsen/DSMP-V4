@@ -738,24 +738,59 @@ public class RecommenderAgent extends Agent
 		exactSvmUsableUsers.clear();
 	}
 
-	/** A message crossing this node's emulated link, ready at a wall-clock time. */
-	private static final class LinkEvent
+	/**
+	 * A message crossing this node's emulated link: ready at a wall-clock
+	 * nanoTime, ordered by readiness (the up and down directions are separate
+	 * links, so an outbound message never holds back an inbound one).
+	 */
+	private static final class LinkEvent implements Comparable<LinkEvent>
 	{
-		private final long readyAtMillis;
+		private final long readyAtNanos;
+		private final long sequence;
 		private final ACLMessage message;
 		private final boolean outbound;
 
-		private LinkEvent(long readyAtMillis, ACLMessage message, boolean outbound)
+		private LinkEvent(long readyAtNanos, long sequence, ACLMessage message, boolean outbound)
 		{
-			this.readyAtMillis = readyAtMillis;
+			this.readyAtNanos = readyAtNanos;
+			this.sequence = sequence;
 			this.message = message;
 			this.outbound = outbound;
 		}
+
+		public int compareTo(LinkEvent other)
+		{
+			int byTime = Long.compare(readyAtNanos, other.readyAtNanos);
+			return byTime != 0 ? byTime : Long.compare(sequence, other.sequence);
+		}
+	}
+
+	/** Wire size of a message: envelope plus its content (serialized bytes or UTF-8 text). */
+	static long messageBytes(ACLMessage message)
+	{
+		if (message == null)
+		{
+			return NetworkModel.MESSAGE_HEADER_BYTES;
+		}
+		long content = 0L;
+		byte[] sequence = message.getByteSequenceContent();
+		if (sequence != null)
+		{
+			content = sequence.length;
+		}
+		else if (message.getContent() != null)
+		{
+			content = PayloadSize.string(message.getContent()) - 2L;
+		}
+		String ontology = message.getOntology();
+		return NetworkModel.MESSAGE_HEADER_BYTES + Math.max(0L, content)
+				+ (ontology == null ? 0L : ontology.length());
 	}
 
 	private class RecommenderServiceBehaviour extends CyclicBehaviour {
 		private static final long serialVersionUID = 1L;
-		private final java.util.ArrayDeque<LinkEvent> linkQueue = new java.util.ArrayDeque<LinkEvent>();
+		private final java.util.PriorityQueue<LinkEvent> linkQueue = new java.util.PriorityQueue<LinkEvent>();
+		private long linkSequence;
 
 		public RecommenderServiceBehaviour(Agent a) {
 			super(a);
@@ -829,54 +864,50 @@ public class RecommenderAgent extends Agent
 			}
 		}
 
-		/**
-		 * Emulates {@code messages} one-way messages on this node's link after
-		 * settling the work done so far, so a slow node's messages leave late.
-		 */
-		private void emulateLink(int messages)
+		/** The active run's context when it emulates, else null. */
+		private SchedulingRunContext emulatingContext()
 		{
-			NodeEmulator emulator = activeEmulator();
-			if (emulator == null)
-			{
-				return;
-			}
-			try
-			{
-				emulator.checkpoint();
-				emulator.linkDelay(messages);
-			}
-			catch (RuntimeException runEnded)
-			{
-				//The run ended; there is nothing left to emulate.
-			}
+			SchedulingRunContext context = SchedulingRuntime.get(runLifecycle.getActiveRunId());
+			return context != null && context.isEmulating()
+					&& currentNodeIndex() <= context.getNodeCount() ? context : null;
 		}
 
 		/**
 		 * This node's network link. In an emulated run every message to the
-		 * node becomes ready one link delay after it arrived and is handled in
-		 * arrival order; messages in flight overlap, as on a real link, so the
-		 * node is never blocked by latency, only by its own work. Replies that
-		 * cross the link (batch acknowledgements) leave the same way. Without
-		 * emulation messages are handled as they arrive.
+		 * node crosses its down link (latency plus its size over the link's
+		 * bandwidth, behind the link's other traffic) and is handled when it
+		 * has arrived, in arrival order; messages in flight overlap, as on a
+		 * real link, so the node is blocked only by its own work. Messages the
+		 * node sends cross its up link the same way (see {@link #sendOverLink}).
+		 * Without emulation messages are handled as they arrive.
 		 */
 		private void pumpLink(NodeEmulator emulator)
 		{
-			long delayMillis = emulator == null ? 0L : emulator.linkDelayMillis();
+			SchedulingRunContext context = emulatingContext();
 			ACLMessage arrived;
 			while ((arrived = myAgent.receive()) != null)
 			{
-				long postedAt = arrived.getPostTimeStamp() > 0L
-						? arrived.getPostTimeStamp() : System.currentTimeMillis();
-				linkQueue.addLast(new LinkEvent(postedAt + delayMillis, arrived, false));
-				if (emulator != null && delayMillis > 0L)
+				long readyAt = System.nanoTime();
+				if (context != null)
 				{
-					emulator.noteLatency(1);
+					double posted = arrived.getPostTimeStamp() > 0L
+							? Math.min(context.now(), context.clock().modelMsAtEpochMillis(
+									arrived.getPostTimeStamp()))
+							: context.now();
+					double arrival = context.network().send(NetworkModel.HUB, currentNodeIndex(),
+							messageBytes(arrived), posted);
+					readyAt = context.clock().wallNanosAt(arrival);
+					if (emulator != null)
+					{
+						emulator.noteLatency(1);
+					}
 				}
+				linkQueue.add(new LinkEvent(readyAt, linkSequence++, arrived, false));
 			}
 			while (!linkQueue.isEmpty()
-					&& linkQueue.peekFirst().readyAtMillis <= System.currentTimeMillis())
+					&& linkQueue.peek().readyAtNanos <= System.nanoTime())
 			{
-				LinkEvent event = linkQueue.pollFirst();
+				LinkEvent event = linkQueue.poll();
 				if (event.outbound)
 				{
 					send(event.message);
@@ -892,25 +923,59 @@ public class RecommenderAgent extends Agent
 			}
 			else
 			{
-				block(Math.max(1L, linkQueue.peekFirst().readyAtMillis - System.currentTimeMillis()));
+				long waitNanos = linkQueue.peek().readyAtNanos - System.nanoTime();
+				block(Math.max(1L, (waitNanos + 999999L) / 1000000L));
 			}
 		}
 
-		/** Sends a reply across this node's link: it leaves one link delay from now. */
+		/**
+		 * Sends a message across this node's up link: in an emulated run it
+		 * reaches the coordinator after its link transfer (the node does not
+		 * wait; sending overlaps with its work). The node's work so far is
+		 * settled first, so a slow node's messages leave late.
+		 */
 		private void sendOverLink(ACLMessage message)
 		{
+			SchedulingRunContext context = emulatingContext();
 			NodeEmulator emulator = activeEmulator();
-			long delayMillis = emulator == null ? 0L : emulator.linkDelayMillis();
-			if (delayMillis <= 0L && linkQueue.isEmpty())
+			if (context == null || emulator == null)
 			{
 				send(message);
 				return;
 			}
-			if (emulator != null)
+			//Callers may reuse the message object; the link carries a copy.
+			message = (ACLMessage)message.clone();
+			long bytes = messageBytes(message);
+			double arrival;
+			try
 			{
-				emulator.noteLatency(1);
+				arrival = emulator.sendToHub(bytes);
 			}
-			linkQueue.addLast(new LinkEvent(System.currentTimeMillis() + delayMillis, message, true));
+			catch (RuntimeException runEnded)
+			{
+				send(message);
+				return;
+			}
+			linkQueue.add(new LinkEvent(context.clock().wallNanosAt(arrival), linkSequence++, message, true));
+		}
+
+		/** Marks this node's entry into a pipeline stage in the run record. */
+		private void stageStart(String stage)
+		{
+			SchedulingRunContext context = SchedulingRuntime.get(runLifecycle.getActiveRunId());
+			if (context != null && currentNodeIndex() <= context.getNodeCount())
+			{
+				context.stageStart(currentNodeIndex(), stage);
+			}
+		}
+
+		private void stageEnd(String stage)
+		{
+			SchedulingRunContext context = SchedulingRuntime.get(runLifecycle.getActiveRunId());
+			if (context != null && currentNodeIndex() <= context.getNodeCount())
+			{
+				context.stageEnd(currentNodeIndex(), stage);
+			}
 		}
 
 		private void handleMessage(ACLMessage msg)
@@ -1042,11 +1107,13 @@ public class RecommenderAgent extends Agent
 									tweetsToReceive,
 									runtimeInputClosed))
 				{
+					stageEnd("input");
 					if (!waitForLivePhaseBoundary(
 							"INPUT_BATCH -> TEXT_PREPROCESS_USER"))
 					{
 						return;
 					}
+					stageStart("text-aggregate");
 					if (runtimeInputClosed)
 					{
 						NodeExecutionMonitor.preprocessingRetainedInput(
@@ -1070,11 +1137,11 @@ public class RecommenderAgent extends Agent
 
 					msgMessagePassing.setContent(String.valueOf(totalMessageBytes));
 					msgMessagePassing.setOntology("Message Passing Cost");
-					send(msgMessagePassing);
+					sendOverLink(msgMessagePassing);
 					
 					msgMessagePassing.setContent(String.valueOf(convertMs(lastTweetTime-firstTweetTime)));
 					msgMessagePassing.setOntology("Message Passing Time");
-					send(msgMessagePassing);
+					sendOverLink(msgMessagePassing);
 					NodeExecutionMonitor.recordMessageStats(
 							getLocalName(),
 							totalMessageBytes,
@@ -1479,7 +1546,7 @@ public class RecommenderAgent extends Agent
 							stopUserQueryMsg.setConversationId(runLifecycle.getActiveRunId());
 							stopUserQueryMsg.setContent("Denied Querying");
 							stopUserQueryMsg.setOntology("Denied Querying");
-							send(stopUserQueryMsg);
+							sendOverLink(stopUserQueryMsg);
 							System.out.println(getLocalName()+" Sent out Denied Querying for "+userAgent);
 						}
 					}
@@ -1547,7 +1614,7 @@ public class RecommenderAgent extends Agent
 							e.printStackTrace();
 						}
 						removeUsersMessage.setOntology("Remove Users From Total");
-						send(removeUsersMessage);
+						sendOverLink(removeUsersMessage);
 						
 						System.out.println(getLocalName()+" sent removeUserMessage");
 
@@ -1583,7 +1650,8 @@ public class RecommenderAgent extends Agent
 					textProcessMessage.setConversationId(runLifecycle.getActiveRunId());
 					textProcessMessage.setContent("Text Processing Complete");
 					textProcessMessage.setOntology("Text Processing Complete");
-					send(textProcessMessage);
+					stageEnd("text-aggregate");
+					sendOverLink(textProcessMessage);
 
 					System.out.println(getLocalName()+ " Text Processing Complete");
 					NodeExecutionMonitor.waitingForPeers(
@@ -1609,6 +1677,7 @@ public class RecommenderAgent extends Agent
 				{
 					return;
 				}
+				stageStart("features");
 				NodeExecutionMonitor.buildingFeatures(
 						getLocalName(),
 						algorithmRec == Doc2Vec
@@ -1688,16 +1757,28 @@ public class RecommenderAgent extends Agent
 					//cost, not TF-IDF work, and folding it into completionTimeTFIDF
 					//would distort any speedup comparison across node counts.
 					long globalDfStart = System.nanoTime();
-					emulateLink(1);
+					//A collective of the run: each node uploads its non-zero counts,
+					//the coordinator sums them, and each node downloads the counts of
+					//the terms it holds, all over the emulated links.
+					NodeExecutionMonitor.waitingForSharedModel(
+							getLocalName(),
+							"Exchanging corpus-wide TF-IDF document frequencies with the other nodes.");
 					GlobalDocumentFrequencyCoordinator.Totals corpusTotals =
-							GlobalDocumentFrequencyCoordinator.combine(
-									getLocalName(),
-									runLifecycle.getActiveRunId(),
-									numRecAgents,
-									Integer.parseInt(nodeNumber),
-									allTermsDocumentFreq,
-									ownedDocumentCount);
-					emulateLink(1);
+							schedulingContext().collectives().allReduce(
+									"tfidf/document-frequency",
+									currentNodeIndex(),
+									new GlobalDocumentFrequencyCoordinator.Share(
+											allTermsDocumentFreq, ownedDocumentCount),
+									-1L,
+									new RunCollectives.Reducer<GlobalDocumentFrequencyCoordinator.Totals>()
+									{
+										public GlobalDocumentFrequencyCoordinator.Totals reduce(
+												List<Object> shares)
+										{
+											return GlobalDocumentFrequencyCoordinator.combineShares(shares);
+										}
+									},
+									GlobalDocumentFrequencyCoordinator.NEEDED_TERMS);
 					allTermsDocumentFreq = new LinkedHashMap<String,Integer>(
 							corpusTotals.getDocumentFrequency());
 					globalTotalDocuments = corpusTotals.getTotalDocuments();
@@ -2301,11 +2382,13 @@ public class RecommenderAgent extends Agent
 								+ ", documents: " + allUserDocumentsTFIDF.size()
 								+ ", targets: "
 								+ (usersRec == null ? 0 : usersRec.size()));
+				stageEnd("features");
 				if (!waitForLivePhaseBoundary(
 						"FEATURE_BUILD -> MODEL_STAGE"))
 				{
 					return;
 				}
+				stageStart("model");
 				//Rows are cut at the requested top-N, so every node must use the same value.
 				requestedTopRecommendations = schedulingContext().agree(
 						"top-recommendations", requestedTopRecommendations);
@@ -2816,7 +2899,8 @@ public class RecommenderAgent extends Agent
 					msg7.setContent("Tweeting TFIDF Algorithm Calculation Completed");
 					msg7.setConversationId(runLifecycle.getActiveRunId());
 					msg7.setOntology("Tweets TFIDF Algorithm Calculation Done");
-					send(msg7);
+					stageEnd("model");
+					sendOverLink(msg7);
 
 					sendScoresToOrganizer();
 				} 
@@ -2899,6 +2983,7 @@ public class RecommenderAgent extends Agent
 				return;
 			}
 			NodeExecutionMonitor.publishing(getLocalName());
+			stageStart("publish");
 			ACLMessage toMergeMsg = new ACLMessage(ACLMessage.INFORM);
 			toMergeMsg.addReceiver(new AID("Organizing Agent1", AID.ISLOCALNAME));
 			toMergeMsg.setPerformative(ACLMessage.INFORM);
@@ -2992,8 +3077,9 @@ public class RecommenderAgent extends Agent
 						scoreCandidatesForTelemetry,
 						toMergeMsg.getOntology());
 				toMergeMsg.setContentObject(content);
-				emulateLink(1);
-				send(toMergeMsg);
+				//The score maps cross the node's up link to the organizer.
+				sendOverLink(toMergeMsg);
+				stageEnd("publish");
 				NodeExecutionMonitor.complete(getLocalName());
 			}
 			catch (IOException e)
@@ -3629,10 +3715,12 @@ public class RecommenderAgent extends Agent
 				final List<String> targets = distinctTargets();
 				final int targetCount = Math.max(1, targets.size());
 				final int lanes = totalLanes(context);
+				final LinkedHashMap<String,LinkedHashMap<String,Double>> owned = ownedDocuments();
 				final CandidateShardPlan plan = context.collectives().allReduce(
 						phaseKey + "/plan",
 						node,
-						ownedDocuments(),
+						owned,
+						CandidateShardPlan.layoutBytes(owned),
 						new RunCollectives.Reducer<CandidateShardPlan>()
 						{
 							@SuppressWarnings("unchecked")
@@ -3646,7 +3734,8 @@ public class RecommenderAgent extends Agent
 								}
 								return new CandidateShardPlan(byNode, targetCount, lanes);
 							}
-						});
+						},
+						CandidateShardPlan.LAYOUT);
 				WorkPhase phase = context.openPhase(
 						phaseKey,
 						(commonNeighbors ? "Common-Neighbors" : "Similarity") + " candidate shards",
@@ -3685,6 +3774,8 @@ public class RecommenderAgent extends Agent
 								List<String> candidates = plan.candidatesOf(assignment.getUnitId());
 								for (Map.Entry<String,Map<String,Double>> target : targetDocuments.entrySet())
 								{
+									//A revoked shard (drain, crash) stops between targets.
+									UnitCancellation.check();
 									TreeMap<String,Double> row = new TreeMap<String,Double>();
 									for (String candidate : candidates)
 									{
@@ -3840,6 +3931,7 @@ public class RecommenderAgent extends Agent
 												getPythonCommand(), script, dataset, trainingWorkers,
 												settings, progress);
 									}
+									UnitCancellation.check();
 									Doc2VecWorker.Scored scored;
 									try
 									{
@@ -4132,6 +4224,7 @@ public class RecommenderAgent extends Agent
 									WorkDispatcher.Assignment assignment, int lane) throws Exception
 							{
 								String target = targets.get(assignment.getUnitId() - 1);
+								UnitCancellation.check();
 								ExactSvmWorkerResult result = trainExactSvmTarget(corpus, target, settings);
 								List<double[]> distributions = result.getDistributions();
 								List<String> predicted = result.getPredictedClasses();
@@ -4356,6 +4449,7 @@ public class RecommenderAgent extends Agent
 							public NodeWorkRunner.UnitOutput execute(
 									WorkDispatcher.Assignment assignment, int lane) throws Exception
 							{
+								UnitCancellation.check();
 								return NodeWorkRunner.UnitOutput.measured(
 										trainExactMlp(corpus, settings, context));
 							}
@@ -4568,7 +4662,8 @@ public class RecommenderAgent extends Agent
 						{
 							public void handleLearningEvent(org.neuroph.core.events.LearningEvent event)
 							{
-								if (context.isAborted())
+								//A revoked training unit (drain, crash) stops at the next epoch.
+								if (context.isAborted() || UnitCancellation.isRevoked())
 								{
 									rule.stopLearning();
 								}
@@ -4578,6 +4673,7 @@ public class RecommenderAgent extends Agent
 						trainStart = System.nanoTime();
 						network.learn(trainSet);
 						trainNanos = System.nanoTime() - trainStart;
+						UnitCancellation.check();
 						context.requireActive();
 						report.add("Legacy Neuroph MLP stopped after " + rule.getCurrentIteration()
 								+ " epoch(s) with total error " + rule.getTotalNetworkError()
@@ -5069,7 +5165,10 @@ public class RecommenderAgent extends Agent
 				
 				tweetCount++;
 				if (tweetCount == 1)
+				{
 					firstTweetTime = System.nanoTime();
+					stageStart("input");
+				}
 				
 				if (tweetUserReceived.equals("sageryereson"))
 					System.out.println("sageryerson: "+tweetReceived);
@@ -5097,7 +5196,7 @@ public class RecommenderAgent extends Agent
 						msgLastTweetFromRecUser.setConversationId(runLifecycle.getActiveRunId());
 						msgLastTweetFromRecUser.setContent("Received Last Tweet");
 						msgLastTweetFromRecUser.setOntology("Last Tweet Received From Rec Agent");
-						send(msgLastTweetFromRecUser);
+						sendOverLink(msgLastTweetFromRecUser);
 					}
 				}
 				

@@ -1,5 +1,20 @@
 # DSMP V4 Scheduling, Capacity Emulation and Exactness
 
+> **Superseded in part by `DSMP_V4_NODE_LAB.md`.** The exactness contract
+> (section 1), the per-algorithm constructions (section 5) and the exactness
+> results (section 9) still hold. The node model was rebuilt:
+>
+> - absolute speeds in reference cores with a time dilation factor;
+> - a latency-bandwidth network;
+> - crash-recovery processes;
+> - scripted scenarios;
+> - complete run records with simulator replay;
+> - replicated studies.
+>
+> The separate Scheduler Lab and Dynamic Queue Lab panels were replaced by the
+> Node Lab. Where sections 2, 4, 6 and 8 differ from the Node Lab document,
+> the Node Lab document is current.
+
 This document describes the rebuilt scheduling layer of DSMP V4: node capacity
 profiles, scheduling policies, live workload controls, and the changes that make
 every recommendation algorithm exact regardless of how the work is split across

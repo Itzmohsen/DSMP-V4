@@ -64,12 +64,51 @@ final class TemporalGraphFoundationModelSupport
 	 * built once per run from the whole corpus and then only read, so targets
 	 * can be scored independently, in any order and on any node.
 	 */
-	static final class Prepared
+	static final class Prepared implements PayloadSize.Sized
 	{
 		private final Input input;
 		private final LinkedHashMap<String,UserProfile> profiles;
 		private final TemporalCorpus corpus;
 		private final GraphContext graph;
+		private volatile long payloadBytes = -1L;
+
+		/**
+		 * Wire size of the prepared state every node needs to score its targets:
+		 * each profile (name, followee, TF-IDF vector and temporal statistics)
+		 * and the graph context (followee groups and neighbour lists).
+		 */
+		public long payloadBytes()
+		{
+			long cached = payloadBytes;
+			if (cached >= 0L)
+			{
+				return cached;
+			}
+			long total = 64L;
+			for (UserProfile profile : profiles.values())
+			{
+				total += PayloadSize.string(profile.name) + PayloadSize.string(profile.followee)
+						+ PayloadSize.sparseVector(profile.tfidf) + 7L * 8L;
+			}
+			for (Map.Entry<String,LinkedHashSet<String>> group : graph.usersByFollowee.entrySet())
+			{
+				total += PayloadSize.string(group.getKey()) + 4L;
+				for (String user : group.getValue())
+				{
+					total += PayloadSize.string(user);
+				}
+			}
+			for (Map.Entry<String,LinkedHashSet<String>> neighbours : graph.graphNeighbors.entrySet())
+			{
+				total += PayloadSize.string(neighbours.getKey()) + 4L;
+				for (String user : neighbours.getValue())
+				{
+					total += PayloadSize.string(user);
+				}
+			}
+			payloadBytes = total;
+			return total;
+		}
 
 		private Prepared(
 				Input input,
@@ -185,9 +224,15 @@ final class TemporalGraphFoundationModelSupport
 			return null;
 		}
 		int scoredPairs = 0;
+		int visited = 0;
 		ArrayList<CandidateScore> candidateScores = new ArrayList<CandidateScore>();
 		for (UserProfile candidate : prepared.profiles.values())
 		{
+			if ((++visited & 63) == 0)
+			{
+				//A revoked unit (drain, crash) stops here.
+				UnitCancellation.check();
+			}
 			if (candidate == null || target.name.equals(candidate.name)
 					|| !belongsToThisNode(candidate, prepared.input))
 			{

@@ -18,6 +18,7 @@ import java.util.Locale;
  *
  * <pre>
  * Policy                     order                 node choice
+ * Original DSMP (V3)         canonical (key)       the unit's home node; else min raw assigned cost
  * Static equal split         canonical (key)       contiguous blocks of equal count
  * Round robin                canonical             unit k -> node k mod N
  * Weighted round robin       canonical             smooth weighted RR by throughput
@@ -49,6 +50,8 @@ final class PlacementPlanner
 		private final double[] predictedFinish;
 		private final int[] unitCount;
 		private final List<String> warnings;
+		private final java.util.HashMap<Integer,Integer> nodeByUnit =
+				new java.util.HashMap<Integer,Integer>();
 
 		private Plan(
 				List<NodeSpec> nodes,
@@ -64,6 +67,13 @@ final class PlacementPlanner
 			this.predictedFinish = predictedFinish;
 			this.unitCount = unitCount;
 			this.warnings = Collections.unmodifiableList(new ArrayList<String>(warnings));
+			for (int node = 0; node < unitsByNode.size(); node++)
+			{
+				for (WorkUnitSpec unit : unitsByNode.get(node))
+				{
+					nodeByUnit.put(Integer.valueOf(unit.getId()), Integer.valueOf(node + 1));
+				}
+			}
 		}
 
 		int nodeCount()
@@ -80,17 +90,8 @@ final class PlacementPlanner
 		/** 1-based node of every unit id, 0 for units not in the plan. */
 		int nodeOfUnit(int unitId)
 		{
-			for (int node = 0; node < unitsByNode.size(); node++)
-			{
-				for (WorkUnitSpec unit : unitsByNode.get(node))
-				{
-					if (unit.getId() == unitId)
-					{
-						return node + 1;
-					}
-				}
-			}
-			return 0;
+			Integer node = nodeByUnit.get(Integer.valueOf(unitId));
+			return node == null ? 0 : node.intValue();
 		}
 
 		double rawCost(int node)
@@ -249,6 +250,228 @@ final class PlacementPlanner
 		return state.toPlan();
 	}
 
+	/** A lower bound on a phase's makespan, and the constraint that sets it. */
+	static final class Bound
+	{
+		/** Model milliseconds from the phase's opening. */
+		final double value;
+		/** work, lanes, unit, pinned (see {@link PlacementPlanner#bound}). */
+		final String kind;
+
+		Bound(double value, String kind)
+		{
+			this.value = value;
+			this.kind = kind;
+		}
+
+		/** The constraint in words, for reports. */
+		String describe()
+		{
+			if ("work".equals(kind))
+			{
+				return "the total work on the nodes' combined speed";
+			}
+			if ("lanes".equals(kind))
+			{
+				return "the lane time every unit needs";
+			}
+			if ("unit".equals(kind))
+			{
+				return "one unit's earliest finish, its data and descriptor transfers included";
+			}
+			if ("pinned".equals(kind))
+			{
+				return "the work only one node may run";
+			}
+			return kind;
+		}
+	}
+
+	/**
+	 * A lower bound on the makespan of {@code units} on {@code nodes} without
+	 * communication or availability: see {@link #bound}.
+	 */
+	static double lowerBound(List<WorkUnitSpec> units, List<NodeSpec> nodes)
+	{
+		return bound(units, nodes, null, false).value;
+	}
+
+	/**
+	 * A lower bound on the makespan of {@code units} on {@code nodes}, from the
+	 * phase's opening, that no policy can beat. Node n can start computing at
+	 * a_n, the later of its availability (its join; null or NaN is 0, +inf
+	 * means it took no part) and, with {@code network}, the arrival of a first
+	 * unit descriptor over its link. The bound is the largest of:
+	 * <ul>
+	 * <li>work: the earliest T with sum_n s_n L_n (T - a_n)+ &gt;= total work
+	 *     (no node computes faster than its speed on all its lanes);</li>
+	 * <li>lanes: the earliest T with sum_n L_n (T - a_n)+ &gt;= total work /
+	 *     fastest speed + total speed-independent time (each unit occupies a
+	 *     lane at least that long);</li>
+	 * <li>unit: the latest earliest finish of any unit on its best allowed
+	 *     node: a_n, then (away from its home, with {@code network}) its input
+	 *     travelling home -&gt; coordinator -&gt; node, then its duration;</li>
+	 * <li>pinned: on each node, its start plus the lane time of the units only
+	 *     it may run, spread over its lanes.</li>
+	 * </ul>
+	 * Contention, faults, crashes and controls that slow or remove nodes only
+	 * lengthen a schedule, so they are left out; a caller whose nodes are sped
+	 * up during the phase passes each node's fastest speed. The bound is
+	 * therefore valid for every policy.
+	 */
+	static Bound bound(List<WorkUnitSpec> units, List<NodeSpec> nodes, double[] availableAt, boolean network)
+	{
+		if (units == null || units.isEmpty() || nodes == null || nodes.isEmpty())
+		{
+			return new Bound(0.0, "empty");
+		}
+		int count = nodes.size();
+		double[] start = new double[count];
+		double fastest = 0.0;
+		boolean any = false;
+		for (int index = 0; index < count; index++)
+		{
+			NodeSpec node = nodes.get(index);
+			double available = availableAt == null || index >= availableAt.length || Double.isNaN(availableAt[index])
+					? 0.0 : Math.max(0.0, availableAt[index]);
+			start[index] = Math.max(available, network ? transfer(node, NetworkModel.UNIT_DESCRIPTOR_BYTES) : 0.0);
+			if (!Double.isInfinite(start[index]))
+			{
+				any = true;
+				fastest = Math.max(fastest, node.getSpeed());
+			}
+		}
+		if (!any)
+		{
+			return new Bound(Double.NaN, "unavailable");
+		}
+		double work = 0.0;
+		double fixed = 0.0;
+		double unitBound = 0.0;
+		double[] pinnedLaneTime = new double[count];
+		for (WorkUnitSpec unit : units)
+		{
+			work += unit.getCost();
+			fixed += unit.getFixedMs();
+			double best = Double.POSITIVE_INFINITY;
+			int allowed = 0;
+			int only = -1;
+			for (int index = 0; index < count; index++)
+			{
+				NodeSpec node = nodes.get(index);
+				if (Double.isInfinite(start[index]) || !unit.isAllowedOn(node.getIndex()))
+				{
+					continue;
+				}
+				allowed++;
+				only = index;
+				double ready = start[index];
+				int home = unit.getHomeNode();
+				if (network && home > 0 && home != node.getIndex() && unit.getInputBytes() > 0L)
+				{
+					NodeSpec homeSpec = home <= count && nodes.get(home - 1).getIndex() == home
+							? nodes.get(home - 1) : null;
+					if (homeSpec != null)
+					{
+						ready = Math.max(ready, transfer(homeSpec, unit.getInputBytes())
+								+ transfer(node, unit.getInputBytes()));
+					}
+				}
+				best = Math.min(best, ready + unit.durationOn(node.getSpeed()));
+			}
+			if (allowed == 1)
+			{
+				pinnedLaneTime[only] += unit.durationOn(nodes.get(only).getSpeed());
+			}
+			if (best < Double.POSITIVE_INFINITY)
+			{
+				unitBound = Math.max(unitBound, best);
+			}
+		}
+		double[] speedLanes = new double[count];
+		double[] lanes = new double[count];
+		double pinned = 0.0;
+		for (int index = 0; index < count; index++)
+		{
+			speedLanes[index] = nodes.get(index).getSpeed() * nodes.get(index).getLanes();
+			lanes[index] = nodes.get(index).getLanes();
+			if (pinnedLaneTime[index] > 0.0)
+			{
+				pinned = Math.max(pinned, start[index] + pinnedLaneTime[index] / lanes[index]);
+			}
+		}
+		double workBound = fluid(start, speedLanes, work);
+		double laneBound = fluid(start, lanes, work / Math.max(1.0e-12, fastest) + fixed);
+		Bound result = new Bound(workBound, "work");
+		if (laneBound > result.value + 1e-12)
+		{
+			result = new Bound(laneBound, "lanes");
+		}
+		if (unitBound > result.value + 1e-12)
+		{
+			result = new Bound(unitBound, "unit");
+		}
+		if (pinned > result.value + 1e-12)
+		{
+			result = new Bound(pinned, "pinned");
+		}
+		return result;
+	}
+
+	/** Time to send {@code bytes} over a node's link, uncontended. */
+	private static double transfer(NodeSpec node, long bytes)
+	{
+		return node.getDelayMs() + node.serializationMs(bytes);
+	}
+
+	/**
+	 * The earliest T with sum_n rate_n (T - start_n)+ &gt;= amount (rates of
+	 * nodes that never start are ignored).
+	 */
+	private static double fluid(double[] start, double[] rate, double amount)
+	{
+		if (amount <= 0.0)
+		{
+			return 0.0;
+		}
+		Integer[] order = new Integer[start.length];
+		for (int index = 0; index < order.length; index++)
+		{
+			order[index] = Integer.valueOf(index);
+		}
+		final double[] starts = start;
+		java.util.Arrays.sort(order, new java.util.Comparator<Integer>()
+		{
+			public int compare(Integer first, Integer second)
+			{
+				return Double.compare(starts[first.intValue()], starts[second.intValue()]);
+			}
+		});
+		double done = 0.0;
+		double totalRate = 0.0;
+		double time = 0.0;
+		for (int position = 0; position < order.length; position++)
+		{
+			int index = order[position].intValue();
+			if (Double.isInfinite(start[index]))
+			{
+				break;
+			}
+			if (totalRate > 0.0)
+			{
+				double reach = time + (amount - done) / totalRate;
+				if (reach <= start[index])
+				{
+					return reach;
+				}
+				done += totalRate * (start[index] - time);
+			}
+			time = start[index];
+			totalRate += rate[index];
+		}
+		return totalRate <= 0.0 ? Double.POSITIVE_INFINITY : time + (amount - done) / totalRate;
+	}
+
 	static java.util.Comparator<WorkUnitSpec> orderFor(
 			SchedulerLabEngine.SchedulingPolicy policy)
 	{
@@ -276,6 +499,8 @@ final class PlacementPlanner
 	{
 		switch (policy)
 		{
+			case ORIGINAL_DSMP:
+				return state.homeOrLeastRawLoad(unit);
 			case ROUND_ROBIN:
 				return state.firstAllowedFrom(unit, (sequence % state.nodeCount()) + 1);
 			case LEAST_LOADED_NODE:
@@ -409,7 +634,7 @@ final class PlacementPlanner
 			NodeSpec spec = spec(node);
 			int lane = earliestLane(slot);
 			double start = laneAvailable[slot][lane] + transferDelay(unit, node);
-			laneAvailable[slot][lane] = start + unit.getCost() / spec.getSpeed();
+			laneAvailable[slot][lane] = start + unit.durationOn(spec.getSpeed());
 			rawCost[slot] += unit.getCost();
 			unitCount[slot]++;
 			if (cumulativeMemory)
@@ -432,7 +657,10 @@ final class PlacementPlanner
 			return best;
 		}
 
-		/** Latency, in cost units, of moving a unit's data away from its home. */
+		/**
+		 * Time, in cost units, to move a unit's input data from its home node to
+		 * {@code node}: both links' latency and serialization (alpha-beta model).
+		 */
 		double transferDelay(WorkUnitSpec unit, int node)
 		{
 			int home = unit.getHomeNode();
@@ -440,7 +668,10 @@ final class PlacementPlanner
 			{
 				return 0.0;
 			}
-			return (spec(home).getDelayMs() + spec(node).getDelayMs()) / msPerTimeUnit;
+			long bytes = unit.getInputBytes();
+			double milliseconds = spec(home).getDelayMs() + spec(home).serializationMs(bytes)
+					+ spec(node).getDelayMs() + spec(node).serializationMs(bytes);
+			return milliseconds / msPerTimeUnit;
 		}
 
 		int firstAllowedFrom(WorkUnitSpec unit, int start)
@@ -473,6 +704,17 @@ final class PlacementPlanner
 				}
 			}
 			return best == 0 ? firstAllowedFrom(unit, 1) : best;
+		}
+
+		/** The unit's home node when it may run there, else the least raw load (V3). */
+		int homeOrLeastRawLoad(WorkUnitSpec unit)
+		{
+			int home = unit.getHomeNode();
+			if (home >= 1 && home <= nodeCount() && unit.isAllowedOn(home))
+			{
+				return home;
+			}
+			return leastRawLoad(unit);
 		}
 
 		/** Node whose earliest lane frees up first; ties to the faster node. */
@@ -547,7 +789,7 @@ final class PlacementPlanner
 					continue;
 				}
 				int lane = earliestLane(node - 1);
-				double duration = unit.getCost() / spec.getSpeed();
+				double duration = unit.durationOn(spec.getSpeed());
 				if (reliability)
 				{
 					duration = duration / Math.max(1.0e-6, 1.0 - spec.getFailureProbability());

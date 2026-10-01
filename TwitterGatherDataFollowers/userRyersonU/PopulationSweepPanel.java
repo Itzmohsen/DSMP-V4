@@ -129,7 +129,7 @@ final class PopulationSweepPanel extends JPanel
 	private final JButton algorithmSettingsButton =
 			createButton("Algorithm Settings", BUTTON_NEUTRAL);
 	private final JButton capacityButton =
-			createButton("Node Capacity", BUTTON_NEUTRAL);
+			createButton("Open Node Lab", BUTTON_NEUTRAL);
 	private final TokenLabel datasetNameLabel = new TokenLabel("No dataset selected");
 	private final TokenLabel datasetPathLabel =
 			new TokenLabel("Choose a six-column simulator dataset.");
@@ -712,12 +712,10 @@ final class PopulationSweepPanel extends JPanel
 			{
 				public void actionPerformed(ActionEvent event)
 				{
-					int workers = ((Number)nodesSpinner.getValue()).intValue();
-					NodeCapacitySettingsDialog.showDialog(
-							SwingUtilities.getWindowAncestor(PopulationSweepPanel.this),
-							workers,
-							RuntimeResourceSettings.currentMaxHeapMb());
-					buildWorkerCards(workers);
+					if (owner != null)
+					{
+						owner.showNodeLab(NodeLabPanel.CLUSTER);
+					}
 				}
 			});
 		nodesSpinner.addChangeListener(new ChangeListener()
@@ -1515,11 +1513,20 @@ final class PopulationSweepPanel extends JPanel
 		digestMetric.setToolTipText(null);
 	}
 
+	/** Re-reads the node profiles (after the Node Lab changed them). */
+	void refreshWorkerCards()
+	{
+		if (runThread == null)
+		{
+			buildWorkerCards(((Number)nodesSpinner.getValue()).intValue());
+		}
+	}
+
 	private void buildWorkerCards(int requestedWorkers)
 	{
-		NodeCapacityRegistry.configureForNodeCount(
-				requestedWorkers,
-				RuntimeResourceSettings.currentMaxHeapMb());
+		//Shows the simulator's node profiles for the workers that have one and
+		//defaults for the rest, without resizing the simulator's cluster.
+		java.util.List<NodeCapacityProfile> configured = NodeCapacityRegistry.snapshot();
 		workerCards.clear();
 		workerCardsPanel.removeAll();
 		int columns = requestedWorkers <= 2 ? requestedWorkers
@@ -1529,7 +1536,12 @@ final class PopulationSweepPanel extends JPanel
 		{
 			WorkerCard card = new WorkerCard(
 					index,
-					NodeCapacityRegistry.profileForNode(index));
+					index <= configured.size()
+							? configured.get(index - 1).withNodeIndex(index)
+							: NodeCapacityProfile.defaultProfile(
+									index,
+									requestedWorkers,
+									RuntimeResourceSettings.currentMaxHeapMb()));
 			workerCards.put(Integer.valueOf(index), card);
 			workerCardsPanel.add(card);
 		}

@@ -49,6 +49,9 @@ public final class LiveExactnessHarness
 		final SchedulerLabEngine.SchedulingPolicy policy;
 		final NodeCapacityProfile.Role[] roles;
 		boolean liveControls;
+		Scenario scenario = Scenario.NONE;
+		/** Crash process (MTBF, MTTR in seconds) of node 1..N, or null. */
+		double[][] crashProcesses;
 
 		Configuration(String name, int nodes, RecommendationSchedulerPlan.Mode mode,
 				SchedulerLabEngine.SchedulingPolicy policy, NodeCapacityProfile.Role... roles)
@@ -63,6 +66,25 @@ public final class LiveExactnessHarness
 		Configuration withLiveControls()
 		{
 			liveControls = true;
+			return this;
+		}
+
+		Configuration withScenario(String text)
+		{
+			try
+			{
+				scenario = Scenario.parse(text);
+			}
+			catch (Scenario.ScenarioException invalid)
+			{
+				throw new IllegalArgumentException(invalid.getMessage());
+			}
+			return this;
+		}
+
+		Configuration withCrashProcesses(double[][] processes)
+		{
+			crashProcesses = processes;
 			return this;
 		}
 	}
@@ -334,6 +356,23 @@ public final class LiveExactnessHarness
 		all.add(new Configuration("3 nodes, queue length, live operator controls", 3,
 				RecommendationSchedulerPlan.Mode.SCORING_SAFE,
 				SchedulerLabEngine.SchedulingPolicy.QUEUE_LENGTH, normal, strong, weak).withLiveControls());
+		all.add(new Configuration("3 nodes, original DSMP on the emulated cluster, strong/normal/weak", 3,
+				RecommendationSchedulerPlan.Mode.SCORING_SAFE,
+				SchedulerLabEngine.SchedulingPolicy.ORIGINAL_DSMP, strong, normal, weak));
+		all.add(new Configuration("3 nodes, queue length, scripted crash, drain and boost", 3,
+				RecommendationSchedulerPlan.Mode.SCORING_SAFE,
+				SchedulerLabEngine.SchedulingPolicy.QUEUE_LENGTH, normal, normal, weak)
+				.withScenario("name: crash drain boost\n"
+						+ "at 30% of input pause node 2\n"
+						+ "at 60% of input resume node 2\n"
+						+ "at 20% crash node 2 for 300ms\n"
+						+ "at 50% drain node 3 to node 1\n"
+						+ "at 60% capacity node 1 = 150%\n"
+						+ "at 70% available node 3\n"));
+		all.add(new Configuration("4 nodes, failure-aware, crash processes and faults", 4,
+				RecommendationSchedulerPlan.Mode.SCHEDULING_EXPERIMENT,
+				SchedulerLabEngine.SchedulingPolicy.FAILURE_AWARE_RESCHEDULING, normal, unreliable, normal, strong)
+				.withCrashProcesses(new double[][] {null, {0.4, 0.1}, {1.5, 0.2}, null}));
 		if (keep == null || keep.trim().length() == 0)
 		{
 			return all;
@@ -381,18 +420,23 @@ public final class LiveExactnessHarness
 				ArrayList<NodeCapacityProfile> profiles = new ArrayList<NodeCapacityProfile>();
 				for (int node = 1; node <= configuration.nodes; node++)
 				{
-					profiles.add(NodeCapacityProfile.rolePreset(
-							node, configuration.roles[node - 1], configuration.nodes, heapMb));
+					NodeCapacityProfile profile = NodeCapacityProfile.rolePreset(
+							node, configuration.roles[node - 1], configuration.nodes, heapMb);
+					double[] crash = configuration.crashProcesses == null
+							? null : configuration.crashProcesses[node - 1];
+					profiles.add(crash == null ? profile.withCrashProcess(0.0, 0.0)
+							: profile.withCrashProcess(crash[0], crash[1]));
 				}
 				NodeCapacityRegistry.setProfiles(profiles, heapMb);
 				if (configuration.mode == RecommendationSchedulerPlan.Mode.DSMP_DEFAULT)
 				{
 					RecommendationSchedulerRegistry.restoreDefault(configuration.nodes, heapMb);
+					RecommendationSchedulerRegistry.applyScenario(Scenario.NONE);
 				}
 				else
 				{
 					RecommendationSchedulerRegistry.apply(configuration.mode, configuration.policy,
-							configuration.nodes, heapMb, "live exactness harness");
+							configuration.nodes, heapMb, "live exactness harness", configuration.scenario);
 				}
 			}
 		});
@@ -481,6 +525,16 @@ public final class LiveExactnessHarness
 				for (String line : context.timingReport())
 				{
 					System.out.println("[harness]   " + line);
+				}
+				RunMetrics metrics = context.awaitRecord(60000L);
+				if (metrics != null)
+				{
+					System.out.println("[harness]   record: " + metrics.describe().replace("\n", "\n[harness]   "));
+				}
+				String recordedHash = RunRecordWriter.resultsHash(runId);
+				if (recordedHash.length() == 0)
+				{
+					throw new IllegalStateException("the run record has no results hash");
 				}
 			}
 			return result;
