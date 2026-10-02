@@ -38,7 +38,12 @@ final class SimulatorResultsPage extends SimulatorPanel.Page
 	private final JPanel recordBody = new JPanel(new BorderLayout());
 	private File recordFolder;
 	private boolean recordFound;
-	private int refreshes;
+	/** When the record and graph were last looked for (they appear a moment after the run). */
+	private long lastRecordCheck;
+	/** The run graph card's body; filled once the run's graph has been analysed. */
+	private final JPanel graphBody = new JPanel(new BorderLayout());
+	private final GraphCharts.Thumbnail graphThumbnail = new GraphCharts.Thumbnail(330, 206);
+	private boolean graphFound;
 
 	SimulatorResultsPage(SimulatorPanel simulator)
 	{
@@ -68,9 +73,18 @@ final class SimulatorResultsPage extends SimulatorPanel.Page
 		}
 		if (report == shown)
 		{
-			if (!recordFound && ++refreshes % 4 == 0)
+			long now = System.currentTimeMillis();
+			if ((!recordFound || !graphFound) && now - lastRecordCheck >= 1500L)
 			{
-				updateRecord(report);
+				lastRecordCheck = now;
+				if (!recordFound)
+				{
+					updateRecord(report);
+				}
+				if (!graphFound)
+				{
+					updateGraph(report);
+				}
 			}
 			return;
 		}
@@ -150,6 +164,7 @@ final class SimulatorResultsPage extends SimulatorPanel.Page
 		lower.add(diagnostics(report));
 		page.section(lower);
 		page.section(perTarget(report));
+		page.section(graph(report));
 		page.section(record(report));
 	}
 
@@ -337,6 +352,68 @@ final class SimulatorResultsPage extends SimulatorPanel.Page
 				+ TARGET_ROWS + " of " + ordered.size() + " targets; quality-targets.csv in the run record has"
 				+ " them all.")) : table);
 		return card;
+	}
+
+	/** The network the run created, summarised, with a link to Graph Insights. */
+	private JComponent graph(RecommendationQualityEvaluator.Report report)
+	{
+		NodeLabUi.Card card = new NodeLabUi.Card("Run graph",
+				"The network this run created: follows, recommendations and adoptions, its communities, homophily"
+						+ " and exposure, each tested against chance.");
+		NodeLabUi.Button open = new NodeLabUi.Button("Open Graph Insights", NodeLabUi.ButtonKind.SECONDARY,
+				NodeLabUi.Glyph.NETWORK, true);
+		open.addActionListener(new ActionListener()
+		{
+			public void actionPerformed(ActionEvent event)
+			{
+				gui.showGraphInsights(GraphInsightsPanel.OVERVIEW);
+			}
+		});
+		card.action(open);
+		graphBody.setOpaque(false);
+		graphFound = false;
+		updateGraph(report);
+		card.content(graphBody);
+		return card;
+	}
+
+	private void updateGraph(RecommendationQualityEvaluator.Report report)
+	{
+		RunGraphRecord.Loaded latest = RunGraphRecord.latest();
+		graphFound = latest != null && latest.graph.runId.equals(report.setup.runId);
+		graphBody.removeAll();
+		if (!graphFound)
+		{
+			graphBody.add(NodeLabUi.note("The run's graph is analysed when its record is written, a moment after the"
+					+ " run finishes."), BorderLayout.CENTER);
+		}
+		else
+		{
+			RunGraphAnalysis a = latest.analysis;
+			JPanel tiles = NodeLabUi.grid(160, 3, 10);
+			double homophily = a.saturated ? a.weightedHomophily : a.homophily;
+			double chance = a.saturated ? a.weightedHomophilyChance : a.homophilyChance;
+			tiles.add(new NodeLabUi.Metric("Homophily", GraphInsightsPanel.percent(homophily), "chance "
+					+ GraphInsightsPanel.percent(chance), NebulaDesign.SUCCESS));
+			tiles.add(new NodeLabUi.Metric("Community AMI", GraphInsightsPanel.fixed(a.recommended.recovery.ami, 3),
+					"0 chance \u00b7 1 identical", NebulaDesign.INFO));
+			tiles.add(new NodeLabUi.Metric("Exposure Gini", GraphInsightsPanel.fixed(a.exposureGini, 3),
+					"coverage " + GraphInsightsPanel.percent(a.coverage), NebulaDesign.WARNING));
+			RunGraphAnalysis.Finding lead = a.findings.isEmpty() ? null : a.findings.get(0);
+			JPanel text = NodeLabUi.stack(8, NodeLabUi.strong(lead == null ? latest.graph.describe() : lead.title),
+					lead == null ? null : NodeLabUi.prose(lead.detail), tiles);
+			JPanel row = new JPanel(new BorderLayout(18, 0));
+			row.setOpaque(false);
+			if (latest.hasLayout())
+			{
+				graphThumbnail.set(latest);
+				row.add(graphThumbnail, BorderLayout.WEST);
+			}
+			row.add(text, BorderLayout.CENTER);
+			graphBody.add(row, BorderLayout.CENTER);
+		}
+		graphBody.revalidate();
+		graphBody.repaint();
 	}
 
 	/** Where the run's lists and quality files were written. */

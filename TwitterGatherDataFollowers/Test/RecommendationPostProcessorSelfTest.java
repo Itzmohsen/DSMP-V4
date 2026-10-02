@@ -19,7 +19,7 @@ public final class RecommendationPostProcessorSelfTest
 	public static void main(String[] args) throws Exception
 	{
 		formatsEmptyRecommendationListsSafely();
-		persistsEdgesWithoutReadingOrRewritingTheDataset();
+		choosesAndWritesLegacyOutputsWithoutGraphFiles();
 		fallsBackToOneDatasetPassWhenContextIsUnavailable();
 		System.out.println("RecommendationPostProcessorSelfTest passed");
 	}
@@ -37,7 +37,7 @@ public final class RecommendationPostProcessorSelfTest
 				"recommendation list formatting changed");
 	}
 
-	private static void persistsEdgesWithoutReadingOrRewritingTheDataset()
+	private static void choosesAndWritesLegacyOutputsWithoutGraphFiles()
 			throws Exception
 	{
 		Path project = Files.createTempDirectory("recommendation-post-processing");
@@ -52,11 +52,7 @@ public final class RecommendationPostProcessorSelfTest
 		RecommendationDatasetContext context = new RecommendationDatasetContext(
 				userFollowees,
 				new LinkedHashSet<String>(
-						Arrays.asList("Store A", "Store B", "Store C")),
-				Arrays.asList(
-						"Store A", "Alice",
-						"Store B", "Bob",
-						"Store C", "Carol"));
+						Arrays.asList("Store A", "Store B", "Store C")));
 
 		LinkedHashMap<String, Double> scores =
 				new LinkedHashMap<String, Double>();
@@ -68,7 +64,6 @@ public final class RecommendationPostProcessorSelfTest
 						new RecommendationPostProcessor.Request(
 								unavailableDataset,
 								importantStuff,
-								"edges-numbers-Retail_Sample",
 								"Alice",
 								"Store A",
 								"recommendations",
@@ -81,44 +76,19 @@ public final class RecommendationPostProcessorSelfTest
 				"weighted recommendation choice changed");
 		require("Store C".equals(result.getSelectedRecommendation()),
 				"wrong recommendation was selected");
-		require(result.wereEdgesWritten(), "graph edges were not persisted");
-
-		String mapping = read(new File(
-				importantStuff,
-				"name-number-" + unavailableDataset.getName()));
-		require(mapping.equals(
-				"Store A\t1\nAlice\t2\nStore B\t3\nBob\t4\nStore C\t5\nCarol\t6\n"),
-				"graph node order changed");
-		require(read(new File(
-				importantStuff,
-				"edges-numbers-Retail_Sample.txt")).equals("2 1\n2 5\n"),
-				"original and recommendation edges were not written correctly");
 		require(read(new File(
 				importantStuff,
 				"outPutSepResult.txt")).equals(
 						"Bob : Store B\nStore C : Store C\n\n"),
 				"legacy recommendation summary changed");
-
-		LinkedHashMap<String, Double> secondScores =
-				new LinkedHashMap<String, Double>();
-		secondScores.put("Alice", Double.valueOf(1.0));
-		RecommendationPostProcessor.process(
-				new RecommendationPostProcessor.Request(
-						unavailableDataset,
-						importantStuff,
-						"edges-numbers-Retail_Sample",
-						"Bob",
-						"Store B",
-						"recommendations",
-						secondScores,
-						1,
-						new Random(2L),
-						context));
-		require(read(new File(
-				importantStuff,
-				"edges-numbers-Retail_Sample.txt")).equals(
-						"2 1\n2 5\n4 3\n4 2\n"),
-				"batch users did not accumulate edges in query order");
+		require(read(new File(importantStuff, "outputChoice.txt")).equals("Store C"),
+				"the follow choice was not written");
+		String[] written = importantStuff.list();
+		for (String name : written)
+		{
+			require(!name.startsWith("edges-numbers") && !name.startsWith("name-number"),
+					"the run graph lives in the run record, not in " + name);
+		}
 		require(!new File(
 				importantStuff,
 				"Dataset-Test-" + unavailableDataset.getName()).exists(),
@@ -147,7 +117,6 @@ public final class RecommendationPostProcessorSelfTest
 						new RecommendationPostProcessor.Request(
 								dataset,
 								importantStuff,
-								"edges-numbers-sample",
 								"Alice",
 								"Store A",
 								"recommendations",
@@ -156,12 +125,12 @@ public final class RecommendationPostProcessorSelfTest
 								new Random(1L),
 								RecommendationDatasetContext.empty()));
 
-		require(result.wereEdgesWritten(),
-				"single-pass compatibility fallback did not persist edges");
+		require("Bob".equals(result.getSelectedRecommendation()),
+				"the only recommendation was not chosen");
 		require(read(new File(
 				importantStuff,
-				"edges-numbers-sample.txt")).equals("2 1\n2 4\n"),
-				"fallback edge IDs were incorrect");
+				"outPutSepResult.txt")).equals("Bob : Store B\n\n"),
+				"the dataset pass did not resolve Bob's account");
 	}
 
 	/** Reads a file with the platform line separator (CRLF on Windows) as "\n". */

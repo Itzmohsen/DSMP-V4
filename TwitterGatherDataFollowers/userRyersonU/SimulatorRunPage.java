@@ -81,9 +81,9 @@ final class SimulatorRunPage extends SimulatorPanel.Page
 		JPanel graphRow = new JPanel(new BorderLayout(12, 0));
 		graphRow.setOpaque(false);
 		graphRow.add(graph, BorderLayout.WEST);
-		graphRow.add(NodeLabUi.stack(2, NodeLabUi.strong("Build the final graph"),
-				NodeLabUi.note("Node and edge files are always saved; this also builds, exports and opens the"
-						+ " graph after the recommendations.")), BorderLayout.CENTER);
+		graphRow.add(NodeLabUi.stack(2, NodeLabUi.strong("Lay out and export the run graph"),
+				NodeLabUi.note("Every run records its graph and its analysis (Graph Insights); this also lays it"
+						+ " out and writes GEXF, GraphML, SVG and PNG into the run record.")), BorderLayout.CENTER);
 		run.content(NodeLabUi.stack(14, steps, statusText, graphRow));
 
 		NodeLabUi.Card live = new NodeLabUi.Card("Live output",

@@ -101,7 +101,8 @@ final class RunRecordWriter
 			writeControls(new File(directory, "controls.csv"), recorder.controls());
 			writePhaseJoins(new File(directory, "phase-joins.csv"), recorder.allPhaseJoins());
 			RecommendationQualityEvaluator.Report quality = writeQuality(directory, context.getRunId());
-			appendIndex(name, context, metrics, resultsHash, quality);
+			RunGraphAnalysis graph = writeGraph(directory, context);
+			appendIndex(name, context, metrics, resultsHash, quality, graph);
 			return directory;
 		}
 		catch (IOException failure)
@@ -570,6 +571,31 @@ final class RunRecordWriter
 		return quality;
 	}
 
+	/**
+	 * Writes the run's graph (follows, recommendations, adoptions) and its
+	 * analysis into the record's graph folder; the layout and figures too when
+	 * the run asked for the final graph output. Returns the analysis, or null.
+	 */
+	private static RunGraphAnalysis writeGraph(File directory, SchedulingRunContext context)
+	{
+		Map<String,String> properties = context.recorder().properties();
+		RunGraph graph = RunGraph.of(RecommendationQualityEvaluator.setupOf(context.getRunId()),
+				RecommendationRunResults.get(context.getRunId()), properties.get("datasetName"));
+		if (graph == null)
+		{
+			return null;
+		}
+		try
+		{
+			return RunGraphRecord.write(directory, graph, !"false".equals(properties.get("graphGeneration")));
+		}
+		catch (IOException | RuntimeException failure)
+		{
+			System.err.println("Could not write the run graph of " + context.getRunId() + ": " + failure);
+			return null;
+		}
+	}
+
 	/** Columns of runs-index.csv, one line per run. */
 	static final String[] INDEX_COLUMNS = {
 		"run_dir", "run_id", "status", "created", "algorithm", "dataset", "nodes", "mode", "policy",
@@ -580,11 +606,15 @@ final class RunRecordWriter
 		"host_utilization", "mean_sleep_error_ms", "replay_abs_error", "replay_main_phase_error",
 		"replay_best_makespan_ms", "study", "cell", "repetition",
 		"quality_k", "quality_targets", "hit_rate", "precision_at_k", "recall_at_k", "ndcg_at_k", "mrr",
-		"map_at_k", "ndcg_random", "ndcg_lift", "ndcg_p_value", "top1_accuracy"
+		"map_at_k", "ndcg_random", "ndcg_lift", "ndcg_p_value", "top1_accuracy",
+		"graph_homophily", "graph_homophily_chance", "graph_homophily_p", "graph_assortativity",
+		"graph_community_ami", "graph_exposure_gini", "graph_coverage", "graph_adoption_ei",
+		"graph_adoption_ei_chance", "graph_adoption_p", "graph_modularity_before", "graph_modularity_after"
 	};
 
 	private static void appendIndex(String directory, SchedulingRunContext context, RunMetrics metrics,
-			String resultsHash, RecommendationQualityEvaluator.Report quality) throws IOException
+			String resultsHash, RecommendationQualityEvaluator.Report quality, RunGraphAnalysis graph)
+			throws IOException
 	{
 		Map<String,String> properties = context.recorder().properties();
 		Map<String,Double> summary = metrics.summary();
@@ -611,7 +641,17 @@ final class RunRecordWriter
 			quality == null || quality.metric("ndcg") == null ? null : finite(quality.metric("ndcg").random),
 			quality == null || quality.metric("ndcg") == null ? null : finite(quality.metric("ndcg").lift()),
 			quality == null || quality.metric("ndcg") == null ? null : finite(quality.metric("ndcg").pValue),
-			quality == null ? null : finite(quality.accuracy)
+			quality == null ? null : finite(quality.accuracy),
+			graph == null ? null : finite(graph.saturated ? graph.weightedHomophily : graph.homophily),
+			graph == null ? null : finite(graph.saturated ? graph.weightedHomophilyChance : graph.homophilyChance),
+			graph == null ? null : finite(graph.saturated ? graph.weightedHomophilyP : graph.homophilyP),
+			graph == null ? null : finite(graph.assortativity.r),
+			graph == null ? null : finite(graph.recommended.recovery.ami),
+			graph == null ? null : finite(graph.exposureGini), graph == null ? null : finite(graph.coverage),
+			graph == null ? null : finite(graph.eiIndex), graph == null ? null : finite(graph.eiChance),
+			graph == null ? null : finite(graph.adoptionP),
+			graph == null ? null : finite(graph.observed.realModularity),
+			graph == null ? null : finite(graph.adopted.realModularity)
 		};
 		synchronized (INDEX_LOCK)
 		{

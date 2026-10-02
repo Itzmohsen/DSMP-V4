@@ -62,58 +62,8 @@ import jade.domain.mobility.MobilityOntology;
 import jade.lang.acl.ACLMessage;
 import jade.lang.acl.UnreadableException;
 
-import java.awt.Desktop;  // added by Sepide
 import java.io.*;  // added by Sepide
 
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.rendering.PDFRenderer;
-import org.gephi.statistics.plugin.Modularity;   // added by Sepide
-import org.gephi.statistics.plugin.builder.ModularityBuilder;  // added by Sepide 
-import org.gephi.io.importer.plugin.file.ImporterBuilderGML;   // added by Sepide
-import org.gephi.io.importer.spi.*;  // added by Sepide 
-//import org.gephi.io.*;   // added by Sepide
-import org.gephi.io.importer.plugin.file.ImporterGML;  // added by Sepide 
-import org.gephi.io.importer.api.ImportController;  // added by Sepide 
-import org.gephi.io.importer.api.Container;  // added by Sepide 
-import org.gephi.io.importer.api.EdgeDirectionDefault;  // added by Sepide 
-import org.openide.util.Lookup;      // added by Sepide
-import org.gephi.graph.api.GraphModel;  // added by Sepide 
-import org.gephi.graph.api.GraphController;   // added by Sepide 
-import org.gephi.io.processor.plugin.DefaultProcessor;    // added by Sepide
-import org.gephi.graph.api.UndirectedGraph;    // added by Sepide 
-import org.gephi.graph.api.DirectedGraph;    // added by Sepide 
-import org.gephi.project.api.Workspace;    // added by Sepide
-import org.gephi.project.api.ProjectController;   // added by Sepide 
-import org.gephi.statistics.plugin.Modularity;  // added by Sepide 
-import org.gephi.appearance.api.Partition;      // added by Sepide 
-import org.gephi.appearance.api.PartitionFunction;   // added by Sepide 
-import org.gephi.appearance.plugin.PartitionElementColorTransformer;   // added by Sepide 
-import org.gephi.appearance.plugin.palette.Palette;   // added by Sepide 
-import org.gephi.appearance.plugin.palette.PaletteManager;   // added by Sepide 
-import org.gephi.graph.api.Column;   // added by Sepide 
-import org.gephi.appearance.api.AppearanceController;    // added by Sepide 
-import org.gephi.appearance.api.AppearanceModel;        // added by Sepide 
-import org.gephi.appearance.api.Function;       // added by Sepide
-import org.gephi.io.exporter.api.ExportController;   // added by Sepide
-import org.gephi.layout.plugin.forceAtlas.ForceAtlasLayout;      // added by Sepide
-import org.gephi.layout.plugin.forceAtlas.ForceAtlas;   // added by Sepide
-import java.util.concurrent.TimeUnit;   // added by Sepide
-import org.gephi.layout.plugin.AutoLayout;   // added by Sepide
-import org.gephi.layout.plugin.force.StepDisplacement;   // added by Sepide 
-import org.gephi.layout.plugin.force.yifanHu.YifanHuLayout;  // added by Sepide 
-import org.gephi.layout.plugin.forceAtlas2.ForceAtlas2; // added by Sepide 
-import org.ghost4j.*;   // added by Sepide 
-import org.ghost4j.converter.PDFConverter;    // added by Sepide 
-import org.ghost4j.renderer.SimpleRenderer;   // added by Sepide 
-import java.awt.Image;       // added by Sepide 
-import java.awt.image.RenderedImage;    // added by Sepide 
-import javax.imageio.ImageIO;     // added by Sepide 
-import org.ghost4j.document.PDFDocument;   // added by Sepide 
-import org.ghost4j.analyzer.AnalysisItem;   // added by Sepide 
-import org.ghost4j.analyzer.FontAnalyzer;     // added by Sepide   
-import java.awt.image.BufferedImage;    // added by Sepide 
-import com.spire.pdf.PdfDocument;   // added by Sepide 
-import org.gephi.preview.api.*;       // added by Sepide 
 
 public class StarterAgent extends Agent 
 {
@@ -1171,308 +1121,13 @@ public class StarterAgent extends Agent
 						logStageDuration("WAIT querying/recommendation completed", stageQueryStartTime, stageQueryCompletedTime);
 						System.out.println("Simulation Completed");
 							System.out.println("Final Total execution time: " + (endSimTime - startSimTime) + "ms" );
-								logStageDuration("SIMULATION total before graph visualization", stageSimulationStartTime, endSimTime);
+								logStageDuration("SIMULATION total", stageSimulationStartTime, endSimTime);
 								System.out.println("Simulated ended at "+ LocalDateTime.now());
 
-								if (!isGraphGenerationEnabled())
-								{
-									logStagePoint("GRAPH visualization/export skipped; accumulated node and edge data retained");
-									showSimulationFinishedMessage();
-									finishSimulationLifecycle();
-									return;
-								}
-
-								//myGui.showMessageBox("finished simulation");    // commented out by Sepide
-						
-						// Code added by Sepide
-                          /*try {
-							 Runtime.getRuntime().exec("cmd /c start cmd.exe /K \"gcc -o C:\\Users\\s2baniha\\Desktop\\important-stuff\\TXT2GMLv1.0\\conver C:\\Users\\s2baniha\\Desktop\\important-stuff\\TXT2GMLv1.0\\conversion.c");
-                             Runtime.getRuntime().exec("cmd /c start cmd.exe /K \"C:\\Users\\s2baniha\\Desktop\\important-stuff\\TXT2GMLv1.0\\conver C:\\Users\\s2baniha\\Desktop\\important-stuff\\edges-numbers");
-							 //Process p1 = Runtime.getRuntime().exec( "gcc -o C:\\Users\\s2baniha\\Desktop\\important-stuff\\TXT2GMLv1.0 conver C:\\Users\\s2baniha\\Desktop\\important-stuff\\TXT2GMLv1.0 conversion.c" );
-							 //Process p = Runtime.getRuntime().exec( "C:\\Users\\s2baniha\\Desktop\\important-stuff\\TXT2GMLv1.0\\conver C:\\Users\\s2baniha\\Desktop\\important-stuff\\edges-numbers" );  
-							 
-						 }
-						 catch (Exception ex) {
-                               ex.printStackTrace();
-							   return;
-                      
-                         } */
-						
-							ProjectController graphProjectController = null;
-							try
-							{
-							long graphVisualizationStartTime = System.currentTimeMillis();
-						logStagePoint("GRAPH visualization started");
-						String importantStuffDirName = "important-stuff/";
-						File importantStuffDir = new File(importantStuffDirName);
-						if (!importantStuffDir.exists())
-						{
-								importantStuffDir.mkdirs();
-						}
-
-						File graphFile;
-						long graphBuildStartTime = System.currentTimeMillis();
-						try {
-							GraphGmlBuilder.Result graphBuild = buildCompletedGraphFile(importantStuffDir);
-							graphFile = graphBuild.getOutputFile();
-							System.out.println("Built graph file with " + graphBuild.getNodeCount() + " nodes and "
-									+ graphBuild.getEdgeCount() + " edges: " + graphFile.getPath());
-						}
-							catch (Exception ex) {
-								reportGraphVisualizationFailure("could not build the completed graph file", ex);
-								finishSimulationLifecycle();
-								return;
-							}
-						logStageDuration("GRAPH build validated GML file", graphBuildStartTime, System.currentTimeMillis());
-
-						ProjectController pc;
-						AppearanceController appearanceController;
-						AppearanceModel appearanceModel;
-						ImportController importController;
-						GraphModel graphModel;
-						Workspace workspace;
-						Container container;
-						long graphSetupStartTime = System.currentTimeMillis();
-						try {
-							pc = requireGraphComponent(
-									Lookup.getDefault().lookup(ProjectController.class), "ProjectController");
-							pc.newProject();
-							graphProjectController = pc;
-							appearanceController = requireGraphComponent(
-									Lookup.getDefault().lookup(AppearanceController.class), "AppearanceController");
-							appearanceModel = requireGraphComponent(appearanceController.getModel(), "AppearanceModel");
-							importController = requireGraphComponent(
-									Lookup.getDefault().lookup(ImportController.class), "ImportController");
-							GraphController graphController = requireGraphComponent(
-									Lookup.getDefault().lookup(GraphController.class), "GraphController");
-							graphModel = requireGraphComponent(graphController.getGraphModel(), "GraphModel");
-							workspace = requireGraphComponent(pc.getCurrentWorkspace(), "Workspace");
-						}
-							catch (Exception ex) {
-								reportGraphVisualizationFailure("could not initialize Gephi", ex);
-								finishSimulationLifecycle();
-								return;
-							}
-						logStageDuration("GRAPH initialize Gephi controllers/workspace", graphSetupStartTime, System.currentTimeMillis());
-
-						long graphImportStartTime = System.currentTimeMillis();
-						try {
-							System.out.println("Importing graph file: " + graphFile.getPath());
-							container = importController.importFile(graphFile);
-							if (container == null) {
-								throw new IOException("Gephi returned no import container for " + graphFile.getPath());
-							}
-							if (container.getLoader() == null) {
-								throw new IOException("Gephi returned an import container without a loader for "
-										+ graphFile.getPath());
-							}
-							container.getLoader().setEdgeDefault(EdgeDirectionDefault.UNDIRECTED);
-							container.getLoader().setAllowAutoNode(false);
-						}
-							catch (Exception ex) {
-								reportGraphVisualizationFailure("Gephi could not import the completed graph file", ex);
-								finishSimulationLifecycle();
-								return;
-							}
-						logStageDuration("GRAPH import GML file", graphImportStartTime, System.currentTimeMillis());
-						
-						     //Append imported data to GraphAPI
-                             long graphProcessStartTime = System.currentTimeMillis();
-                             importController.process(container, new DefaultProcessor(), workspace);
-							 logStageDuration("GRAPH process imported container", graphProcessStartTime, System.currentTimeMillis());
-							 
-					         //See if graph is well imported
-                             //UndirectedGraph graph = graphModel.getUndirectedGraph();
-							 DirectedGraph graph = graphModel.getDirectedGraph();
-                             System.out.println("Nodes: " + graph.getNodeCount());
-                             System.out.println("Edges: " + graph.getEdgeCount());
-							 
-							 //Run modularity algorithm - community detection
-                             long graphModularityStartTime = System.currentTimeMillis();
-                             Modularity modularity = new Modularity();
-							 modularity.setResolution(1.0);
-                             modularity.execute(graphModel);
-							 logStageDuration("GRAPH modularity calculation", graphModularityStartTime, System.currentTimeMillis());
-							 
-							//Partition with 'modularity_class', just created by Modularity algorithm
-                            long graphPartitionStartTime = System.currentTimeMillis();
-                            Column modColumn = graphModel.getNodeTable().getColumn(Modularity.MODULARITY_CLASS);
-                            Function func2 = appearanceModel.getNodeFunction(graph, modColumn, PartitionElementColorTransformer.class);
-                            Partition partition2 = ((PartitionFunction) func2).getPartition();
-                            System.out.println(partition2.size() + " partitions found");
-                            Palette palette2 = PaletteManager.getInstance().randomPalette(partition2.size());
-                            partition2.setColors(palette2.getColors());
-                            appearanceController.transform(func2);
-							logStageDuration("GRAPH partition/color transform", graphPartitionStartTime, System.currentTimeMillis());
-							
-							//Preview 
-							long graphPreviewStartTime = System.currentTimeMillis();
-							PreviewModel model = Lookup.getDefault().lookup(PreviewController.class).getModel();
-                            model.getProperties().putValue(PreviewProperty.SHOW_NODE_LABELS, Boolean.TRUE);
-							model.getProperties().putValue(PreviewProperty.NODE_LABEL_FONT, model.getProperties().getFontValue(PreviewProperty.NODE_LABEL_FONT).deriveFont(8));
-							model.getProperties().putValue(PreviewProperty.NODE_LABEL_PROPORTIONAL_SIZE, Boolean.FALSE);
-							model.getProperties().putValue(PreviewProperty.NODE_LABEL_OUTLINE_SIZE, 12);
-							logStageDuration("GRAPH configure preview", graphPreviewStartTime, System.currentTimeMillis());
-							
-							//Export
-                            long graphPartitionExportStartTime = System.currentTimeMillis();
-                            ExportController ec = Lookup.getDefault().lookup(ExportController.class);
-                              try {
-	                                ec.exportFile(new File(importantStuffDirName+"partition.pdf"));
-	                                } catch (IOException ex) {
-	                                   ex.printStackTrace();
-	                                   finishSimulationLifecycle();
-	                                   return;
-	                                }
-							  logStageDuration("GRAPH export partition PDF", graphPartitionExportStartTime, System.currentTimeMillis());
-								
-								//Layout for 1 minute
-								long graphLayoutStartTime = System.currentTimeMillis();
-								AutoLayout autoLayout = new AutoLayout(1, TimeUnit.MINUTES);
-                                autoLayout.setGraphModel(graphModel);
-								//YifanHuLayout secondLayout = new YifanHuLayout(null, new StepDisplacement(1f));
-								ForceAtlasLayout firstLayout = new ForceAtlasLayout(null);
-								//firstLayout.setRepulsionStrength(20000.00);
-								//ForceAtlas fa = new ForceAtlas(); 
-                                //fa.buildLayout();
-								//AutoLayout.DynamicProperty adjustBySizeProperty = AutoLayout.createDynamicProperty("forceAtlas.adjustSizes.name", Boolean.TRUE, 0f);//True after 10% of layout time
-                                AutoLayout.DynamicProperty repulsionProperty = AutoLayout.createDynamicProperty("forceAtlas.repulsionStrength.name", 20000., 0f);//500 for the complete period
-								//autoLayout.addLayout(firstLayout, 0.0f, new AutoLayout.DynamicProperty[]{adjustBySizeProperty, repulsionProperty});
-                                autoLayout.addLayout(firstLayout, 0.0f, new AutoLayout.DynamicProperty[]{repulsionProperty});
-								ForceAtlas2 secondLayout = new ForceAtlas2(null);
-								secondLayout.setLinLogMode(true);
-								secondLayout.setAdjustSizes(true);
-								secondLayout.setGravity(10d);
-								secondLayout.setScalingRatio(30d);
-								secondLayout.setEdgeWeightInfluence(0.2);
-								System.out.println("Scaling Ratio of ForceAtlas2: " + secondLayout.getScalingRatio());
-								//AutoLayout.DynamicProperty preventOver = AutoLayout.createDynamicProperty("forceAtlas2.preventOverlap.namePreventOverlap", Boolean.FALSE, 0f);
-								//autoLayout.addLayout(secondLayout, 1f,new AutoLayout.DynamicProperty[]{preventOver});
-								AutoLayout.DynamicProperty adjustBySizeProperty = AutoLayout.createDynamicProperty("ForceAtlas2.adjustSizes.name",Boolean.TRUE,0f);//True for the complete period
-								AutoLayout.DynamicProperty distrAttraction = AutoLayout.createDynamicProperty("ForceAtlas2.distributedAttraction.name",Boolean.TRUE,0f);//True for the complete period
-                                autoLayout.addLayout(secondLayout, 1.0f, new AutoLayout.DynamicProperty[]{adjustBySizeProperty,distrAttraction});
-								//autoLayout.addLayout(secondLayout, 1.0f);
-								autoLayout.execute();
-								logStageDuration("GRAPH AutoLayout execute", graphLayoutStartTime, System.currentTimeMillis());
-								
-								//Export full graph
-								long graphGexfExportStartTime = System.currentTimeMillis();
-								ExportController ec3 = Lookup.getDefault().lookup(ExportController.class);
-                                 try {
-	                                       ec3.exportFile(new File(importantStuffDirName+"graph.gexf"));
-	                                   } catch (IOException ex) {
-	                                       ex.printStackTrace();
-	                                     finishSimulationLifecycle();
-	                                     return;
-									}
-								logStageDuration("GRAPH export GEXF", graphGexfExportStartTime, System.currentTimeMillis());
-								
-								
-								
-								//Export
-                                  long graphAutolayoutExportStartTime = System.currentTimeMillis();
-                                  ExportController ec2 = Lookup.getDefault().lookup(ExportController.class);
-                                  try {
-                                   ec2.exportFile(new File(importantStuffDirName+"autolayout.pdf"));
-                                    } catch (IOException ex) {
-                                     ex.printStackTrace();
-                                     }
-								  logStageDuration("GRAPH export autolayout PDF", graphAutolayoutExportStartTime, System.currentTimeMillis());
-									 
-									 long graphRenderImageStartTime = System.currentTimeMillis();
-									 try {
-										 PDDocument document = PDDocument.load(new File(importantStuffDirName + "autolayout.pdf"));
-										 PDFRenderer pdfRenderer = new PDFRenderer(document);
-
-										 try {
-											 for (int i = 0; i < document.getNumberOfPages(); i++) {
-												 BufferedImage image = pdfRenderer.renderImageWithDPI(i, 300); // 300 DPI, you can adjust this
-												 File file = new File(String.format(importantStuffDirName + "layout.jpg", i));
-												 ImageIO.write(image, "png", file);
-											 }
-										 } finally {
-											 document.close();
-										 }
-
-//										 PdfDocument pdf = new PdfDocument();
-//									 pdf.loadFromFile(importantStuffDirName+"autolayout.pdf");
-//
-//									BufferedImage image;
-//
-//                                      for (int i = 0; i < pdf.getPages().getCount(); i++) {
-//                                           image = pdf.saveAsImage(i);
-//                                           File file = new File( String.format(importantStuffDirName+"layout.jpg", i));
-//                                         ImageIO.write(image, "png", file);
-//                                         }
-//                                        pdf.close();
-									 }
-									 catch (Exception e) {
-                                                   System.out.println("ERROR: " + e.getMessage());
-                                            }
-									 logStageDuration("GRAPH render layout image", graphRenderImageStartTime, System.currentTimeMillis());
-																		
-									 
-									 /* try {
-										 PDFDocument document = new PDFDocument();
-										 document.load(new File("C:\\Users\\s2baniha\\Desktop\\important-stuff\\autolayout.pdf"));
-									     SimpleRenderer renderer = new SimpleRenderer();
-                                         
-										 // set resolution (in DPI)
-                                         renderer.setResolution(300);
-										 List<Image> images = renderer.render(document);
-										 
-										 try {
-											for (int i = 0; i < images.size(); i++) {
-                                               ImageIO.write((RenderedImage) images.get(i), "PNJ", new File((i + 1) + ".png"));
-                                           } 
-										 }
-										  catch (Exception e) {
-                                                   System.out.println("ERROR: " + e.getMessage());
-                                            }
-								 
-									}
-									catch (Exception e) {
-                                           System.out.println("ERROR: " + e.getMessage());
-                                    }  */
-									
-									 try  
-	                                 {  
-	                                   long graphOpenImageStartTime = System.currentTimeMillis();
-	                                   //constructor of file class having file as argument  
-	                                   File file = new File(importantStuffDirName+"layout.jpg");   
-	                                   if(!Desktop.isDesktopSupported())//check if Desktop is supported by Platform or not  
-		                                     {
-		                                             System.out.println("not supported");
-		                                             finishSimulationLifecycle();
-		                                             return;
-		                                     }
-	                                  Desktop desktop = Desktop.getDesktop();  
-	                                  if(file.exists())         //checks file exists or not  
-	                                  desktop.open(file);              //opens the specified file  
-									  logStageDuration("GRAPH open layout image", graphOpenImageStartTime, System.currentTimeMillis());
-	                                   }  
-	                                catch(Exception e)  
-	                                 {  
-	                                       e.printStackTrace();  
-	                                }
-						logStageDuration("GRAPH visualization total", graphVisualizationStartTime, System.currentTimeMillis());
-						
-						// End of code added by Sepide 
-						
-						// Code added by Sepide for automation of Simulator 
-						
+								//The run graph (follows, recommendations, adoptions) is analysed,
+								//laid out and exported with the run record (RunRecords, RunGraphRecord).
 								showSimulationFinishedMessage();
 								finishSimulationLifecycle();
-							}
-							catch (Exception ex)
-							{
-								reportGraphVisualizationFailure("unexpected graph finalization failure", ex);
-							}
-							finally
-							{
-								closeGraphProject(graphProjectController);
-								finishSimulationLifecycle();
-							}
 						//if (myGui.indexToRecommend < myGui.listSize - 1){  // commented out on Jan 30, 2021
 							//myGui.simulationButton.doClick();
 						//}
@@ -1515,50 +1170,14 @@ public class StarterAgent extends Agent
 	}
 
 
-	private GraphGmlBuilder.Result buildCompletedGraphFile(File importantStuffDir) throws IOException {
-		File selectedDataset = getConfiguredDatasetFile();
-		if (selectedDataset == null) {
-			throw new IOException("No selected dataset is available for graph generation");
-		}
 
-		String graphEdgesBaseName = getDatasetGraphBaseName(selectedDataset.getName());
-		File edgeListFile = new File(importantStuffDir, graphEdgesBaseName + ".txt");
-		File nameNumberFile = new File(importantStuffDir, "name-number-" + selectedDataset.getName());
-		File graphFile = new File(importantStuffDir, graphEdgesBaseName + ".gml");
-		return GraphGmlBuilder.build(edgeListFile, nameNumberFile, graphFile);
-	}
 
-	private <T> T requireGraphComponent(T component, String componentName) {
-		if (component == null) {
-			throw new IllegalStateException("Gephi component is unavailable: " + componentName);
-		}
-		return component;
-	}
-
-	private void reportGraphVisualizationFailure(String reason, Exception exception) {
-		String message = "GRAPH visualization skipped: " + reason + ". "
-				+ (exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage());
-		System.err.println(message);
-		exception.printStackTrace();
-		if (myGui != null) {
-			javax.swing.SwingUtilities.invokeLater(new Runnable() {
-				public void run()
-				{
-					myGui.appendResult(message);
-					myGui.showRunMessage(conversationIDInitial, "finished simulation");
-				}
-			});
-		}
-	}
 
 
 	private boolean isMobileAgentTweetDelayBypassEnabled() {
 		return myGui != null && !myGui.isSimulateTweetDelayEnabled();
 	}
 
-	private boolean isGraphGenerationEnabled() {
-		return graphGenerationEnabled;
-	}
 
 	static boolean resolveGraphGenerationEnabled(
 			Object[] args,
@@ -1569,19 +1188,8 @@ public class StarterAgent extends Agent
 		return config == null || config.isGraphGenerationEnabled();
 	}
 
-	private String getConvertedModeFileSuffix() {
-		return recommendationConfig == null
-				? "" : recommendationConfig.getConvertedModeFileSuffix();
-	}
 
 
-	private String getGraphEdgesBaseName() {
-		File selectedDataset = getConfiguredDatasetFile();
-		if (selectedDataset != null) {
-			return getDatasetGraphBaseName(selectedDataset.getName());
-		}
-		return "edges-numbers";
-	}
 
 	private File getConfiguredDatasetFile() {
 		File configuredDataset = recommendationConfig == null
@@ -1593,18 +1201,6 @@ public class StarterAgent extends Agent
 				? null : myGui.fileChooser.getSelectedFile();
 	}
 
-	private String getDatasetGraphBaseName(String selectedFileName) {
-		String datasetName = selectedFileName;
-		int extensionIndex = datasetName.lastIndexOf('.');
-		if (extensionIndex > 0) {
-			datasetName = datasetName.substring(0, extensionIndex);
-		}
-		datasetName = datasetName.replaceAll("[^A-Za-z0-9._-]", "_");
-		if (datasetName.length() == 0) {
-			datasetName = "uploaded-dataset";
-		}
-		return "edges-numbers-" + datasetName + getConvertedModeFileSuffix();
-	}
 
 	private void finishSimulationLifecycle()
 	{
@@ -1617,23 +1213,6 @@ public class StarterAgent extends Agent
 		doDelete();
 	}
 
-	private void closeGraphProject(ProjectController projectController)
-	{
-		if (projectController == null || projectController.getCurrentProject() == null)
-		{
-			return;
-		}
-
-		try
-		{
-			projectController.closeCurrentProject();
-			logStagePoint("GRAPH released Gephi project");
-		}
-		catch (RuntimeException ex)
-		{
-			System.err.println("Could not release the completed Gephi project: " + ex.getMessage());
-		}
-	}
 
 	private void showSimulationFinishedMessage()
 	{

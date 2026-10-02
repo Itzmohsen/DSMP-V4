@@ -128,10 +128,13 @@ final class RecommendationEvidenceEngine
 		final List<TermScore> sharedTerms;
 		final List<String> originalLabels;
 		final boolean graphAvailable;
-		final int graphHealthScore;
+		/** Real communities (followed accounts) in the run graph. */
 		final int graphCommunities;
-		final long graphEdges;
-		final String graphTopHub;
+		/** Whether the candidate is inside the target's community or bridges to another. */
+		final String graphRelation;
+		/** How often the candidate was recommended across the run's targets. */
+		final String graphExposure;
+		/** The candidate's PageRank rank in the run graph. */
 		final String graphCandidateRank;
 		final String lastOriginalEdge;
 		final String lastRecommendedEdge;
@@ -177,10 +180,9 @@ final class RecommendationEvidenceEngine
 			this.originalLabels = Collections.unmodifiableList(
 					new ArrayList<String>(state.originalLabels));
 			this.graphAvailable = state.graphAvailable;
-			this.graphHealthScore = state.graphHealthScore;
 			this.graphCommunities = state.graphCommunities;
-			this.graphEdges = state.graphEdges;
-			this.graphTopHub = state.graphTopHub;
+			this.graphRelation = state.graphRelation;
+			this.graphExposure = state.graphExposure;
 			this.graphCandidateRank = state.graphCandidateRank;
 			this.lastOriginalEdge = state.lastOriginalEdge;
 			this.lastRecommendedEdge = state.lastRecommendedEdge;
@@ -230,16 +232,15 @@ final class RecommendationEvidenceEngine
 			this.sharedTerms = Collections.emptyList();
 			this.originalLabels = Collections.emptyList();
 			this.graphAvailable = false;
-			this.graphHealthScore = 0;
 			this.graphCommunities = 0;
-			this.graphEdges = 0L;
-			this.graphTopHub = "No graph analyzed";
-			this.graphCandidateRank = "No graph candidate rank";
-			this.lastOriginalEdge = "No original edge found";
-			this.lastRecommendedEdge = "No recommendation edge found";
+			this.graphRelation = "\u2014";
+			this.graphExposure = "\u2014";
+			this.graphCandidateRank = "\u2014";
+			this.lastOriginalEdge = "No follow found";
+			this.lastRecommendedEdge = "No adoption yet";
 			this.recommendationMatchesGraphEdge = false;
 			this.sameAsOriginalLabel = false;
-			this.graphMessage = "Graph evidence appears after edges have been written for this dataset.";
+			this.graphMessage = "The run graph appears when the run's record is written, at the end of the run.";
 			this.counterfactualInsights = Collections.emptyList();
 			this.comparison = ComparisonReport.empty();
 			this.termLocations = Collections.emptyList();
@@ -442,16 +443,15 @@ final class RecommendationEvidenceEngine
 		String algorithmLensDetail = "";
 		String evidenceQuestion = "";
 		boolean graphAvailable;
-		int graphHealthScore;
 		int graphCommunities;
-		long graphEdges;
-		String graphTopHub = "No hub data";
-		String graphCandidateRank = "Not found among top graph hubs";
-		String lastOriginalEdge = "No original edge found";
-		String lastRecommendedEdge = "No recommendation edge found";
+		String graphRelation = "\u2014";
+		String graphExposure = "\u2014";
+		String graphCandidateRank = "\u2014";
+		String lastOriginalEdge = "No follow found";
+		String lastRecommendedEdge = "No adoption yet";
 		boolean recommendationMatchesGraphEdge;
 		boolean sameAsOriginalLabel;
-		String graphMessage = "Graph evidence was not available for this dataset yet.";
+		String graphMessage = "The run graph appears when the run's record is written, at the end of the run.";
 		String counterfactualSummary =
 				"Counterfactual evidence will appear after source rows are inspected.";
 
@@ -639,242 +639,75 @@ final class RecommendationEvidenceEngine
 		state.sharedTerms = shared;
 	}
 
+	/**
+	 * Reads the candidate's place in the run graph of the latest recorded
+	 * run: the target's observed follow and simulated adoption, whether the
+	 * candidate is inside the target's community, its exposure and PageRank.
+	 */
 	private static void readGraphEvidence(MutableReport state)
 	{
-		File importantStuff = new File("important-stuff");
-		File mappingFile = GraphAnalysisEngine.mappingFile(
-				importantStuff,
-				state.snapshot.datasetName);
-		File edgeFile = GraphAnalysisEngine.edgeFile(
-				importantStuff,
-				state.snapshot.datasetName,
-				state.snapshot.mode,
-				state.snapshot.algorithm);
-		if (!mappingFile.isFile() || !edgeFile.isFile())
+		RunGraphRecord.Loaded loaded = RunGraphRecord.latest();
+		RunGraph graph = loaded == null ? null : loaded.graph;
+		int target = graph == null ? -1 : graph.indexOf(state.event.targetUser);
+		if (target < 0 || !graph.isTarget(target))
 		{
-			state.graphMessage = "Graph artifacts were not found for this dataset/mode yet.";
 			return;
 		}
-		try
+		RunGraphAnalysis analysis = loaded.analysis;
+		state.graphAvailable = true;
+		state.graphCommunities = graph.communityCount();
+		int followee = graph.followeeOf(target);
+		state.lastOriginalEdge = followee < 0 ? "unknown account" : graph.name(followee);
+		RunGraph.Edge adoption = graph.adoptionOf(target);
+		state.lastRecommendedEdge = adoption == null ? "no adoption" : graph.name(adoption.target);
+		Boolean adoptedInside = adoption == null ? null : graph.inside(adoption);
+		state.sameAsOriginalLabel = adoptedInside != null && adoptedInside.booleanValue();
+		int candidate = graph.indexOf(state.selected.name);
+		state.recommendationMatchesGraphEdge = adoption != null && candidate == adoption.target;
+		Boolean inside = null;
+		for (RunGraph.Edge edge : graph.recommendationsOf(target))
 		{
-			GraphAnalysisEngine.Analysis analysis =
-					GraphAnalysisEngine.analyze(mappingFile, edgeFile);
-			if (!analysis.available)
+			if (edge.target == candidate)
 			{
-				state.graphMessage = "Graph analysis was unavailable for the current artifacts.";
-				return;
-			}
-			state.graphAvailable = true;
-			state.graphHealthScore = analysis.healthScore;
-			state.graphCommunities = analysis.estimatedCommunityCount;
-			state.graphEdges = analysis.validEdgeCount;
-			if (!analysis.topIncomingNodes.isEmpty())
-			{
-				GraphAnalysisEngine.NodeScore hub = analysis.topIncomingNodes.get(0);
-				state.graphTopHub = hub.name + " (" + formatCount(hub.value) + " incoming)";
-			}
-			state.graphCandidateRank = candidateGraphRank(
-					state.selected.name,
-					analysis.topRecommendedTargets,
-					analysis.topIncomingNodes);
-			GraphPair pair = lastGraphPairForTarget(
-					mappingFile,
-					edgeFile,
-					state.event.targetUser);
-			if (pair != null)
-			{
-				state.lastOriginalEdge = pair.originalName;
-				state.lastRecommendedEdge = pair.recommendedName;
-				state.sameAsOriginalLabel = sameName(pair.originalName, pair.recommendedName);
-				state.recommendationMatchesGraphEdge =
-						sameName(pair.recommendedName, state.selected.name);
-			}
-			state.graphMessage = graphMessage(state, analysis);
-		}
-		catch (IOException exception)
-		{
-			state.graphMessage = "Graph evidence could not be read: " + exception.getMessage();
-			state.warnings.add(state.graphMessage);
-		}
-	}
-
-	private static GraphPair lastGraphPairForTarget(
-			File mappingFile,
-			File edgeFile,
-			String targetUser) throws IOException
-	{
-		Mapping mapping = readMapping(mappingFile);
-		Integer sourceId = mapping.idsByName.get(targetUser);
-		if (sourceId == null)
-		{
-			sourceId = findCaseInsensitive(mapping.idsByName, targetUser);
-		}
-		if (sourceId == null)
-		{
-			return null;
-		}
-		GraphPair last = null;
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-				new FileInputStream(edgeFile), StandardCharsets.UTF_8), 128 * 1024))
-		{
-			String line;
-			int pairSource = -1;
-			int pairOriginal = -1;
-			long validIndex = 0L;
-			while ((line = reader.readLine()) != null)
-			{
-				String[] fields = line.trim().split("\\s+");
-				if (fields.length != 2)
-				{
-					continue;
-				}
-				int source;
-				int target;
-				try
-				{
-					source = Integer.parseInt(fields[0]);
-					target = Integer.parseInt(fields[1]);
-				}
-				catch (NumberFormatException exception)
-				{
-					continue;
-				}
-				if (!mapping.namesById.containsKey(source)
-						|| !mapping.namesById.containsKey(target))
-				{
-					continue;
-				}
-				if (validIndex % 2L == 0L)
-				{
-					pairSource = source;
-					pairOriginal = target;
-				}
-				else if (source == pairSource && source == sourceId.intValue())
-				{
-					last = new GraphPair(
-							mapping.namesById.get(pairOriginal),
-							mapping.namesById.get(target));
-				}
-				validIndex++;
+				inside = graph.inside(edge);
 			}
 		}
-		return last;
-	}
-
-	private static Mapping readMapping(File mappingFile) throws IOException
-	{
-		Map<Integer,String> namesById = new LinkedHashMap<Integer,String>();
-		Map<String,Integer> idsByName = new LinkedHashMap<String,Integer>();
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-				new FileInputStream(mappingFile), StandardCharsets.UTF_8), 128 * 1024))
+		if (candidate >= 0)
 		{
-			String line;
-			while ((line = reader.readLine()) != null)
+			int community = graph.candidateType == RecommendationCandidateType.FOLLOWEE
+					? graph.anchoredCommunity(candidate) : graph.community(candidate);
+			state.graphRelation = inside == null ? (community < 0 ? "Unknown community" : "Outside the top-"
+					+ graph.cutoff) : inside.booleanValue() ? "Inside the community"
+							: "Bridges to " + graph.communityName(community);
+			int exposureRank = 1;
+			int candidates = 0;
+			for (int node = 0; node < graph.size(); node++)
 			{
-				String trimmed = line.trim();
-				if (trimmed.length() == 0)
+				if (graph.isCandidate(node))
 				{
-					continue;
-				}
-				String[] fields = trimmed.split("\\s+(?=\\d+$)", 2);
-				if (fields.length != 2)
-				{
-					continue;
-				}
-				try
-				{
-					int id = Integer.parseInt(fields[1].trim());
-					String name = fields[0].trim();
-					namesById.put(id, name);
-					idsByName.put(name, id);
-				}
-				catch (NumberFormatException ignored)
-				{
+					candidates++;
+					exposureRank += analysis.exposureByNode[node] > analysis.exposureByNode[candidate] ? 1 : 0;
 				}
 			}
-		}
-		return new Mapping(namesById, idsByName);
-	}
-
-	private static Integer findCaseInsensitive(Map<String,Integer> map, String key)
-	{
-		if (key == null)
-		{
-			return null;
-		}
-		for (Map.Entry<String,Integer> entry : map.entrySet())
-		{
-			if (sameName(entry.getKey(), key))
+			state.graphExposure = "Recommended to " + formatCount(analysis.recommendedIn[candidate])
+					+ (analysis.recommendedIn[candidate] == 1 ? " target" : " targets") + " (#" + exposureRank
+					+ " of " + formatCount(candidates) + ")";
+			int pageRankPosition = 1;
+			for (int node = 0; node < graph.size(); node++)
 			{
-				return entry.getValue();
+				pageRankPosition += analysis.pageRank[node] > analysis.pageRank[candidate] ? 1 : 0;
 			}
+			state.graphCandidateRank = "#" + pageRankPosition + " of " + formatCount(graph.size());
 		}
-		return null;
-	}
-
-	private static String candidateGraphRank(
-			String candidate,
-			List<GraphAnalysisEngine.NodeScore> recommended,
-			List<GraphAnalysisEngine.NodeScore> incoming)
-	{
-		String rank = rankIn(candidate, recommended, "recommended-output");
-		if (rank.length() > 0)
+		StringBuilder message = new StringBuilder();
+		message.append(state.event.targetUser).append(" follows ").append(state.lastOriginalEdge);
+		if (adoption != null)
 		{
-			return rank;
+			message.append(" and adopted ").append(state.lastRecommendedEdge).append(" (rank ").append(adoption.rank)
+					.append(", ").append(state.sameAsOriginalLabel ? "inside its community" : "a bridge").append(")");
 		}
-		rank = rankIn(candidate, incoming, "incoming hub");
-		return rank.length() == 0 ? "Not among the top graph nodes" : rank;
-	}
-
-	private static String rankIn(
-			String candidate,
-			List<GraphAnalysisEngine.NodeScore> scores,
-			String label)
-	{
-		for (int i = 0; i < scores.size(); i++)
-		{
-			GraphAnalysisEngine.NodeScore score = scores.get(i);
-			if (sameName(score.name, candidate))
-			{
-				return "#" + (i + 1) + " " + label + " with "
-						+ formatCount(score.value) + " edges";
-			}
-		}
-		return "";
-	}
-
-	private static String graphMessage(
-			MutableReport state,
-			GraphAnalysisEngine.Analysis analysis)
-	{
-		if (!state.graphAvailable)
-		{
-			return "Graph evidence is not available yet.";
-		}
-		StringBuilder builder = new StringBuilder();
-		builder.append("Graph has ")
-				.append(formatCount(analysis.validEdgeCount))
-				.append(" valid edges and ")
-				.append(formatCount(analysis.estimatedCommunityCount))
-				.append(" communities.");
-		if (state.lastRecommendedEdge.length() > 0
-				&& !"No recommendation edge found".equals(state.lastRecommendedEdge))
-		{
-			builder.append(" Last persisted edge for this target went from ")
-					.append(state.lastOriginalEdge)
-					.append(" to ")
-					.append(state.lastRecommendedEdge)
-					.append(".");
-		}
-		if (state.sameAsOriginalLabel)
-		{
-			builder.append(" The recommendation preserved the original label.");
-		}
-		else if (state.lastRecommendedEdge.length() > 0)
-		{
-			builder.append(" The graph side effect changed the target label.");
-		}
-		return builder.toString();
+		message.append(". This candidate: ").append(state.graphRelation.toLowerCase(Locale.US)).append('.');
+		state.graphMessage = message.toString();
 	}
 
 	private static DsmpRow parseRow(String line)
@@ -1084,18 +917,18 @@ final class RecommendationEvidenceEngine
 		}
 		if (state.graphAvailable)
 		{
-			builder.append(" In the graph, this recommendation ");
-			if (state.sameAsOriginalLabel)
+			builder.append(" In the run graph, ");
+			if (state.recommendationMatchesGraphEdge)
 			{
-				builder.append("kept the same original target.");
+				builder.append(state.event.targetUser).append(" adopted this recommendation, ")
+						.append(state.sameAsOriginalLabel ? "staying inside its community."
+								: "bridging to another community.");
 			}
 			else
 			{
-				builder.append("changed the persisted recommendation edge from ")
-						.append(state.lastOriginalEdge)
-						.append(" to ")
-						.append(state.lastRecommendedEdge)
-						.append(".");
+				builder.append(state.event.targetUser).append(" adopted ").append(state.lastRecommendedEdge)
+						.append(" instead; this candidate is ").append(state.graphRelation.toLowerCase(Locale.US))
+						.append('.');
 			}
 		}
 		if (state.event.status != RecommendationResultStatus.OK)
@@ -1592,32 +1425,6 @@ final class RecommendationEvidenceEngine
 			words.add(value);
 		}
 		return Collections.unmodifiableSet(words);
-	}
-
-	private static final class Mapping
-	{
-		final Map<Integer,String> namesById;
-		final Map<String,Integer> idsByName;
-
-		Mapping(Map<Integer,String> namesById, Map<String,Integer> idsByName)
-		{
-			this.namesById = namesById;
-			this.idsByName = idsByName;
-		}
-	}
-
-	private static final class GraphPair
-	{
-		final String originalName;
-		final String recommendedName;
-
-		GraphPair(String originalName, String recommendedName)
-		{
-			this.originalName = originalName == null
-					? "Unknown original" : originalName;
-			this.recommendedName = recommendedName == null
-					? "Unknown recommendation" : recommendedName;
-		}
 	}
 
 	private static final class RowContribution

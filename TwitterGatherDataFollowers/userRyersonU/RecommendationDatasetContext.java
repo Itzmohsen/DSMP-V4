@@ -1,30 +1,29 @@
 package TwitterGatherDataFollowers.userRyersonU;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * What the user agents need from the dataset to describe a recommendation in
+ * the legacy text outputs: each user's followee and the followed accounts.
+ */
 final class RecommendationDatasetContext
 {
 	private static final RecommendationDatasetContext EMPTY =
 			new RecommendationDatasetContext(
 					Collections.<String, String>emptyMap(),
-					Collections.<String>emptySet(),
-					Collections.<String>emptyList());
+					Collections.<String>emptySet());
 
 	private final Map<String, String> userFollowees;
 	private final Set<String> referenceUsers;
-	private final List<String> graphNodeNames;
 
 	RecommendationDatasetContext(
 			Map<String, String> userFollowees,
-			Collection<String> referenceUsers,
-			Collection<String> graphNodeNames)
+			Collection<String> referenceUsers)
 	{
 		this.userFollowees = Collections.unmodifiableMap(
 				new LinkedHashMap<String, String>(
@@ -36,11 +35,6 @@ final class RecommendationDatasetContext
 						referenceUsers == null
 								? Collections.<String>emptySet()
 								: referenceUsers));
-		this.graphNodeNames = Collections.unmodifiableList(
-				new ArrayList<String>(
-						graphNodeNames == null
-								? Collections.<String>emptyList()
-								: graphNodeNames));
 	}
 
 	static RecommendationDatasetContext empty()
@@ -48,6 +42,7 @@ final class RecommendationDatasetContext
 		return EMPTY;
 	}
 
+	/** The account a candidate stands for: a user's followee, or the account itself. */
 	String resolveFirstColumn(String identity)
 	{
 		if (identity == null || identity.length() == 0)
@@ -63,13 +58,8 @@ final class RecommendationDatasetContext
 		return referenceUsers.contains(identity) ? identity : null;
 	}
 
-	List<String> getGraphNodeNames()
+	boolean isEmpty()
 	{
-		return graphNodeNames;
-	}
-
-	boolean hasGraphNodeNames()
-	{
-		return !graphNodeNames.isEmpty();
+		return userFollowees.isEmpty() && referenceUsers.isEmpty();
 	}
 }

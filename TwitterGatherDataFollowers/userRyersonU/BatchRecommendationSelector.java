@@ -59,6 +59,24 @@ final class BatchRecommendationSelector {
 		return choiceCount - 1;
 	}
 
+	/**
+	 * The follow simulation's choice for one user: the index, in the user's
+	 * ranked list, of the recommendation the user follows, or -1 for an empty
+	 * list. The user is shown the first {@code cutoff} recommendations and
+	 * chooses as {@link #selectIndex} does, with a draw seeded by the user's
+	 * name: the same choice on every run, node split and machine, which the run
+	 * graph recomputes from the run's lists.
+	 */
+	static int adoptedIndex(String user, List<Double> rankedScores, int cutoff) {
+		int shown = Math.min(Math.max(0, cutoff), rankedScores == null ? 0 : rankedScores.size());
+		return shown == 0 ? -1 : selectIndex(rankedScores.subList(0, shown), adoptionRandom(user));
+	}
+
+	/** The random source of one user's follow choice. */
+	static Random adoptionRandom(String user) {
+		return new Random(SimulationSeeds.forName(user));
+	}
+
 	static void writeSelectedRecommendation(File outputFile, String selectedRecommendation) throws IOException {
 		if (outputFile == null) {
 			throw new IllegalArgumentException("outputFile must not be null");
