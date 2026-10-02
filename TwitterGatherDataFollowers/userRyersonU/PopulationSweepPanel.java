@@ -646,8 +646,8 @@ final class PopulationSweepPanel extends JPanel
 		JLabel title = label(
 				"Why only three algorithms?", AMBER, NebulaDesign.fontSemiBold(12f));
 		JLabel text = label(
-				"<html>Excluded because their current multi-node mathematics cannot guarantee one-node equivalence: "
-				+ "K-Means, MLP, Euclidean K-Means, and Common Neighbors. They remain unchanged in Simulator.</html>",
+				"<html>This benchmark runs outside JADE with its own engines for Similarity, SVM and Doc2Vec. "
+				+ "Every algorithm runs in the Simulator, where all nine give identical results on any node split.</html>",
 				MUTED,
 				NebulaDesign.fontBody(11f));
 		text.setVerticalAlignment(SwingConstants.TOP);

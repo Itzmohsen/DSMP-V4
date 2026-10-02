@@ -94,6 +94,44 @@ public final class RecommendationEvidenceStudioPanelSelfTest
 				}
 			}
 		});
+		//A newer run on the same targets replaces the delivered list and the explanation of the
+		//selected target (they once stayed from the previous run).
+		RunCorpus.remember("panel-run-2", corpusFile);
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				EvidenceExplainPage explain =
+						(EvidenceExplainPage)panel[0].page(RecommendationEvidenceStudioPanel.EXPLAIN);
+				RecommendationEvidenceEngine.MatchEvidence before = explain.selectedMatch();
+				require(before != null, "no recommendation was selected in the first run");
+				SimulatorHelpPanel.Snapshot snapshot = SimulatorHelpPanel.Snapshot.empty();
+				for (int u = 0; u < 4; u++)
+				{
+					double[] cosine = corpus.cosines(u);
+					List<Integer> order = order(cosine, u);
+					java.util.Collections.reverse(order);
+					List<RecommendationEvidenceEngine.MatchEvidence> matches =
+							new ArrayList<RecommendationEvidenceEngine.MatchEvidence>();
+					for (int rank = 1; rank <= 3; rank++)
+					{
+						int v = order.get(rank - 1).intValue();
+						matches.add(new RecommendationEvidenceEngine.MatchEvidence(rank, corpus.users[v],
+								String.format(java.util.Locale.US, "%.6f", Double.valueOf(cosine[v])), ""));
+					}
+					panel[0].recordRecommendation(snapshot, new RecommendationEvidenceEngine.RecommendationEvent(
+							"panel-run-2", corpus.users[u], RecommendationCandidateType.USER,
+							RecommendationResultStatus.OK, "Similarity", "", matches));
+				}
+				RecommendationEvidenceEngine.EvidenceRun second = panel[0].run();
+				require(second != null && "panel-run-2".equals(second.runId), "the studio did not follow the newer run");
+				RecommendationEvidenceEngine.MatchEvidence after = explain.selectedMatch();
+				require(after != null && after == second.event(corpus.users[0]).matches.get(0),
+						"the delivered list still shows the previous run after switching runs");
+				require(!after.name.equals(before.name),
+						"the second run's first recommendation should differ from the first run's");
+			}
+		});
 		requirePainted(empty[0], 40000, "empty state");
 		String[] names = {"explain", "run", "methods"};
 		for (int i = 0; i < names.length; i++)

@@ -2521,9 +2521,9 @@ final class SimulatorHelpPanel extends JPanel
 				};
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
 				return new String[] {
-						"profile users",
-						"fuse signals",
-						"ablate ranks"
+						"six learners",
+						"calibrated stack",
+						"rank by community"
 				};
 			default:
 				return new String[] {
@@ -2590,7 +2590,7 @@ final class SimulatorHelpPanel extends JPanel
 			case RecommendationModeSupport.DOC2VEC:
 				return "document-vector similarity";
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
-				return "fixed-weight text + graph + time score";
+				return "stacked community probability";
 			default:
 				return "legacy relationship score";
 		}

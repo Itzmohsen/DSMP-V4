@@ -88,6 +88,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 	/** This session's runs, newest last. */
 	private final LinkedHashMap<String,RecommendationEvidenceEngine.EvidenceRun> live =
 			new LinkedHashMap<String,RecommendationEvidenceEngine.EvidenceRun>();
+	/** When each of this session's runs delivered its first list, so the picker tells them apart. */
+	private final HashMap<String,String> liveStarted = new HashMap<String,String>();
 	private final HashMap<String,RecommendationEvidenceEngine.EvidenceRun> recorded =
 			new HashMap<String,RecommendationEvidenceEngine.EvidenceRun>();
 	private final HashMap<String,Object[]> context = new HashMap<String,Object[]>();
@@ -228,6 +230,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 							event.candidateType, safe.datasetName, RunCorpus.of(event.runId), null,
 							Math.max(1, safe.topRecommendations), variant);
 					live.put(event.runId, target);
+					liveStarted.put(event.runId, new SimpleDateFormat("HH:mm:ss", Locale.US).format(new java.util.Date()));
 				}
 				target.add(event);
 				refreshChoices();
@@ -351,7 +354,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		for (int i = liveIds.size() - 1; i >= 0; i--)
 		{
 			RecommendationEvidenceEngine.EvidenceRun session = live.get(liveIds.get(i));
-			next.add(new Choice(session.runId, null, "This session · " + session.algorithmName + " · "
+			String started = liveStarted.get(session.runId);
+			next.add(new Choice(session.runId, null, "This session"
+					+ (started == null ? "" : " " + started) + " · " + session.algorithmName + " · "
 					+ session.datasetName + " · " + session.size()
 					+ (session.size() == 1 ? " target" : " targets")));
 		}

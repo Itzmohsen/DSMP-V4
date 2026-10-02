@@ -144,7 +144,7 @@ final class EvidenceExplainPage extends RecommendationEvidenceStudioPanel.Page
 			removeAll();
 			add(content, BorderLayout.CENTER);
 		}
-		filter();
+		filter(!sameRun);
 		if (targets.getSelectedIndex() < 0 && !targetModel.isEmpty())
 		{
 			targets.setSelectedIndex(0);
@@ -172,6 +172,16 @@ final class EvidenceExplainPage extends RecommendationEvidenceStudioPanel.Page
 
 	private void filter()
 	{
+		filter(false);
+	}
+
+	/**
+	 * Lists the run's targets that match the search, keeping the selected
+	 * target. {@code newRun}: the run changed, so the kept target's delivered
+	 * list and explanation are rebuilt from the new run.
+	 */
+	private void filter(boolean newRun)
+	{
 		if (run == null)
 		{
 			return;
@@ -193,6 +203,10 @@ final class EvidenceExplainPage extends RecommendationEvidenceStudioPanel.Page
 			updating = true;
 			targets.setSelectedValue(selected, false);
 			updating = false;
+			if (newRun)
+			{
+				showMatches();
+			}
 		}
 		else if (!targetModel.isEmpty())
 		{
@@ -279,6 +293,12 @@ final class EvidenceExplainPage extends RecommendationEvidenceStudioPanel.Page
 	void renderNow(RecommendationEvidenceEngine.Explanation explanation)
 	{
 		render(explanation);
+	}
+
+	/** The recommendation selected in the delivered list (tests). */
+	RecommendationEvidenceEngine.MatchEvidence selectedMatch()
+	{
+		return matches.getSelectedValue();
 	}
 
 	private void render(RecommendationEvidenceEngine.Explanation x)
