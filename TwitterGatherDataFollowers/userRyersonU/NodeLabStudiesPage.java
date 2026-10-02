@@ -793,6 +793,19 @@ final class NodeLabStudiesPage extends NodeLabPanel.Page
 		}.execute();
 	}
 
+	/** Whether any cell of the study has a value for the measure. */
+	private static boolean hasData(StudyResult value, String measure)
+	{
+		for (StudyResult.CellSummary summary : value.summaries(measure))
+		{
+			if (summary.summary.n > 0)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private void showResult(final StudyResult value)
 	{
 		results.removeAll();
@@ -832,6 +845,19 @@ final class NodeLabStudiesPage extends NodeLabPanel.Page
 			}
 		});
 		card.action(reuse).action(folder);
+		//A measure no run produced (the main phase of an algorithm that runs none, such as K-Means)
+		//would leave every cell empty: open on the first measure the runs have.
+		if (!hasData(value, metric))
+		{
+			for (String[] candidate : StudyResult.METRICS)
+			{
+				if (hasData(value, candidate[0]))
+				{
+					metric = candidate[0];
+					break;
+				}
+			}
+		}
 		String[] labels = new String[StudyResult.METRICS.length];
 		int selected = 0;
 		for (int index = 0; index < labels.length; index++)
