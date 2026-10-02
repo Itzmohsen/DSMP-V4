@@ -19,6 +19,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -77,8 +78,41 @@ final class RunCorpus
 		void accept(Row row) throws IOException;
 	}
 
+	/** The corpus of each recent run (by run id), for the tools that explain a run after it ran. */
+	private static final LinkedHashMap<String,File> RUNS = new LinkedHashMap<String,File>()
+	{
+		private static final long serialVersionUID = 1L;
+
+		protected boolean removeEldestEntry(Map.Entry<String,File> eldest)
+		{
+			return size() > 64;
+		}
+	};
+
 	private RunCorpus()
 	{
+	}
+
+	/** Remembers the corpus a run wrote. */
+	static void remember(String runId, File corpus)
+	{
+		if (runId == null || corpus == null)
+		{
+			return;
+		}
+		synchronized (RUNS)
+		{
+			RUNS.put(runId, corpus);
+		}
+	}
+
+	/** The corpus of a run of this session, or null. */
+	static File of(String runId)
+	{
+		synchronized (RUNS)
+		{
+			return runId == null ? null : RUNS.get(runId);
+		}
 	}
 
 	/** Where corpora are kept, relative to the working directory. */

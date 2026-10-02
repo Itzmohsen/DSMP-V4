@@ -241,9 +241,11 @@ Every stochastic step is seeded, and the seed is printed in the run log.
   generated dataset, the choice among the top recommendations, the stratified
   target sample) is seeded by names or a fixed seed. It does not depend on
   thread order or the number of nodes.
-- **One corpus.** Doc2Vec and the temporal graph model read the run's
-  normalised corpus (`RunCorpus`), so every algorithm sees the same tweets
-  and words.
+- **One corpus.** Every run writes its normalised corpus (`RunCorpus`,
+  content-addressed under `.runtime/run-corpus`). Doc2Vec and the temporal graph
+  model read it, so every algorithm sees the same tweets and words, and
+  Evidence Studio explains recommendations with exactly the text the model
+  saw.
 - **The run graph** is deterministic: nodes are ordered by name, Leiden and
   every permutation test use fixed seeds, and the ForceAtlas2 layout starts
   from positions seeded by node name, so a run's communities, tests and
@@ -389,6 +391,68 @@ and the figure as SVG and PNG.
 
 `DSMP_V4_GRAPH.md` describes the graph, the measures, the layout, the files
 and their verification against NetworkX, scikit-learn and SciPy.
+
+## TGF Studio
+
+Temporal Graph Foundation (TGF) estimates the probability that a target
+follows each account of the run. It recommends accounts by that probability,
+and users by the probability of sharing the target's community. The model is a
+cross-fitted Super Learner over six learners, each seeing a different view of
+the run:
+- a text model;
+- label propagation over the text graph;
+- label propagation over the term-time graph, which links users who wrote the
+  same words in the same month;
+- an activity model;
+- two neighbour votes.
+
+A non-negative opinion pool stacks the six learners, so its probabilities are
+calibrated. Every target's prediction comes with a 90% conformal set and an
+exact explanation. A target's own follow is never read.
+
+The TGF Studio tab follows the newest TGF run, and any recorded TGF run can be
+opened. Its pages:
+- **Overview:** held-out accuracy against the largest community and chance,
+  calibration, coverage, the learners' weights, and every target.
+- **Targets:** each target's account probabilities and conformal set, the
+  exact log-odds split by learner, the words, users and months behind them,
+  each learner's ablation, the fewest words that would flip the prediction,
+  and the recommended users.
+- **Model:** the learners, a reliability diagram, conformal coverage, and the
+  confusion matrix with per-account precision and recall.
+- **Communities:** each community's activity by month and by hour, and its
+  distinctive words.
+- **Methods:** the algorithm, its guarantees and its references.
+
+Each TGF run record holds `tgf/report.json` (everything the studio shows) and
+`tgf/predictions.csv`. `DSMP_V4_TGF.md` describes the model, its validation
+and its measured quality.
+
+## Evidence Studio
+
+Evidence Studio explains why each recommendation was made, for every
+algorithm, in the runs of this session and in any recorded run. A
+recommendation is explained against a reference model recomputed from the
+run's own corpus:
+- **Exact** for Similarity and Common Neighbors, and for accounts recommended
+  by a user ranker. Here the reference is the algorithm's own scoring rule, and
+  the studio shows that it reproduces the delivered scores.
+- **Measured** for the other algorithms. The reference is shared vocabulary,
+  and its agreement with the algorithm's list is measured by rank-biased
+  overlap, overlap@k and Kendall's tau.
+
+For every recommendation, the studio shows:
+- each word's exact share of the score;
+- the effect of removing each word, and the fewest words whose removal costs
+  the recommendation its place;
+- why it beat its rival;
+- the tweets behind it, and the months in which both users wrote the decisive
+  words;
+- the ground truth, the run graph, and, on TGF runs, TGF's own explanation.
+
+The **Run** page measures how well the evidence explains the whole run, and
+how relevance falls with rank against chance. `DSMP_V4_EVIDENCE.md` describes
+the methods.
 
 ## Credentials
 

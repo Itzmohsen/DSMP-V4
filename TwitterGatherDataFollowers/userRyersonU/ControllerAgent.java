@@ -2150,11 +2150,13 @@ public class ControllerAgent extends GuiAgent {
 						usersRec,
 						graphGenerationEnabled,
 						readFrom == FROM_TEXT ? textFile : null);
-				//Algorithms that read text outside the agents (Doc2Vec's worker, the
-				//temporal graph model) read the run's canonical corpus: the same
-				//users, tweets and tokens every other algorithm receives.
-				if (algorithmRec == Doc2Vec || algorithmRec == TEMPORAL_GRAPH_FOUNDATION)
+				//Every run writes its canonical corpus: the users, tweets and tokens
+				//every algorithm receives. Doc2Vec's worker and the temporal graph
+				//model read their text from it, and Evidence Studio explains any
+				//recommendation with exactly the text the model saw. The file is
+				//content-addressed, so an unchanged corpus is written once.
 				{
+					boolean needsCorpus = algorithmRec == Doc2Vec || algorithmRec == TEMPORAL_GRAPH_FOUNDATION;
 					try
 					{
 						java.util.LinkedHashMap<String,java.util.List<Tweet>> runTweets =
@@ -2173,13 +2175,24 @@ public class ControllerAgent extends GuiAgent {
 								stopWordFlag_temp == STOP_WORDS,
 								STOP_WORD_SET);
 						recommendationConfig = recommendationConfig.withRunCorpus(runCorpus);
+						RunCorpus.remember(currentRecommendationRunId, runCorpus);
+						SchedulingRunContext corpusContext = SchedulingRuntime.get(currentRecommendationRunId);
+						if (corpusContext != null)
+						{
+							corpusContext.recorder().property("corpus", runCorpus.getName());
+						}
 						System.out.println("Run corpus: " + runCorpus.getPath());
 					}
 					catch (IOException corpusFailure)
 					{
-						failInitialization("Could not write the run's normalised corpus: "
-								+ corpusFailure.getMessage());
-						return;
+						if (needsCorpus)
+						{
+							failInitialization("Could not write the run's normalised corpus: "
+									+ corpusFailure.getMessage());
+							return;
+						}
+						System.err.println("Could not write the run's normalised corpus (Evidence Studio will have no"
+								+ " text evidence for this run): " + corpusFailure.getMessage());
 					}
 				}
 

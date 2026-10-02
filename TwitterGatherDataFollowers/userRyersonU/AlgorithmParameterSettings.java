@@ -466,7 +466,7 @@ final class AlgorithmParameterSettings implements Serializable
 						+ effective.getSimilarityLocalTopMultiplier() + "x, min "
 						+ effective.getSimilarityLocalTopMinimum();
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
-				return "Fixed TGF profile, local buffer "
+				return "Super Learner over 6 learners, 5-fold cross-fitting, users kept "
 						+ effective.getSimilarityLocalTopMultiplier() + "x, min "
 						+ effective.getSimilarityLocalTopMinimum();
 			case RecommendationModeSupport.K_MEANS:

@@ -1,11 +1,6 @@
 package TwitterGatherDataFollowers.userRyersonU;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -13,71 +8,55 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Random;
-import java.util.Set;
 import java.util.TimeZone;
 import java.util.TreeMap;
 
 /**
- * The Temporal Graph Foundation (TGF) recommender: a learned fusion of three
- * label-free similarity signals between a target user and a candidate user.
+ * The Temporal Graph Foundation (TGF) recommender.
  *
- * <ol>
- * <li><b>Text</b>: cosine similarity of the users' TF-IDF vectors.</li>
- * <li><b>Graph</b>: mass diffusion on the user-term bipartite graph (Zhou et
- *     al., 2007): a unit of resource leaves the target, spreads over its terms in
- *     proportion to their TF-IDF weight and from each term to the users that
- *     use it in proportion to their weight on it; shared rare terms carry more
- *     resource than shared common ones. Normalised by the target's best
- *     candidate.</li>
- * <li><b>Time</b>: temporal co-activity, the cosine similarity of the two
- *     users' activity histograms over the corpus's dated span (UTC). Without
- *     at least two distinct timestamps the signal is unavailable; row order in
- *     a file is never used as a clock.</li>
- * </ol>
+ * For a target user TGF estimates the probability that the target belongs to
+ * each community of the run (the users who follow one account), then
  *
- * <b>Fusion.</b> P(candidate shares the target's community | signals) is
- * modelled by an L2-regularised logistic regression fitted by iteratively
- * reweighted least squares on pairs of labelled users that are <i>not</i>
- * recommendation targets: for each sampled anchor, its same-followee users
- * are positives and an equal number of other users negatives. The intercept is
- * then corrected from the balanced sample to the true base rate of same-community
- * pairs, so the fused score is a calibrated probability. A target's own
- * followee is never read when it is scored: it only grades the result
- * afterwards (relevant rank, NDCG, ablation lenses).
+ * <ul>
+ * <li>recommends followee accounts by that probability, and</li>
+ * <li>recommends users by the probability of sharing the target's community:
+ *     p(account of v) for a user v whose follow is known, and
+ *     sum_c p(c) q_v(c) for another target, whose follow is hidden.</li>
+ * </ul>
  *
- * <b>Uncertainty.</b> The model is refitted on bootstrap resamples of the
- * anchors (a cluster bootstrap, since one anchor's pairs are correlated); each
- * candidate gets the 5-95% interval of its probability and the share of
- * refits that keep it in the target's top ten. A held-out 20% of the anchors
- * gives the model's pair AUC.
+ * The probabilities come from {@link TgfModel}: a cross-fitted Super Learner
+ * over text, graph and temporal learners whose stack is a non-negative
+ * logarithmic opinion pool fitted by maximum likelihood, with split-conformal
+ * prediction sets. A target's own follow is never read: it only grades the
+ * result.
  *
- * Everything is deterministic: anchors, pairs, bootstrap resamples and folds
- * come from seeded generators, ties break by user name, and the prepared
- * state is computed once per run from the whole corpus, so the result is the
- * same for every node count.
+ * Every recommendation carries an exact explanation: the log-odds of the
+ * predicted community against the runner-up split by learner, the terms of the
+ * text model behind them, the labelled users whose labels reached the target
+ * through each graph (label propagation is linear in the labels, so each
+ * user's influence is exact), the months that set the activity evidence, each
+ * learner's ablation and the fewest terms whose removal changes the
+ * prediction.
+ *
+ * The model is fitted once per run from the whole corpus (the prepare step,
+ * computed by one node and shared), so the results are the same for every
+ * node count; each target is then scored and explained independently.
  */
 final class TemporalGraphFoundationModelSupport
 {
-	private static final int DETAIL_TERM_LIMIT = 4;
-	private static final int TIMELINE_FRAME_COUNT = 12;
-	private static final int ACTIVITY_BINS = 24;
-	private static final int MAX_ANCHORS = 200;
-	private static final int PAIRS_PER_CLASS = 10;
-	private static final int BOOTSTRAP_FITS = 30;
-	private static final int STABILITY_TOP = 10;
-	private static final double L2_PENALTY = 1.0;
-	private static final long SEED = 0x7E6F0A11L;
-	private static final String[] SIGNALS = {"text", "graph", "time"};
-	private static final int TEXT = 0;
-	private static final int GRAPH = 1;
-	private static final int TIME = 2;
+	static final String FORMAT = "dsmp-tgf/1";
+	private static final int TERM_EVIDENCE = 10;
+	private static final int NEIGHBOUR_EVIDENCE = 8;
+	private static final int COUNTERFACTUAL_TERMS = 25;
+	private static final int RECOMMENDATION_EVIDENCE = 25;
+	private static final int COMMUNITY_TERMS = 12;
+	/** Weight of the text similarity in a user's delivered score (it only orders users of equal probability). */
+	static final double TIE_BREAK = 1e-6;
 
 	private TemporalGraphFoundationModelSupport()
 	{
@@ -86,89 +65,83 @@ final class TemporalGraphFoundationModelSupport
 	// =================================================================== state
 
 	/**
-	 * Everything the model needs that does not depend on the target: user
-	 * profiles, the diffusion index, activity histograms and the fitted
-	 * fusion. Built once per run from the whole corpus and then only read, so
-	 * targets can be scored independently, in any order and on any node.
+	 * Everything that does not depend on the target: the features, the fitted
+	 * model and the model card. Built once per run and then only read.
 	 */
 	static final class Prepared implements PayloadSize.Sized
 	{
 		private final Input input;
-		private final List<UserProfile> users;
-		private final LinkedHashMap<String,UserProfile> profiles;
-		private final DiffusionIndex diffusion;
-		private final TemporalCorpus corpus;
-		private final FusionModel model;
+		private final TgfFeatures features;
+		private final TgfModel model;
+		private final LinkedHashMap<String,Object> card;
 		private volatile long payloadBytes = -1L;
 
-		/**
-		 * Wire size of the prepared state every node needs: each profile (name,
-		 * followee, TF-IDF vector, activity histogram) and the fitted model.
-		 */
+		private Prepared(Input input, TgfFeatures features, TgfModel model, LinkedHashMap<String,Object> card)
+		{
+			this.input = input;
+			this.features = features;
+			this.model = model;
+			this.card = card;
+		}
+
+		/** Wire size of the shared state: features, graphs, learners and posteriors. */
 		public long payloadBytes()
 		{
 			long cached = payloadBytes;
-			if (cached >= 0L)
+			if (cached < 0L)
 			{
-				return cached;
+				cached = model.payloadBytes() + PayloadSize.of(card);
+				payloadBytes = cached;
 			}
-			long total = 64L;
-			for (UserProfile profile : users)
-			{
-				total += PayloadSize.string(profile.name) + PayloadSize.string(profile.followee)
-						+ PayloadSize.sparseVector(profile.tfidf) + 8L * ACTIVITY_BINS + 32L;
-			}
-			total += 8L * 4L * (BOOTSTRAP_FITS + 1);
-			payloadBytes = total;
-			return total;
-		}
-
-		private Prepared(Input input, List<UserProfile> users, DiffusionIndex diffusion,
-				TemporalCorpus corpus, FusionModel model)
-		{
-			this.input = input;
-			this.users = users;
-			this.profiles = new LinkedHashMap<String,UserProfile>();
-			for (UserProfile profile : users)
-			{
-				profiles.put(profile.name, profile);
-			}
-			this.diffusion = diffusion;
-			this.corpus = corpus;
-			this.model = model;
+			return cached;
 		}
 
 		boolean isEmpty()
 		{
-			return users.isEmpty();
+			return features.size() == 0;
 		}
 
 		boolean hasProfile(String user)
 		{
-			return profiles.containsKey(user);
+			return features.index.containsKey(user);
 		}
 
 		int profileCount()
 		{
-			return users.size();
+			return features.size();
+		}
+
+		TgfModel model()
+		{
+			return model;
+		}
+
+		Map<String,Object> card()
+		{
+			return card;
 		}
 	}
 
-	/** One target's scored candidates, kept rows and report. */
-	static final class TargetOutcome
+	/** One target's ranked users, ranked accounts and explanation. */
+	static final class TargetOutcome implements PayloadSize.Sized
 	{
 		private final String target;
 		private final TreeMap<String,Double> scores;
 		private final TreeMap<String,String> details;
-		private final TargetReport report;
+		private final TreeMap<String,Double> accounts;
+		private final TreeMap<String,String> accountDetails;
+		private final LinkedHashMap<String,Object> report;
 		private final int scoredPairs;
 
 		private TargetOutcome(String target, TreeMap<String,Double> scores, TreeMap<String,String> details,
-				TargetReport report, int scoredPairs)
+				TreeMap<String,Double> accounts, TreeMap<String,String> accountDetails,
+				LinkedHashMap<String,Object> report, int scoredPairs)
 		{
 			this.target = target;
 			this.scores = scores;
 			this.details = details;
+			this.accounts = accounts;
+			this.accountDetails = accountDetails;
 			this.report = report;
 			this.scoredPairs = scoredPairs;
 		}
@@ -178,14 +151,42 @@ final class TemporalGraphFoundationModelSupport
 			return target;
 		}
 
+		/** Kept candidate users and their probability of sharing the target's community. */
 		TreeMap<String,Double> getScores()
 		{
 			return scores;
 		}
 
+		TreeMap<String,String> getDetails()
+		{
+			return details;
+		}
+
+		/** Every account and the probability that the target follows it. */
+		TreeMap<String,Double> getAccountScores()
+		{
+			return accounts;
+		}
+
+		TreeMap<String,String> getAccountDetails()
+		{
+			return accountDetails;
+		}
+
+		Map<String,Object> getReport()
+		{
+			return report;
+		}
+
 		int getScoredPairs()
 		{
 			return scoredPairs;
+		}
+
+		public long payloadBytes()
+		{
+			return PayloadSize.string(target) + PayloadSize.of(scores) + PayloadSize.of(details)
+					+ PayloadSize.of(accounts) + PayloadSize.of(accountDetails) + PayloadSize.of(report) + 4L;
 		}
 	}
 
@@ -194,15 +195,10 @@ final class TemporalGraphFoundationModelSupport
 	static Result score(Input input)
 	{
 		Prepared prepared = prepare(input);
-		if (prepared.isEmpty() || prepared.input.targetUsers.isEmpty())
-		{
-			return Result.empty(prepared.input.runId, prepared.input.datasetFile,
-					"No usable user profiles were available.");
-		}
 		ArrayList<TargetOutcome> outcomes = new ArrayList<TargetOutcome>();
-		for (String targetUser : prepared.input.targetUsers)
+		for (String target : prepared.input.targetUsers)
 		{
-			TargetOutcome outcome = scoreTarget(prepared, targetUser);
+			TargetOutcome outcome = scoreTarget(prepared, target);
 			if (outcome != null)
 			{
 				outcomes.add(outcome);
@@ -214,1515 +210,1137 @@ final class TemporalGraphFoundationModelSupport
 	static Prepared prepare(Input input)
 	{
 		Input safe = input == null ? Input.empty() : input;
-		List<UserProfile> users = buildProfiles(safe);
-		DiffusionIndex diffusion = new DiffusionIndex(users);
-		TemporalCorpus corpus = readActivity(safe.datasetFile, users);
-		HashSet<String> targets = new HashSet<String>(safe.targetUsers);
-		FusionModel model = FusionModel.fit(users, targets, diffusion, corpus);
-		return new Prepared(safe, users, diffusion, corpus, model);
+		TreeMap<String,String> followees = new TreeMap<String,String>();
+		followees.putAll(safe.userFollowees);
+		followees.putAll(safe.datasetUserFollowees);
+		ArrayList<String> users = new ArrayList<String>();
+		for (Map.Entry<String,? extends Map<String,Double>> entry : safe.tfidfDocuments.entrySet())
+		{
+			if (entry.getKey() != null && entry.getValue() != null && !entry.getValue().isEmpty())
+			{
+				users.add(entry.getKey());
+			}
+		}
+		TgfFeatures features = TgfFeatures.build(safe.datasetFile, users, safe.tfidfDocuments);
+		TgfModel model = TgfModel.fit(features, followees, new HashSet<String>(safe.targetUsers));
+		return new Prepared(safe, features, model, modelCard(safe, features, model));
 	}
 
 	/**
-	 * Scores {@code targetUser} against every other user and keeps the top
-	 * {@code localResultLimit}. Returns null when the target has no profile.
-	 * Reads the prepared state only; the target's followee is not used.
+	 * Scores {@code targetUser}: ranks every other user and every account and
+	 * explains the result. Reads the prepared state only; null when the target
+	 * has no profile.
 	 */
 	static TargetOutcome scoreTarget(Prepared prepared, String targetUser)
 	{
-		UserProfile target = prepared.profiles.get(targetUser);
-		if (target == null)
+		Integer position = prepared.features.index.get(targetUser);
+		if (position == null)
 		{
 			return null;
 		}
-		double[][] features = prepared.model.features(target, prepared.users, prepared.diffusion, prepared.corpus);
-		List<CandidateScore> all = new ArrayList<CandidateScore>();
-		for (int index = 0; index < prepared.users.size(); index++)
+		TgfFeatures features = prepared.features;
+		TgfModel model = prepared.model;
+		final int u = position.intValue();
+		int n = features.size();
+		final double[] similarity = similarities(features, u);
+		final double[] together = new double[n];
+		double[] p = model.posterior[u];
+		for (int v = 0; v < n; v++)
 		{
-			if ((index & 63) == 0)
+			if ((v & 1023) == 0)
 			{
 				//A revoked unit (drain, crash) stops here.
 				UnitCancellation.check();
 			}
-			UserProfile candidate = prepared.users.get(index);
-			if (candidate == target)
+			if (v == u)
 			{
 				continue;
 			}
-			CandidateScore score = new CandidateScore(target, candidate);
-			score.text = features[index][TEXT];
-			score.graph = features[index][GRAPH];
-			score.time = features[index][TIME];
-			score.finalScore = prepared.model.probability(features[index]);
-			all.add(score);
+			together[v] = model.supervised ? sameCommunity(model, u, v) : similarity[v];
 		}
-		Collections.sort(all, CandidateScore.FINAL_ORDER);
-		for (int i = 0; i < all.size(); i++)
+		Integer[] order = new Integer[n - 1];
+		int m = 0;
+		for (int v = 0; v < n; v++)
 		{
-			all.get(i).rank = i + 1;
-		}
-		List<BenchmarkRow> lenses = benchmarkRows(target, all, prepared.corpus.available);
-		int keep = prepared.input.localResultLimit <= 0
-				? all.size() : Math.min(prepared.input.localResultLimit, all.size());
-		List<CandidateScore> kept = new ArrayList<CandidateScore>(all.subList(0, keep));
-		explain(target, kept, all, prepared);
-		TreeMap<String,Double> rowScores = new TreeMap<String,Double>();
-		TreeMap<String,String> rowDetails = new TreeMap<String,String>();
-		for (CandidateScore score : kept)
-		{
-			if (score.finalScore > 0.0 && Double.isFinite(score.finalScore))
+			if (v != u)
 			{
-				rowScores.put(score.candidate.name, score.finalScore);
-				rowDetails.put(score.candidate.name, detailFor(score));
+				order[m++] = Integer.valueOf(v);
 			}
 		}
-		return new TargetOutcome(target.name, rowScores, rowDetails,
-				TargetReport.from(target, kept, all, lenses, prepared.corpus), all.size());
+		final String[] names = features.users;
+		Arrays.sort(order, new Comparator<Integer>()
+		{
+			public int compare(Integer a, Integer b)
+			{
+				int byScore = Double.compare(together[b.intValue()], together[a.intValue()]);
+				if (byScore != 0)
+				{
+					return byScore;
+				}
+				int bySimilarity = Double.compare(similarity[b.intValue()], similarity[a.intValue()]);
+				return bySimilarity != 0 ? bySimilarity : names[a.intValue()].compareTo(names[b.intValue()]);
+			}
+		});
+		int keep = prepared.input.localResultLimit <= 0 ? order.length
+				: Math.min(prepared.input.localResultLimit, order.length);
+		TreeMap<String,Double> scores = new TreeMap<String,Double>();
+		TreeMap<String,String> details = new TreeMap<String,String>();
+		for (int i = 0; i < keep; i++)
+		{
+			int v = order[i].intValue();
+			double score = together[v];
+			if (!(score > 0.0) || !Double.isFinite(score))
+			{
+				continue;
+			}
+			//Users of one community share a probability; the merge breaks score ties
+			//by name, so the delivered score carries the text similarity as the
+			//tie-break, 10^-6 below the probability's resolution.
+			scores.put(names[v], Double.valueOf(model.supervised ? score + TIE_BREAK * similarity[v] : score));
+			details.put(names[v], detail(model, features, u, v, score, similarity[v]));
+		}
+		TreeMap<String,Double> accounts = new TreeMap<String,Double>();
+		if (model.supervised)
+		{
+			for (int c = 0; c < model.classCount(); c++)
+			{
+				accounts.put(model.classes[c], Double.valueOf(p[c]));
+			}
+		}
+		else
+		{
+			//Without a model, an account scores its most similar follower (as user rankers project).
+			for (int v = 0; v < n; v++)
+			{
+				if (v != u && model.label[v] >= 0 && similarity[v] > 0.0)
+				{
+					String account = model.classes[model.label[v]];
+					Double old = accounts.get(account);
+					if (old == null || similarity[v] > old.doubleValue())
+					{
+						accounts.put(account, Double.valueOf(similarity[v]));
+					}
+				}
+			}
+		}
+		TreeMap<String,String> accountDetails = new TreeMap<String,String>();
+		if (model.supervised)
+		{
+			boolean[] set = model.predictionSet(p);
+			int[] ranked = rankClasses(p);
+			for (int i = 0; i < ranked.length; i++)
+			{
+				int c = ranked[i];
+				accountDetails.put(model.classes[c], "P(follows) " + fixed(p[c]) + " | rank " + (i + 1) + " of "
+						+ ranked.length + " | " + (set[c] ? "inside" : "outside") + " the "
+						+ (int)Math.round(100 * (1 - TgfModel.CONFORMAL_ALPHA)) + "% conformal set");
+			}
+		}
+		LinkedHashMap<String,Object> report = explain(prepared, u, order, together, similarity);
+		return new TargetOutcome(targetUser, scores, details, accounts, accountDetails, report, n - 1);
 	}
 
-	/** The run's result from the outcomes of its targets, in target order. */
+	/** The run's result from its targets' outcomes, in target order. */
 	static Result assemble(Prepared prepared, List<TargetOutcome> outcomes)
 	{
-		TreeMap<String,TreeMap<String,Double>> scoreRows = new TreeMap<String,TreeMap<String,Double>>();
-		TreeMap<String,TreeMap<String,String>> detailRows = new TreeMap<String,TreeMap<String,String>>();
-		LinkedHashMap<String,TargetReport> reports = new LinkedHashMap<String,TargetReport>();
+		TreeMap<String,TreeMap<String,Double>> scores = new TreeMap<String,TreeMap<String,Double>>();
+		TreeMap<String,TreeMap<String,String>> details = new TreeMap<String,TreeMap<String,String>>();
+		TreeMap<String,TreeMap<String,Double>> accounts = new TreeMap<String,TreeMap<String,Double>>();
+		TreeMap<String,TreeMap<String,String>> accountDetails = new TreeMap<String,TreeMap<String,String>>();
+		ArrayList<Object> targets = new ArrayList<Object>();
 		int scoredPairs = 0;
+		int graded = 0;
+		int correct = 0;
+		int covered = 0;
 		for (TargetOutcome outcome : outcomes)
 		{
 			if (outcome == null)
 			{
 				continue;
 			}
-			scoreRows.put(outcome.target, outcome.scores);
-			detailRows.put(outcome.target, outcome.details);
-			reports.put(outcome.target, outcome.report);
+			scores.put(outcome.target, outcome.scores);
+			details.put(outcome.target, outcome.details);
+			accounts.put(outcome.target, outcome.accounts);
+			accountDetails.put(outcome.target, outcome.accountDetails);
+			targets.add(outcome.report);
 			scoredPairs += outcome.scoredPairs;
+			Object isCorrect = outcome.report.get("correct");
+			if (isCorrect instanceof Boolean)
+			{
+				graded++;
+				correct += ((Boolean)isCorrect).booleanValue() ? 1 : 0;
+				covered += Boolean.TRUE.equals(outcome.report.get("inSet")) ? 1 : 0;
+			}
 		}
-		String summary = "Temporal Graph Foundation scored " + scoredPairs
-				+ " target-candidate pairs. " + prepared.model.describe();
-		ResearchSummary research = ResearchSummary.from(reports.values(), scoredPairs, prepared.corpus,
-				prepared.model);
+		LinkedHashMap<String,Object> json = new LinkedHashMap<String,Object>(prepared.card);
+		LinkedHashMap<String,Object> run = new LinkedHashMap<String,Object>();
+		run.put("targets", Integer.valueOf(targets.size()));
+		run.put("scoredPairs", Integer.valueOf(scoredPairs));
+		run.put("graded", Integer.valueOf(graded));
+		run.put("correct", Integer.valueOf(correct));
+		run.put("covered", Integer.valueOf(covered));
+		json.put("run", run);
+		json.put("targets", targets);
+		TgfModel model = prepared.model;
+		String summary = "Temporal Graph Foundation scored " + scoredPairs + " target-candidate pairs. "
+				+ (model.supervised ? String.format(Locale.US,
+						"Super Learner over %d learners: cross-validated accuracy %.3f (majority %.3f), log-loss %.3f,"
+								+ " %d%% conformal sets cover %.3f with %.2f accounts on average.",
+						activeCount(model), model.validation.accuracy, model.validation.majorityAccuracy,
+						model.validation.logLoss, (int)Math.round(100 * (1 - TgfModel.CONFORMAL_ALPHA)),
+						model.validation.conformalCoverage, model.validation.conformalSetSize)
+						: model.note);
 		return new Result(prepared.input.runId, prepared.input.datasetFile, summary,
-				prepared.corpus.rowsScanned, prepared.corpus.datedRows, 0,
-				scoreRows, detailRows, reports, research);
+				prepared.features.rowsScanned, prepared.features.datedRows, scores, details, accounts, accountDetails,
+				json);
 	}
 
-	// ================================================================ profiles
+	// ============================================================== ranking
 
-	private static List<UserProfile> buildProfiles(Input input)
+	/** Cosine of the target's text with every user's. */
+	private static double[] similarities(TgfFeatures features, int u)
 	{
-		ArrayList<UserProfile> users = new ArrayList<UserProfile>();
-		for (Map.Entry<String,? extends Map<String,Double>> entry : new TreeMap<String,Map<String,Double>>(
-				castVectors(input.tfidfDocuments)).entrySet())
+		TgfFeatures.Sparse text = features.text;
+		double[] dense = new double[text.columns];
+		for (int p = text.pointer[u]; p < text.pointer[u + 1]; p++)
 		{
-			if (entry.getKey() == null || entry.getValue() == null || entry.getValue().isEmpty())
+			dense[text.column[p]] = text.value[p];
+		}
+		double[] similarity = new double[features.size()];
+		for (int v = 0; v < features.size(); v++)
+		{
+			similarity[v] = v == u ? 0.0 : Math.max(0.0, text.dot(v, dense));
+		}
+		return similarity;
+	}
+
+	/** P(v shares u's community): p_u(account of v), or sum_c p_u(c) p_v(c) when v's follow is hidden. */
+	private static double sameCommunity(TgfModel model, int u, int v)
+	{
+		double[] p = model.posterior[u];
+		if (model.label[v] >= 0)
+		{
+			return p[model.label[v]];
+		}
+		double total = 0.0;
+		double[] q = model.posterior[v];
+		for (int c = 0; c < p.length; c++)
+		{
+			total += p[c] * q[c];
+		}
+		return total;
+	}
+
+	private static String detail(TgfModel model, TgfFeatures features, int u, int v, double score, double similarity)
+	{
+		String community = model.label[v] >= 0 ? "follows " + model.classes[model.label[v]] : "follow hidden (a target)";
+		List<String> shared = sharedTerms(features, u, v, 3);
+		return (model.supervised ? "P(same community) " + fixed(score) : "text cosine " + fixed(score)) + " | "
+				+ community + " | text cosine " + fixed(similarity)
+				+ (shared.isEmpty() ? "" : " | shares " + join(shared));
+	}
+
+	// ========================================================== explanation
+
+	private static LinkedHashMap<String,Object> explain(Prepared prepared, int u, Integer[] order, double[] together,
+			double[] similarity)
+	{
+		TgfFeatures features = prepared.features;
+		TgfModel model = prepared.model;
+		LinkedHashMap<String,Object> report = new LinkedHashMap<String,Object>();
+		report.put("user", features.users[u]);
+		report.put("truth", model.truth[u] >= 0 ? model.classes[model.truth[u]] : null);
+		report.put("tweets", Integer.valueOf(features.tweets[u]));
+		report.put("datedTweets", Integer.valueOf(features.datedTweets[u]));
+		report.put("first", features.datedTweets[u] > 0 ? day(features.firstTime[u]) : null);
+		report.put("last", features.datedTweets[u] > 0 ? day(features.lastTime[u]) : null);
+		report.put("terms", Integer.valueOf(features.text.pointer[u + 1] - features.text.pointer[u]));
+		int classes = model.classCount();
+		if (!model.supervised || classes < 2)
+		{
+			report.put("supervised", Boolean.FALSE);
+			report.put("headline", "Ranked by text similarity: " + model.note);
+			report.put("recommendations", recommendations(model, features, u, order, together, similarity));
+			return report;
+		}
+		report.put("supervised", Boolean.TRUE);
+		double[] p = model.posterior[u];
+		int[] ranked = rankClasses(p);
+		int best = ranked[0];
+		int second = ranked[1];
+		boolean[] set = model.predictionSet(p);
+		report.put("posterior", toList(p));
+		report.put("predicted", model.classes[best]);
+		report.put("runnerUp", model.classes[second]);
+		report.put("probability", Double.valueOf(p[best]));
+		report.put("margin", Double.valueOf(p[best] - p[second]));
+		report.put("entropy", Double.valueOf(entropy(p)));
+		ArrayList<Object> setNames = new ArrayList<Object>();
+		for (int c : ranked)
+		{
+			if (set[c])
+			{
+				setNames.add(model.classes[c]);
+			}
+		}
+		report.put("set", setNames);
+		if (model.truth[u] >= 0)
+		{
+			report.put("correct", Boolean.valueOf(model.truth[u] == best));
+			report.put("inSet", Boolean.valueOf(set[model.truth[u]]));
+			report.put("truthRank", Integer.valueOf(rankOf(ranked, model.truth[u])));
+		}
+		//Log-odds of the predicted community against the runner-up, split exactly by learner.
+		double logOdds = Math.log(p[best]) - Math.log(p[second]);
+		report.put("logOdds", Double.valueOf(logOdds));
+		report.put("prior", Double.valueOf(model.bias[best] - model.bias[second]));
+		ArrayList<Object> learners = new ArrayList<Object>();
+		for (int channel = 0; channel < TgfModel.CHANNELS; channel++)
+		{
+			LinkedHashMap<String,Object> learner = new LinkedHashMap<String,Object>();
+			learner.put("key", TgfModel.CHANNEL_KEYS[channel]);
+			learner.put("name", TgfModel.CHANNEL_NAMES[channel]);
+			learner.put("active", Boolean.valueOf(model.active[channel]));
+			learner.put("weight", Double.valueOf(model.weights[channel]));
+			double[] own = TgfLearning.softmax(model.scores[channel][u]);
+			int ownBest = TgfModel.argmax(own);
+			learner.put("says", model.active[channel] ? model.classes[ownBest] : null);
+			learner.put("saysProbability", Double.valueOf(model.active[channel] ? own[ownBest] : Double.NaN));
+			learner.put("contribution", Double.valueOf(model.contribution(channel, u, best)
+					- model.contribution(channel, u, second)));
+			learners.add(learner);
+		}
+		report.put("learners", learners);
+		report.put("ablations", ablations(model, u, best));
+		report.put("textEvidence", textEvidence(model, features, u, best, second));
+		report.put("textNeighbours", model.active[TgfModel.TEXT_GRAPH]
+				? neighbours(model, features, model.textGraph, u, best, false) : new ArrayList<Object>());
+		report.put("termTimeNeighbours", model.active[TgfModel.TERM_TIME_GRAPH]
+				? neighbours(model, features, model.termTimeGraph, u, best, true) : new ArrayList<Object>());
+		report.put("activity", activityEvidence(model, features, u, best, second));
+		report.put("counterfactual", counterfactual(model, features, u, best, second));
+		ArrayList<Object> accounts = new ArrayList<Object>();
+		for (int c : ranked)
+		{
+			LinkedHashMap<String,Object> account = new LinkedHashMap<String,Object>();
+			account.put("account", model.classes[c]);
+			account.put("probability", Double.valueOf(p[c]));
+			account.put("inSet", Boolean.valueOf(set[c]));
+			accounts.add(account);
+		}
+		report.put("accounts", accounts);
+		report.put("recommendations", recommendations(model, features, u, order, together, similarity));
+		report.put("headline", headline(model, features, u, best, second, set, learners));
+		return report;
+	}
+
+	/** Each learner removed (weight zero, the stack otherwise unchanged): the prediction and its probability. */
+	private static List<Object> ablations(TgfModel model, int u, int best)
+	{
+		ArrayList<Object> result = new ArrayList<Object>();
+		int classes = model.classCount();
+		for (int removed = 0; removed < TgfModel.CHANNELS; removed++)
+		{
+			if (!model.active[removed] || model.weights[removed] <= 0.0)
 			{
 				continue;
 			}
-			String user = entry.getKey();
-			String followee = input.datasetUserFollowees.get(user);
-			if (followee == null)
+			double[] logits = new double[classes];
+			for (int c = 0; c < classes; c++)
 			{
-				followee = input.userFollowees.get(user);
+				logits[c] = model.bias[c];
+				for (int channel = 0; channel < TgfModel.CHANNELS; channel++)
+				{
+					if (channel != removed)
+					{
+						logits[c] += model.contribution(channel, u, c);
+					}
+				}
 			}
-			users.add(new UserProfile(users.size(), user, followee, entry.getValue()));
+			double[] q = TgfLearning.softmax(logits);
+			int now = TgfModel.argmax(q);
+			LinkedHashMap<String,Object> ablation = new LinkedHashMap<String,Object>();
+			ablation.put("key", TgfModel.CHANNEL_KEYS[removed]);
+			ablation.put("name", TgfModel.CHANNEL_NAMES[removed]);
+			ablation.put("predicted", model.classes[now]);
+			ablation.put("probability", Double.valueOf(q[best]));
+			ablation.put("changes", Boolean.valueOf(now != best));
+			result.add(ablation);
 		}
-		return users;
-	}
-
-	@SuppressWarnings("unchecked")
-	private static Map<String,Map<String,Double>> castVectors(Map<String,? extends Map<String,Double>> vectors)
-	{
-		return (Map<String,Map<String,Double>>)vectors;
+		return result;
 	}
 
 	/**
-	 * Reads each user's activity: from the run corpus (RunCorpus: user,
-	 * followee, epoch millis, text) or a raw dataset file (followee, id, date,
-	 * user id, user, text), timestamps in UTC. Users outside the profiles are
-	 * ignored.
+	 * The text model's evidence in the final log-odds: term t adds
+	 * x_t (W[best][t] - W[second][t]) times the stack weight over the
+	 * learner's scale. The terms for the predicted community first, then those
+	 * for the runner-up.
 	 */
-	private static TemporalCorpus readActivity(File file, List<UserProfile> users)
+	private static Map<String,Object> textEvidence(TgfModel model, TgfFeatures features, int u, int best, int second)
 	{
-		final TemporalCorpus corpus = new TemporalCorpus();
-		final HashMap<String,UserProfile> byName = new HashMap<String,UserProfile>();
-		for (UserProfile profile : users)
+		LinkedHashMap<String,Object> evidence = new LinkedHashMap<String,Object>();
+		if (model.textModel == null || !model.active[TgfModel.TEXT])
 		{
-			byName.put(profile.name, profile);
+			evidence.put("supporting", new ArrayList<Object>());
+			evidence.put("opposing", new ArrayList<Object>());
+			return evidence;
 		}
-		final HashMap<UserProfile,List<Long>> times = new HashMap<UserProfile,List<Long>>();
-		if (file == null || !file.isFile())
+		double factor = model.weights[TgfModel.TEXT] / model.scale[TgfModel.TEXT];
+		TgfFeatures.Sparse text = features.text;
+		final ArrayList<double[]> terms = new ArrayList<double[]>();
+		for (int p = text.pointer[u]; p < text.pointer[u + 1]; p++)
 		{
-			corpus.warning = "No corpus file was available, so the temporal signal is off.";
-			return corpus;
+			int t = text.column[p];
+			double contribution = text.value[p] * (model.textModel.weights[best][t] - model.textModel.weights[second][t])
+					* factor;
+			terms.add(new double[] {t, contribution, features.termCounts[p], text.value[p]});
 		}
-		try
+		Collections.sort(terms, new Comparator<double[]>()
 		{
-			if (file.getName().startsWith("corpus-") && file.getName().endsWith(".tsv"))
+			public int compare(double[] a, double[] b)
 			{
-				RunCorpus.read(file, new RunCorpus.RowConsumer()
+				int byContribution = Double.compare(b[1], a[1]);
+				return byContribution != 0 ? byContribution : Double.compare(a[0], b[0]);
+			}
+		});
+		ArrayList<Object> supporting = new ArrayList<Object>();
+		ArrayList<Object> opposing = new ArrayList<Object>();
+		for (int i = 0; i < terms.size() && supporting.size() < TERM_EVIDENCE; i++)
+		{
+			if (terms.get(i)[1] > 0.0)
+			{
+				supporting.add(termEntry(features, terms.get(i)));
+			}
+		}
+		for (int i = terms.size() - 1; i >= 0 && opposing.size() < TERM_EVIDENCE; i--)
+		{
+			if (terms.get(i)[1] < 0.0)
+			{
+				opposing.add(termEntry(features, terms.get(i)));
+			}
+		}
+		double total = 0.0;
+		for (double[] term : terms)
+		{
+			total += term[1];
+		}
+		evidence.put("supporting", supporting);
+		evidence.put("opposing", opposing);
+		evidence.put("terms", Integer.valueOf(terms.size()));
+		evidence.put("termTotal", Double.valueOf(total));
+		evidence.put("intercept", Double.valueOf((model.textModel.bias[best] - model.textModel.bias[second]) * factor));
+		return evidence;
+	}
+
+	private static Map<String,Object> termEntry(TgfFeatures features, double[] term)
+	{
+		LinkedHashMap<String,Object> entry = new LinkedHashMap<String,Object>();
+		int t = (int)term[0];
+		entry.put("term", features.terms[t]);
+		entry.put("contribution", Double.valueOf(term[1]));
+		entry.put("count", Integer.valueOf((int)term[2]));
+		entry.put("weight", Double.valueOf(term[3]));
+		entry.put("users", Integer.valueOf(features.termUsers[t]));
+		return entry;
+	}
+
+	/**
+	 * The labelled users whose labels reached the target through a graph: the
+	 * propagated mass of class c at u is exactly sum over users v labelled c of
+	 * M[u][v], so M[u][v] is v's influence. The most influential users of the
+	 * predicted community and of the others, with what links them to the target.
+	 */
+	private static List<Object> neighbours(TgfModel model, TgfFeatures features, TgfLearning.Graph graph, int u,
+			int best, boolean termTime)
+	{
+		final double[] influence = TgfLearning.influence(graph, u, TgfModel.ALPHA);
+		double total = 0.0;
+		ArrayList<Integer> labelled = new ArrayList<Integer>();
+		for (int v = 0; v < influence.length; v++)
+		{
+			if (v != u && model.label[v] >= 0 && influence[v] > 0.0)
+			{
+				labelled.add(Integer.valueOf(v));
+				total += influence[v];
+			}
+		}
+		Collections.sort(labelled, new Comparator<Integer>()
+		{
+			public int compare(Integer a, Integer b)
+			{
+				int byInfluence = Double.compare(influence[b.intValue()], influence[a.intValue()]);
+				return byInfluence != 0 ? byInfluence : Integer.compare(a.intValue(), b.intValue());
+			}
+		});
+		ArrayList<Object> result = new ArrayList<Object>();
+		for (int i = 0; i < labelled.size() && result.size() < NEIGHBOUR_EVIDENCE; i++)
+		{
+			int v = labelled.get(i).intValue();
+			LinkedHashMap<String,Object> entry = new LinkedHashMap<String,Object>();
+			entry.put("user", features.users[v]);
+			entry.put("community", model.classes[model.label[v]]);
+			entry.put("supports", Boolean.valueOf(model.label[v] == best));
+			entry.put("influence", Double.valueOf(influence[v]));
+			entry.put("share", Double.valueOf(total > 0.0 ? influence[v] / total : 0.0));
+			entry.put("direct", Boolean.valueOf(isAdjacent(graph, u, v)));
+			entry.put("shared", termTime ? sharedPairs(features, u, v, 4) : sharedTerms(features, u, v, 4));
+			result.add(entry);
+		}
+		return result;
+	}
+
+	private static boolean isAdjacent(TgfLearning.Graph graph, int u, int v)
+	{
+		return Arrays.binarySearch(graph.adjacent[u], v) >= 0;
+	}
+
+	/** The target's activity per month and the months and hours that move the activity model most. */
+	private static Map<String,Object> activityEvidence(TgfModel model, TgfFeatures features, int u, int best,
+			int second)
+	{
+		LinkedHashMap<String,Object> evidence = new LinkedHashMap<String,Object>();
+		if (!features.temporal())
+		{
+			evidence.put("available", Boolean.FALSE);
+			return evidence;
+		}
+		evidence.put("available", Boolean.TRUE);
+		evidence.put("monthly", toList(features.monthly[u]));
+		evidence.put("hourly", toList(features.hourly[u]));
+		evidence.put("weight", Double.valueOf(model.weights[TgfModel.ACTIVITY]));
+		if (model.activityModel == null || !model.active[TgfModel.ACTIVITY] || model.weights[TgfModel.ACTIVITY] <= 0.0)
+		{
+			//The stack gives the activity model no weight: when the target tweets moves nothing.
+			evidence.put("drivers", new ArrayList<Object>());
+			return evidence;
+		}
+		double factor = model.weights[TgfModel.ACTIVITY] / model.scale[TgfModel.ACTIVITY];
+		TgfFeatures.Sparse rows = features.activity;
+		final ArrayList<double[]> items = new ArrayList<double[]>();
+		for (int p = rows.pointer[u]; p < rows.pointer[u + 1]; p++)
+		{
+			int f = rows.column[p];
+			double contribution = rows.value[p]
+					* (model.activityModel.weights[best][f] - model.activityModel.weights[second][f]) * factor;
+			items.add(new double[] {f, contribution, rows.value[p]});
+		}
+		Collections.sort(items, new Comparator<double[]>()
+		{
+			public int compare(double[] a, double[] b)
+			{
+				int byMagnitude = Double.compare(Math.abs(b[1]), Math.abs(a[1]));
+				return byMagnitude != 0 ? byMagnitude : Double.compare(a[0], b[0]);
+			}
+		});
+		ArrayList<Object> drivers = new ArrayList<Object>();
+		for (int i = 0; i < items.size() && drivers.size() < 6; i++)
+		{
+			int f = (int)items.get(i)[0];
+			LinkedHashMap<String,Object> entry = new LinkedHashMap<String,Object>();
+			entry.put("label", activityLabel(features, f));
+			entry.put("share", Double.valueOf(items.get(i)[2]));
+			entry.put("contribution", Double.valueOf(items.get(i)[1]));
+			drivers.add(entry);
+		}
+		evidence.put("drivers", drivers);
+		return evidence;
+	}
+
+	private static String activityLabel(TgfFeatures features, int feature)
+	{
+		if (feature < features.months)
+		{
+			return features.monthLabel(feature);
+		}
+		if (feature < features.months + 24)
+		{
+			return String.format(Locale.US, "%02d:00-%02d:59 UTC", Integer.valueOf(feature - features.months),
+					Integer.valueOf(feature - features.months));
+		}
+		String[] days = {"Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"};
+		return days[Math.max(0, Math.min(6, feature - features.months - 24))];
+	}
+
+	/**
+	 * The fewest of the target's terms whose removal from the text model's
+	 * input (the vector renormalised, every other learner's evidence held
+	 * fixed) changes the predicted community: terms are removed in order of
+	 * their support for the prediction, up to {@value #COUNTERFACTUAL_TERMS}.
+	 */
+	private static Map<String,Object> counterfactual(TgfModel model, TgfFeatures features, int u, int best,
+			int second)
+	{
+		LinkedHashMap<String,Object> result = new LinkedHashMap<String,Object>();
+		if (model.textModel == null || !model.active[TgfModel.TEXT] || model.weights[TgfModel.TEXT] <= 0.0)
+		{
+			result.put("found", Boolean.FALSE);
+			result.put("note", "The text model carries no weight in the stack, so removing words cannot change the"
+					+ " prediction.");
+			return result;
+		}
+		int classes = model.classCount();
+		TgfFeatures.Sparse text = features.text;
+		int start = text.pointer[u];
+		int end = text.pointer[u + 1];
+		final double[] support = new double[end - start];
+		Integer[] order = new Integer[end - start];
+		for (int p = start; p < end; p++)
+		{
+			int t = text.column[p];
+			support[p - start] = text.value[p] * (model.textModel.weights[best][t] - model.textModel.weights[second][t]);
+			order[p - start] = Integer.valueOf(p - start);
+		}
+		Arrays.sort(order, new Comparator<Integer>()
+		{
+			public int compare(Integer a, Integer b)
+			{
+				int bySupport = Double.compare(support[b.intValue()], support[a.intValue()]);
+				return bySupport != 0 ? bySupport : Integer.compare(a.intValue(), b.intValue());
+			}
+		});
+		double[] others = new double[classes];
+		for (int c = 0; c < classes; c++)
+		{
+			others[c] = model.bias[c];
+			for (int channel = 0; channel < TgfModel.CHANNELS; channel++)
+			{
+				if (channel != TgfModel.TEXT)
 				{
-					public void accept(RunCorpus.Row row)
+					others[c] += model.contribution(channel, u, c);
+				}
+			}
+		}
+		boolean[] removed = new boolean[end - start];
+		ArrayList<Object> terms = new ArrayList<Object>();
+		double factor = model.weights[TgfModel.TEXT] / model.scale[TgfModel.TEXT];
+		for (int step = 0; step < Math.min(COUNTERFACTUAL_TERMS, order.length); step++)
+		{
+			int index = order[step].intValue();
+			if (support[index] <= 0.0)
+			{
+				break;
+			}
+			removed[index] = true;
+			terms.add(features.terms[text.column[start + index]]);
+			//The text model's logits on the remaining terms, renormalised to unit length.
+			double norm = 0.0;
+			for (int i = 0; i < removed.length; i++)
+			{
+				if (!removed[i])
+				{
+					norm += text.value[start + i] * text.value[start + i];
+				}
+			}
+			norm = Math.sqrt(norm);
+			double[] logits = model.textModel.bias.clone();
+			if (norm > 0.0)
+			{
+				for (int i = 0; i < removed.length; i++)
+				{
+					if (removed[i])
 					{
-						observe(corpus, byName.get(row.user), row.time, times);
+						continue;
 					}
-				});
+					int t = text.column[start + i];
+					double x = text.value[start + i] / norm;
+					for (int c = 0; c < classes; c++)
+					{
+						logits[c] += model.textModel.weights[c][t] * x;
+					}
+				}
+			}
+			double[] centred = TgfModel.centred(logits);
+			double[] final_ = new double[classes];
+			for (int c = 0; c < classes; c++)
+			{
+				final_[c] = others[c] + factor * centred[c];
+			}
+			double[] q = TgfLearning.softmax(final_);
+			int now = TgfModel.argmax(q);
+			if (now != best)
+			{
+				result.put("found", Boolean.TRUE);
+				result.put("terms", terms);
+				result.put("flipsTo", model.classes[now]);
+				result.put("probability", Double.valueOf(q[now]));
+				result.put("originalProbability", Double.valueOf(q[best]));
+				result.put("note", "Removing " + (terms.size() == 1 ? "this word" : "these " + terms.size() + " words")
+						+ " from the target's text (every other learner's evidence held fixed) makes "
+						+ model.classes[now] + " the most likely community.");
+				return result;
+			}
+		}
+		result.put("found", Boolean.FALSE);
+		result.put("terms", terms);
+		result.put("note", "No set of up to " + COUNTERFACTUAL_TERMS + " of the target's most supportive words changes"
+				+ " the prediction on its own: the other learners' evidence is decisive.");
+		return result;
+	}
+
+	private static List<Object> recommendations(TgfModel model, TgfFeatures features, int u, Integer[] order,
+			double[] together, double[] similarity)
+	{
+		ArrayList<Object> result = new ArrayList<Object>();
+		for (int i = 0; i < order.length && result.size() < RECOMMENDATION_EVIDENCE; i++)
+		{
+			int v = order[i].intValue();
+			LinkedHashMap<String,Object> entry = new LinkedHashMap<String,Object>();
+			entry.put("user", features.users[v]);
+			entry.put("community", model.label[v] >= 0 ? model.classes[model.label[v]] : null);
+			entry.put("probability", Double.valueOf(together[v]));
+			entry.put("similarity", Double.valueOf(similarity[v]));
+			entry.put("shared", sharedTerms(features, u, v, 3));
+			if (model.truth[u] >= 0 && model.truth[v] >= 0)
+			{
+				entry.put("relevant", Boolean.valueOf(model.truth[u] == model.truth[v]));
+			}
+			result.add(entry);
+		}
+		return result;
+	}
+
+	private static String headline(TgfModel model, TgfFeatures features, int u, int best, int second, boolean[] set,
+			List<Object> learners)
+	{
+		double[] p = model.posterior[u];
+		String lead = null;
+		double strongest = 0.0;
+		for (Object item : learners)
+		{
+			@SuppressWarnings("unchecked")
+			Map<String,Object> learner = (Map<String,Object>)item;
+			double contribution = ((Double)learner.get("contribution")).doubleValue();
+			if (contribution > strongest)
+			{
+				strongest = contribution;
+				lead = (String)learner.get("name");
+			}
+		}
+		int setSize = 0;
+		for (boolean in : set)
+		{
+			setSize += in ? 1 : 0;
+		}
+		return features.users[u] + " most likely follows " + model.classes[best] + " (p = " + fixed(p[best])
+				+ ", ahead of " + model.classes[second] + " at " + fixed(p[second]) + ")"
+				+ (lead == null ? "" : "; the " + lead.toLowerCase(Locale.US) + " contributes most")
+				+ ". The " + (int)Math.round(100 * (1 - TgfModel.CONFORMAL_ALPHA)) + "% conformal set holds "
+				+ setSize + (setSize == 1 ? " account." : " accounts.");
+	}
+
+	// ============================================================ model card
+
+	private static LinkedHashMap<String,Object> modelCard(Input input, TgfFeatures features, TgfModel model)
+	{
+		LinkedHashMap<String,Object> card = new LinkedHashMap<String,Object>();
+		card.put("format", FORMAT);
+		card.put("runId", input.runId);
+		card.put("dataset", input.datasetName);
+		card.put("corpus", input.datasetFile == null ? null : input.datasetFile.getName());
+		card.put("supervised", Boolean.valueOf(model.supervised));
+		card.put("note", model.note);
+		ArrayList<Object> warnings = new ArrayList<Object>();
+		if (!features.warning.isEmpty())
+		{
+			warnings.add(features.warning);
+		}
+		card.put("warnings", warnings);
+		LinkedHashMap<String,Object> data = new LinkedHashMap<String,Object>();
+		int labelled = 0;
+		int targets = 0;
+		for (int u = 0; u < features.size(); u++)
+		{
+			labelled += model.label[u] >= 0 ? 1 : 0;
+			targets += model.target[u] ? 1 : 0;
+		}
+		data.put("users", Integer.valueOf(features.size()));
+		data.put("labelledUsers", Integer.valueOf(labelled));
+		data.put("targets", Integer.valueOf(targets));
+		data.put("terms", Integer.valueOf(features.terms.length));
+		data.put("termMonthPairs", Integer.valueOf(features.termTime.columns));
+		data.put("months", Integer.valueOf(features.months));
+		data.put("firstMonth", features.months > 0 ? features.monthLabel(0) : null);
+		data.put("lastMonth", features.months > 0 ? features.monthLabel(features.months - 1) : null);
+		data.put("rowsScanned", Long.valueOf(features.rowsScanned));
+		data.put("datedRows", Long.valueOf(features.datedRows));
+		data.put("fromCorpus", Boolean.valueOf(features.fromCorpus));
+		card.put("data", data);
+		card.put("learners", learnerCards(model));
+		card.put("communities", communityCards(model, features));
+		card.put("validation", validationCard(model));
+		LinkedHashMap<String,Object> graphs = new LinkedHashMap<String,Object>();
+		graphs.put("neighbours", Integer.valueOf(TgfModel.NEIGHBOURS));
+		graphs.put("alpha", Double.valueOf(TgfModel.ALPHA));
+		graphs.put("textEdges", Long.valueOf(model.textGraph.edges()));
+		graphs.put("termTimeEdges", Long.valueOf(model.termTimeGraph == null ? 0L : model.termTimeGraph.edges()));
+		graphs.put("activityEdges", Long.valueOf(model.activityGraph == null ? 0L : model.activityGraph.edges()));
+		card.put("graphs", graphs);
+		LinkedHashMap<String,Object> fit = new LinkedHashMap<String,Object>();
+		fit.put("millis", Long.valueOf(model.trainMillis));
+		fit.put("folds", Integer.valueOf(model.folds));
+		fit.put("textIterations", Integer.valueOf(model.textModel == null ? 0 : model.textModel.iterations));
+		fit.put("textConverged", Boolean.valueOf(model.textModel != null && model.textModel.converged));
+		fit.put("activityIterations", Integer.valueOf(model.activityModel == null ? 0 : model.activityModel.iterations));
+		fit.put("conformalAlpha", Double.valueOf(TgfModel.CONFORMAL_ALPHA));
+		fit.put("conformalThreshold", Double.valueOf(model.conformalThreshold));
+		card.put("fit", fit);
+		return card;
+	}
+
+	private static List<Object> learnerCards(TgfModel model)
+	{
+		ArrayList<Object> learners = new ArrayList<Object>();
+		for (int channel = 0; channel < TgfModel.CHANNELS; channel++)
+		{
+			LinkedHashMap<String,Object> learner = new LinkedHashMap<String,Object>();
+			learner.put("key", TgfModel.CHANNEL_KEYS[channel]);
+			learner.put("name", TgfModel.CHANNEL_NAMES[channel]);
+			learner.put("description", TgfModel.CHANNEL_DESCRIPTIONS[channel]);
+			learner.put("active", Boolean.valueOf(model.active[channel]));
+			learner.put("weight", Double.valueOf(model.weights[channel]));
+			learner.put("scale", Double.valueOf(model.scale[channel]));
+			learner.put("accuracy", Double.valueOf(model.validation.channelAccuracy[channel]));
+			learner.put("logLoss", Double.valueOf(model.validation.channelLogLoss[channel]));
+			learners.add(learner);
+		}
+		return learners;
+	}
+
+	private static List<Object> communityCards(TgfModel model, TgfFeatures features)
+	{
+		ArrayList<Object> communities = new ArrayList<Object>();
+		int classes = model.classCount();
+		int[] sizes = new int[classes];
+		double[][] monthly = new double[classes][features.months];
+		double[][] hourly = new double[classes][features.temporal() ? 24 : 0];
+		for (int u = 0; u < features.size(); u++)
+		{
+			int c = model.label[u];
+			if (c < 0)
+			{
+				continue;
+			}
+			sizes[c]++;
+			for (int m = 0; m < features.months; m++)
+			{
+				monthly[c][m] += features.monthly[u][m];
+			}
+			for (int h = 0; h < hourly[c].length; h++)
+			{
+				hourly[c][h] += features.hourly[u][h];
+			}
+		}
+		int labelled = 0;
+		for (int size : sizes)
+		{
+			labelled += size;
+		}
+		for (int c = 0; c < classes; c++)
+		{
+			LinkedHashMap<String,Object> community = new LinkedHashMap<String,Object>();
+			community.put("name", model.classes[c]);
+			community.put("labelled", Integer.valueOf(sizes[c]));
+			community.put("share", Double.valueOf(labelled == 0 ? 0.0 : sizes[c] / (double)labelled));
+			community.put("prior", Double.valueOf(model.supervised ? model.bias[c] : 0.0));
+			if (model.supervised)
+			{
+				TgfModel.Validation v = model.validation;
+				community.put("precision", Double.valueOf(v.classPrecision[c]));
+				community.put("recall", Double.valueOf(v.classRecall[c]));
+				community.put("f1", Double.valueOf(v.classF1[c]));
+				community.put("support", Integer.valueOf(v.classSupport[c]));
+			}
+			community.put("terms", communityTerms(model, features, c));
+			community.put("monthly", toList(shares(monthly[c])));
+			community.put("hourly", toList(shares(hourly[c])));
+			communities.add(community);
+		}
+		return communities;
+	}
+
+	/** The terms whose text-model weight for a community most exceeds their mean weight over communities. */
+	private static List<Object> communityTerms(TgfModel model, TgfFeatures features, int c)
+	{
+		ArrayList<Object> result = new ArrayList<Object>();
+		if (model.textModel == null)
+		{
+			return result;
+		}
+		final double[][] w = model.textModel.weights;
+		int classes = w.length;
+		final double[] distinct = new double[features.terms.length];
+		Integer[] order = new Integer[distinct.length];
+		for (int t = 0; t < distinct.length; t++)
+		{
+			double mean = 0.0;
+			for (int k = 0; k < classes; k++)
+			{
+				mean += w[k][t];
+			}
+			distinct[t] = w[c][t] - mean / classes;
+			order[t] = Integer.valueOf(t);
+		}
+		Arrays.sort(order, new Comparator<Integer>()
+		{
+			public int compare(Integer a, Integer b)
+			{
+				int byWeight = Double.compare(distinct[b.intValue()], distinct[a.intValue()]);
+				return byWeight != 0 ? byWeight : Integer.compare(a.intValue(), b.intValue());
+			}
+		});
+		for (int i = 0; i < Math.min(COMMUNITY_TERMS, order.length); i++)
+		{
+			int t = order[i].intValue();
+			if (distinct[t] <= 0.0)
+			{
+				break;
+			}
+			LinkedHashMap<String,Object> entry = new LinkedHashMap<String,Object>();
+			entry.put("term", features.terms[t]);
+			entry.put("weight", Double.valueOf(distinct[t]));
+			result.add(entry);
+		}
+		return result;
+	}
+
+	private static Map<String,Object> validationCard(TgfModel model)
+	{
+		TgfModel.Validation v = model.validation;
+		LinkedHashMap<String,Object> card = new LinkedHashMap<String,Object>();
+		card.put("users", Integer.valueOf(v.users));
+		card.put("accuracy", Double.valueOf(v.accuracy));
+		card.put("macroF1", Double.valueOf(v.macroF1));
+		card.put("logLoss", Double.valueOf(v.logLoss));
+		card.put("brier", Double.valueOf(v.brier));
+		card.put("calibrationError", Double.valueOf(v.calibrationError));
+		card.put("majorityAccuracy", Double.valueOf(v.majorityAccuracy));
+		card.put("chanceAccuracy", Double.valueOf(v.chanceAccuracy));
+		ArrayList<Object> reliability = new ArrayList<Object>();
+		for (double[] bin : v.reliability)
+		{
+			reliability.add(toList(bin));
+		}
+		card.put("reliability", reliability);
+		ArrayList<Object> confusion = new ArrayList<Object>();
+		for (int[] row : v.confusion)
+		{
+			ArrayList<Object> line = new ArrayList<Object>();
+			for (int value : row)
+			{
+				line.add(Integer.valueOf(value));
+			}
+			confusion.add(line);
+		}
+		card.put("confusion", confusion);
+		card.put("conformalCoverage", Double.valueOf(v.conformalCoverage));
+		card.put("conformalSetSize", Double.valueOf(v.conformalSetSize));
+		return card;
+	}
+
+	// =============================================================== helpers
+
+	private static List<String> sharedTerms(TgfFeatures features, int u, int v, int limit)
+	{
+		TgfFeatures.Sparse text = features.text;
+		final ArrayList<double[]> shared = new ArrayList<double[]>();
+		int i = text.pointer[u];
+		int j = text.pointer[v];
+		while (i < text.pointer[u + 1] && j < text.pointer[v + 1])
+		{
+			int a = text.column[i];
+			int b = text.column[j];
+			if (a == b)
+			{
+				shared.add(new double[] {a, text.value[i] * text.value[j]});
+				i++;
+				j++;
+			}
+			else if (a < b)
+			{
+				i++;
 			}
 			else
 			{
-				try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-						new FileInputStream(file), StandardCharsets.UTF_8), 128 * 1024))
-				{
-					String line;
-					boolean first = true;
-					while ((line = reader.readLine()) != null)
-					{
-						if (first && line.startsWith("﻿"))
-						{
-							line = line.substring(1);
-						}
-						first = false;
-						String[] fields = line.split("\t", 6);
-						if (fields.length != 6)
-						{
-							continue;
-						}
-						observe(corpus, byName.get(fields[4].trim()), RunCorpus.parseTimestamp(fields[2]), times);
-					}
-				}
+				j++;
 			}
 		}
-		catch (IOException exception)
+		Collections.sort(shared, new Comparator<double[]>()
 		{
-			corpus.warning = "The temporal scan failed: " + exception.getMessage();
-			return corpus;
-		}
-		corpus.available = corpus.datedRows > 0 && corpus.maxTime > corpus.minTime;
-		if (!corpus.available)
-		{
-			corpus.warning = "Fewer than two distinct timestamps: the temporal signal is off.";
-			return corpus;
-		}
-		double span = corpus.maxTime - corpus.minTime;
-		for (Map.Entry<UserProfile,List<Long>> entry : times.entrySet())
-		{
-			double[] histogram = new double[ACTIVITY_BINS];
-			for (Long time : entry.getValue())
+			public int compare(double[] a, double[] b)
 			{
-				int bin = (int)Math.min(ACTIVITY_BINS - 1, Math.floor((time - corpus.minTime) / span * ACTIVITY_BINS));
-				histogram[bin] += 1.0;
-			}
-			entry.getKey().activity = histogram;
-		}
-		return corpus;
-	}
-
-	private static void observe(TemporalCorpus corpus, UserProfile profile, long time,
-			Map<UserProfile,List<Long>> times)
-	{
-		corpus.rowsScanned++;
-		if (profile == null)
-		{
-			return;
-		}
-		profile.observedRows++;
-		if (time == Long.MIN_VALUE)
-		{
-			return;
-		}
-		corpus.datedRows++;
-		corpus.minTime = Math.min(corpus.minTime, time);
-		corpus.maxTime = Math.max(corpus.maxTime, time);
-		profile.firstTime = Math.min(profile.firstTime, time);
-		profile.latestTime = Math.max(profile.latestTime, time);
-		List<Long> list = times.get(profile);
-		if (list == null)
-		{
-			list = new ArrayList<Long>();
-			times.put(profile, list);
-		}
-		list.add(Long.valueOf(time));
-	}
-
-	// =============================================================== signals
-
-	/** Postings of the user-term bipartite graph for mass diffusion. */
-	private static final class DiffusionIndex
-	{
-		private final HashMap<String,int[]> postingsUsers = new HashMap<String,int[]>();
-		private final HashMap<String,double[]> postingsWeights = new HashMap<String,double[]>();
-		private final HashMap<String,Double> termTotals = new HashMap<String,Double>();
-		private final double[] userTotals;
-
-		DiffusionIndex(List<UserProfile> users)
-		{
-			userTotals = new double[users.size()];
-			TreeMap<String,List<double[]>> postings = new TreeMap<String,List<double[]>>();
-			for (UserProfile user : users)
-			{
-				for (Map.Entry<String,Double> entry : user.tfidf.entrySet())
-				{
-					double weight = finite(entry.getValue());
-					if (weight <= 0.0)
-					{
-						continue;
-					}
-					userTotals[user.index] += weight;
-					List<double[]> list = postings.get(entry.getKey());
-					if (list == null)
-					{
-						list = new ArrayList<double[]>();
-						postings.put(entry.getKey(), list);
-					}
-					list.add(new double[] {user.index, weight});
-				}
-			}
-			for (Map.Entry<String,List<double[]>> entry : postings.entrySet())
-			{
-				int[] userIds = new int[entry.getValue().size()];
-				double[] weights = new double[userIds.length];
-				double total = 0.0;
-				for (int i = 0; i < userIds.length; i++)
-				{
-					userIds[i] = (int)entry.getValue().get(i)[0];
-					weights[i] = entry.getValue().get(i)[1];
-					total += weights[i];
-				}
-				postingsUsers.put(entry.getKey(), userIds);
-				postingsWeights.put(entry.getKey(), weights);
-				termTotals.put(entry.getKey(), Double.valueOf(total));
-			}
-		}
-
-		/** Resource each user receives from {@code source}, normalised by the best other user. */
-		double[] spread(UserProfile source, int userCount, String excludedTerm)
-		{
-			double[] received = new double[userCount];
-			double total = userTotals[source.index];
-			if (total <= 0.0)
-			{
-				return received;
-			}
-			for (Map.Entry<String,Double> entry : source.tfidf.entrySet())
-			{
-				double weight = finite(entry.getValue());
-				if (weight <= 0.0 || entry.getKey().equals(excludedTerm))
-				{
-					continue;
-				}
-				int[] userIds = postingsUsers.get(entry.getKey());
-				double[] weights = postingsWeights.get(entry.getKey());
-				double termTotal = termTotals.get(entry.getKey()).doubleValue();
-				double share = weight / total;
-				for (int i = 0; i < userIds.length; i++)
-				{
-					received[userIds[i]] += share * weights[i] / termTotal;
-				}
-			}
-			received[source.index] = 0.0;
-			double max = 0.0;
-			for (double value : received)
-			{
-				max = Math.max(max, value);
-			}
-			if (max > 0.0)
-			{
-				for (int i = 0; i < received.length; i++)
-				{
-					received[i] /= max;
-				}
-			}
-			return received;
-		}
-	}
-
-	private static double coActivity(double[] first, double[] second)
-	{
-		if (first == null || second == null)
-		{
-			return 0.0;
-		}
-		double dot = 0.0;
-		double a = 0.0;
-		double b = 0.0;
-		for (int i = 0; i < first.length; i++)
-		{
-			dot += first[i] * second[i];
-			a += first[i] * first[i];
-			b += second[i] * second[i];
-		}
-		return a <= 0.0 || b <= 0.0 ? 0.0 : clamp01(dot / Math.sqrt(a * b));
-	}
-
-	/** The share of a histogram up to (and including) {@code bins} bins. */
-	private static double[] prefix(double[] histogram, int bins)
-	{
-		if (histogram == null)
-		{
-			return null;
-		}
-		double[] cut = new double[histogram.length];
-		for (int i = 0; i < Math.min(bins, histogram.length); i++)
-		{
-			cut[i] = histogram[i];
-		}
-		return cut;
-	}
-
-	// ================================================================ fusion
-
-	/** The fitted logistic fusion and its bootstrap refits. */
-	private static final class FusionModel
-	{
-		/** Coefficients on standardised features: intercept, text, graph, time. */
-		private final double[] coefficients;
-		private final double[][] bootstrap;
-		private final double[] means;
-		private final double[] scales;
-		private final boolean[] active;
-		private final boolean supervised;
-		private final int trainingPairs;
-		private final int anchors;
-		private final double heldOutAuc;
-		private final double baseRate;
-		private final String note;
-
-		private FusionModel(double[] coefficients, double[][] bootstrap, double[] means, double[] scales,
-				boolean[] active, boolean supervised, int trainingPairs, int anchors, double heldOutAuc,
-				double baseRate, String note)
-		{
-			this.coefficients = coefficients;
-			this.bootstrap = bootstrap;
-			this.means = means;
-			this.scales = scales;
-			this.active = active;
-			this.supervised = supervised;
-			this.trainingPairs = trainingPairs;
-			this.anchors = anchors;
-			this.heldOutAuc = heldOutAuc;
-			this.baseRate = baseRate;
-			this.note = note;
-		}
-
-		/** Features of the target against every user: [index][text, graph, time]. */
-		double[][] features(UserProfile target, List<UserProfile> users, DiffusionIndex diffusion,
-				TemporalCorpus corpus)
-		{
-			double[] graph = diffusion.spread(target, users.size(), null);
-			double[][] features = new double[users.size()][3];
-			for (UserProfile candidate : users)
-			{
-				if (candidate == target)
-				{
-					continue;
-				}
-				features[candidate.index][TEXT] = cosine(target.tfidf, candidate.tfidf);
-				features[candidate.index][GRAPH] = graph[candidate.index];
-				features[candidate.index][TIME] = corpus.available
-						? coActivity(target.activity, candidate.activity) : 0.0;
-			}
-			return features;
-		}
-
-		double probability(double[] x)
-		{
-			return probability(coefficients, x);
-		}
-
-		double probability(double[] beta, double[] x)
-		{
-			double z = beta[0];
-			for (int signal = 0; signal < 3; signal++)
-			{
-				if (active[signal])
-				{
-					z += beta[signal + 1] * (x[signal] - means[signal]) / scales[signal];
-				}
-			}
-			return sigmoid(z);
-		}
-
-		/** The additive contribution of one signal to the log-odds (relative to the mean pair). */
-		double contribution(int signal, double value)
-		{
-			return active[signal] ? coefficients[signal + 1] * (value - means[signal]) / scales[signal] : 0.0;
-		}
-
-		/** The probability with some signals replaced by their mean (removed). */
-		double probabilityWithout(double[] x, boolean[] removed)
-		{
-			double[] copy = x.clone();
-			for (int signal = 0; signal < 3; signal++)
-			{
-				if (removed[signal])
-				{
-					copy[signal] = means[signal];
-				}
-			}
-			return probability(copy);
-		}
-
-		String weights()
-		{
-			StringBuilder text = new StringBuilder();
-			for (int signal = 0; signal < 3; signal++)
-			{
-				if (text.length() > 0)
-				{
-					text.append(", ");
-				}
-				text.append(SIGNALS[signal]).append('=');
-				text.append(active[signal] ? String.format(Locale.US, "%+.3f", coefficients[signal + 1]) : "off");
-			}
-			return text.toString();
-		}
-
-		String describe()
-		{
-			return note;
-		}
-
-		static FusionModel fit(List<UserProfile> users, Set<String> targets, DiffusionIndex diffusion,
-				TemporalCorpus corpus)
-		{
-			boolean[] active = {true, true, corpus.available};
-			//Anchors: labelled users that are not targets, in a seeded order.
-			ArrayList<UserProfile> labelled = new ArrayList<UserProfile>();
-			TreeMap<String,Integer> classSizes = new TreeMap<String,Integer>();
-			for (UserProfile user : users)
-			{
-				if (user.followee.length() > 0 && !targets.contains(user.name))
-				{
-					labelled.add(user);
-					Integer size = classSizes.get(user.followee);
-					classSizes.put(user.followee, Integer.valueOf(size == null ? 1 : size.intValue() + 1));
-				}
-			}
-			double baseRate = baseRate(classSizes, labelled.size());
-			if (classSizes.size() < 2 || labelled.size() < 4)
-			{
-				return unsupervised(active, "Fewer than two labelled communities outside the targets: the"
-						+ " signals are averaged with equal weights (no learned fusion).");
-			}
-			ArrayList<UserProfile> anchors = new ArrayList<UserProfile>(labelled);
-			Collections.shuffle(anchors, new Random(SEED));
-			if (anchors.size() > MAX_ANCHORS)
-			{
-				anchors = new ArrayList<UserProfile>(anchors.subList(0, MAX_ANCHORS));
-			}
-			//Pairs per anchor: up to PAIRS_PER_CLASS same-community users and as
-			//many others, both drawn without replacement from labelled non-targets.
-			ArrayList<double[]> rows = new ArrayList<double[]>();
-			ArrayList<Integer> rowAnchor = new ArrayList<Integer>();
-			Random random = new Random(SEED + 1);
-			for (int a = 0; a < anchors.size(); a++)
-			{
-				UserProfile anchor = anchors.get(a);
-				ArrayList<UserProfile> positives = new ArrayList<UserProfile>();
-				ArrayList<UserProfile> negatives = new ArrayList<UserProfile>();
-				for (UserProfile other : labelled)
-				{
-					if (other == anchor)
-					{
-						continue;
-					}
-					(other.followee.equals(anchor.followee) ? positives : negatives).add(other);
-				}
-				if (positives.isEmpty() || negatives.isEmpty())
-				{
-					continue;
-				}
-				Collections.shuffle(positives, random);
-				Collections.shuffle(negatives, random);
-				int count = Math.min(PAIRS_PER_CLASS, Math.min(positives.size(), negatives.size()));
-				double[] graph = diffusion.spread(anchor, users.size(), null);
-				for (int i = 0; i < count; i++)
-				{
-					rows.add(pair(anchor, positives.get(i), graph, corpus, 1.0));
-					rowAnchor.add(Integer.valueOf(a));
-					rows.add(pair(anchor, negatives.get(i), graph, corpus, 0.0));
-					rowAnchor.add(Integer.valueOf(a));
-				}
-			}
-			if (rows.size() < 8)
-			{
-				return unsupervised(active, "Too few labelled pairs outside the targets to learn the fusion:"
-						+ " the signals are averaged with equal weights.");
-			}
-			double[] means = new double[3];
-			double[] scales = new double[3];
-			for (int signal = 0; signal < 3; signal++)
-			{
-				double sum = 0.0;
-				for (double[] row : rows)
-				{
-					sum += row[signal];
-				}
-				means[signal] = sum / rows.size();
-				double squares = 0.0;
-				for (double[] row : rows)
-				{
-					squares += (row[signal] - means[signal]) * (row[signal] - means[signal]);
-				}
-				scales[signal] = Math.sqrt(squares / rows.size());
-				if (!(scales[signal] > 1e-12))
-				{
-					active[signal] = false;
-					scales[signal] = 1.0;
-				}
-			}
-			int anchorCount = anchors.size();
-			//Held-out quality: fit on 80% of the anchors, AUC on the other 20%.
-			boolean[] heldOut = new boolean[anchorCount];
-			Integer[] order = new Integer[anchorCount];
-			for (int i = 0; i < anchorCount; i++)
-			{
-				order[i] = Integer.valueOf(i);
-			}
-			Collections.shuffle(Arrays.asList(order), new Random(SEED + 2));
-			for (int i = 0; i < anchorCount / 5; i++)
-			{
-				heldOut[order[i].intValue()] = true;
-			}
-			ArrayList<double[]> fitRows = new ArrayList<double[]>();
-			ArrayList<double[]> testRows = new ArrayList<double[]>();
-			for (int i = 0; i < rows.size(); i++)
-			{
-				(heldOut[rowAnchor.get(i).intValue()] ? testRows : fitRows).add(rows.get(i));
-			}
-			double heldOutAuc = Double.NaN;
-			if (!fitRows.isEmpty() && !testRows.isEmpty())
-			{
-				double[] partial = irls(fitRows, means, scales, active);
-				heldOutAuc = auc(testRows, partial, means, scales, active);
-			}
-			double[] coefficients = irls(rows, means, scales, active);
-			//Bootstrap over anchors (clusters of pairs).
-			double[][] bootstrap = new double[BOOTSTRAP_FITS][];
-			Random resample = new Random(SEED + 3);
-			ArrayList<List<double[]>> byAnchor = new ArrayList<List<double[]>>();
-			for (int a = 0; a < anchorCount; a++)
-			{
-				byAnchor.add(new ArrayList<double[]>());
-			}
-			for (int i = 0; i < rows.size(); i++)
-			{
-				byAnchor.get(rowAnchor.get(i).intValue()).add(rows.get(i));
-			}
-			for (int b = 0; b < BOOTSTRAP_FITS; b++)
-			{
-				ArrayList<double[]> sample = new ArrayList<double[]>();
-				for (int draw = 0; draw < anchorCount; draw++)
-				{
-					sample.addAll(byAnchor.get(resample.nextInt(anchorCount)));
-				}
-				bootstrap[b] = irls(sample.isEmpty() ? rows : sample, means, scales, active);
-			}
-			//From the balanced sample to the population base rate of same-community pairs.
-			double correction = Math.log(baseRate / (1.0 - baseRate));
-			coefficients[0] += correction;
-			for (double[] beta : bootstrap)
-			{
-				beta[0] += correction;
-			}
-			FusionModel model = new FusionModel(coefficients, bootstrap, means, scales, active, true,
-					rows.size(), anchorCount, heldOutAuc, baseRate, "");
-			String note = "Learned fusion (logistic regression, " + rows.size() + " labelled pairs from "
-					+ anchorCount + " non-target anchors; standardised weights " + model.weights()
-					+ "; held-out pair AUC " + (Double.isNaN(heldOutAuc) ? "n/a"
-							: String.format(Locale.US, "%.3f", heldOutAuc))
-					+ "; base rate " + String.format(Locale.US, "%.3f", baseRate)
-					+ (corpus.available ? "" : "; temporal signal off: " + corpus.warning) + ").";
-			return new FusionModel(coefficients, bootstrap, means, scales, active, true, rows.size(),
-					anchorCount, heldOutAuc, baseRate, note);
-		}
-
-		private static FusionModel unsupervised(boolean[] active, String note)
-		{
-			int signals = 0;
-			for (boolean on : active)
-			{
-				signals += on ? 1 : 0;
-			}
-			double[] coefficients = new double[4];
-			double[] means = new double[3];
-			double[] scales = {1.0, 1.0, 1.0};
-			//With equal unit weights on raw signals the score is a monotone
-			//transform of their mean; the intercept centres it on 0.5.
-			for (int signal = 0; signal < 3; signal++)
-			{
-				coefficients[signal + 1] = active[signal] ? 4.0 / Math.max(1, signals) : 0.0;
-			}
-			double[][] bootstrap = new double[BOOTSTRAP_FITS][];
-			for (int b = 0; b < BOOTSTRAP_FITS; b++)
-			{
-				bootstrap[b] = coefficients.clone();
-			}
-			return new FusionModel(coefficients, bootstrap, means, scales, active, false, 0, 0, Double.NaN,
-					Double.NaN, "Unsupervised fusion: " + note);
-		}
-
-		private static double[] pair(UserProfile anchor, UserProfile other, double[] graph,
-				TemporalCorpus corpus, double label)
-		{
-			return new double[] {
-					cosine(anchor.tfidf, other.tfidf),
-					graph[other.index],
-					corpus.available ? coActivity(anchor.activity, other.activity) : 0.0,
-					label};
-		}
-
-		/** Probability that two random distinct labelled users share a community. */
-		private static double baseRate(Map<String,Integer> classSizes, int users)
-		{
-			if (users < 2)
-			{
-				return 0.5;
-			}
-			double same = 0.0;
-			for (Integer size : classSizes.values())
-			{
-				same += (double)size.intValue() * (size.intValue() - 1);
-			}
-			double rate = same / ((double)users * (users - 1));
-			return Math.max(1e-6, Math.min(1.0 - 1e-6, rate));
-		}
-
-		/**
-		 * L2-regularised logistic regression by Newton's method (IRLS) on
-		 * standardised features; the intercept is not penalised.
-		 */
-		private static double[] irls(List<double[]> rows, double[] means, double[] scales, boolean[] active)
-		{
-			int dimension = 4;
-			double[] beta = new double[dimension];
-			for (int iteration = 0; iteration < 50; iteration++)
-			{
-				double[] gradient = new double[dimension];
-				double[][] hessian = new double[dimension][dimension];
-				for (double[] row : rows)
-				{
-					double[] x = design(row, means, scales, active);
-					double z = 0.0;
-					for (int j = 0; j < dimension; j++)
-					{
-						z += beta[j] * x[j];
-					}
-					double p = sigmoid(z);
-					double w = Math.max(p * (1.0 - p), 1e-10);
-					for (int j = 0; j < dimension; j++)
-					{
-						gradient[j] += (row[3] - p) * x[j];
-						for (int k = 0; k < dimension; k++)
-						{
-							hessian[j][k] += w * x[j] * x[k];
-						}
-					}
-				}
-				for (int j = 1; j < dimension; j++)
-				{
-					gradient[j] -= L2_PENALTY * beta[j];
-					hessian[j][j] += L2_PENALTY;
-					if (!active[j - 1])
-					{
-						//Inactive signals stay at zero.
-						Arrays.fill(hessian[j], 0.0);
-						for (int k = 0; k < dimension; k++)
-						{
-							hessian[k][j] = 0.0;
-						}
-						hessian[j][j] = 1.0;
-						gradient[j] = -beta[j];
-					}
-				}
-				double[] step = solve(hessian, gradient);
-				double change = 0.0;
-				for (int j = 0; j < dimension; j++)
-				{
-					beta[j] += step[j];
-					change = Math.max(change, Math.abs(step[j]));
-				}
-				if (change < 1e-10)
-				{
-					break;
-				}
-			}
-			return beta;
-		}
-
-		private static double[] design(double[] row, double[] means, double[] scales, boolean[] active)
-		{
-			return new double[] {
-					1.0,
-					active[0] ? (row[0] - means[0]) / scales[0] : 0.0,
-					active[1] ? (row[1] - means[1]) / scales[1] : 0.0,
-					active[2] ? (row[2] - means[2]) / scales[2] : 0.0};
-		}
-
-		/** Area under the ROC curve (Mann-Whitney, ties counted half). */
-		private static double auc(List<double[]> rows, double[] beta, double[] means, double[] scales,
-				boolean[] active)
-		{
-			ArrayList<Double> positives = new ArrayList<Double>();
-			ArrayList<Double> negatives = new ArrayList<Double>();
-			for (double[] row : rows)
-			{
-				double[] x = design(row, means, scales, active);
-				double z = 0.0;
-				for (int j = 0; j < 4; j++)
-				{
-					z += beta[j] * x[j];
-				}
-				(row[3] > 0.5 ? positives : negatives).add(Double.valueOf(z));
-			}
-			if (positives.isEmpty() || negatives.isEmpty())
-			{
-				return Double.NaN;
-			}
-			double wins = 0.0;
-			for (Double positive : positives)
-			{
-				for (Double negative : negatives)
-				{
-					int compare = Double.compare(positive, negative);
-					wins += compare > 0 ? 1.0 : compare == 0 ? 0.5 : 0.0;
-				}
-			}
-			return wins / ((double)positives.size() * negatives.size());
-		}
-
-		/** Gaussian elimination with partial pivoting on a small system. */
-		private static double[] solve(double[][] matrix, double[] vector)
-		{
-			int n = vector.length;
-			double[][] a = new double[n][n + 1];
-			for (int i = 0; i < n; i++)
-			{
-				System.arraycopy(matrix[i], 0, a[i], 0, n);
-				a[i][n] = vector[i];
-			}
-			for (int column = 0; column < n; column++)
-			{
-				int pivot = column;
-				for (int row = column + 1; row < n; row++)
-				{
-					if (Math.abs(a[row][column]) > Math.abs(a[pivot][column]))
-					{
-						pivot = row;
-					}
-				}
-				double[] swap = a[column];
-				a[column] = a[pivot];
-				a[pivot] = swap;
-				double divisor = a[column][column];
-				if (Math.abs(divisor) < 1e-15)
-				{
-					continue;
-				}
-				for (int row = 0; row < n; row++)
-				{
-					if (row == column)
-					{
-						continue;
-					}
-					double factor = a[row][column] / divisor;
-					for (int k = column; k <= n; k++)
-					{
-						a[row][k] -= factor * a[column][k];
-					}
-				}
-			}
-			double[] result = new double[n];
-			for (int i = 0; i < n; i++)
-			{
-				result[i] = Math.abs(a[i][i]) < 1e-15 ? 0.0 : a[i][n] / a[i][i];
-			}
-			return result;
-		}
-	}
-
-	private static double sigmoid(double z)
-	{
-		if (z >= 0)
-		{
-			double e = Math.exp(-z);
-			return 1.0 / (1.0 + e);
-		}
-		double e = Math.exp(z);
-		return e / (1.0 + e);
-	}
-
-	// ============================================================ explanation
-
-	/**
-	 * Fills the kept candidates' evidence: additive contributions, bootstrap
-	 * interval and rank stability, counterfactual ranks, the timeline and the
-	 * plain-language summaries. Ranks under counterfactuals are among all
-	 * candidates.
-	 */
-	private static void explain(UserProfile target, List<CandidateScore> kept, List<CandidateScore> all,
-			Prepared prepared)
-	{
-		FusionModel model = prepared.model;
-		//Ranks of every candidate under each bootstrap refit.
-		int n = all.size();
-		double[][] features = new double[n][];
-		for (int i = 0; i < n; i++)
-		{
-			CandidateScore score = all.get(i);
-			features[i] = new double[] {score.text, score.graph, score.time};
-		}
-		HashMap<CandidateScore,Integer> inTop = new HashMap<CandidateScore,Integer>();
-		HashMap<CandidateScore,double[]> samples = new HashMap<CandidateScore,double[]>();
-		java.util.IdentityHashMap<CandidateScore,Integer> positions = new java.util.IdentityHashMap<CandidateScore,Integer>();
-		for (int i = 0; i < n; i++)
-		{
-			positions.put(all.get(i), Integer.valueOf(i));
-		}
-		for (CandidateScore score : kept)
-		{
-			inTop.put(score, Integer.valueOf(0));
-			samples.put(score, new double[model.bootstrap.length]);
-		}
-		for (int b = 0; b < model.bootstrap.length; b++)
-		{
-			final double[] probabilities = new double[n];
-			Integer[] order = new Integer[n];
-			for (int i = 0; i < n; i++)
-			{
-				probabilities[i] = model.probability(model.bootstrap[b], features[i]);
-				order[i] = Integer.valueOf(i);
-			}
-			final List<CandidateScore> candidates = all;
-			Arrays.sort(order, new Comparator<Integer>()
-			{
-				public int compare(Integer first, Integer second)
-				{
-					int byScore = Double.compare(probabilities[second.intValue()], probabilities[first.intValue()]);
-					return byScore != 0 ? byScore : candidates.get(first.intValue()).candidate.name
-							.compareTo(candidates.get(second.intValue()).candidate.name);
-				}
-			});
-			for (int position = 0; position < Math.min(STABILITY_TOP, n); position++)
-			{
-				CandidateScore score = all.get(order[position].intValue());
-				Integer count = inTop.get(score);
-				if (count != null)
-				{
-					inTop.put(score, Integer.valueOf(count.intValue() + 1));
-				}
-			}
-			for (CandidateScore score : kept)
-			{
-				samples.get(score)[b] = probabilities[positions.get(score).intValue()];
-			}
-		}
-		//Counterfactual ranks: each signal removed (set to its mean), and the top shared term removed.
-		int[][] counterfactualRanks = new int[4][];
-		double[][] counterfactualScores = new double[4][n];
-		for (int signal = 0; signal < 3; signal++)
-		{
-			boolean[] removed = new boolean[3];
-			removed[signal] = true;
-			for (int i = 0; i < n; i++)
-			{
-				counterfactualScores[signal][i] = model.probabilityWithout(features[i], removed);
-			}
-			counterfactualRanks[signal] = ranks(all, counterfactualScores[signal]);
-		}
-		for (CandidateScore score : kept)
-		{
-			score.sharedTerms = sharedTerms(target.tfidf, score.candidate.tfidf, DETAIL_TERM_LIMIT);
-		}
-		String topTerm = kept.isEmpty() || kept.get(0).sharedTerms.isEmpty() ? null : kept.get(0).sharedTerms.get(0);
-		double[] graphWithoutTerm = prepared.diffusion.spread(target, prepared.users.size(), topTerm);
-		for (int i = 0; i < n; i++)
-		{
-			CandidateScore score = all.get(i);
-			double[] x = features[i].clone();
-			if (topTerm != null)
-			{
-				x[TEXT] = cosineExcluding(target.tfidf, score.candidate.tfidf, topTerm);
-				x[GRAPH] = graphWithoutTerm[score.candidate.index];
-			}
-			counterfactualScores[3][i] = model.probability(x);
-			score.withoutTopTermText = x[TEXT];
-		}
-		counterfactualRanks[3] = ranks(all, counterfactualScores[3]);
-		for (int i = 0; i < n; i++)
-		{
-			CandidateScore score = all.get(i);
-			score.withoutTextScore = counterfactualScores[TEXT][i];
-			score.withoutGraphScore = counterfactualScores[GRAPH][i];
-			score.withoutTimeScore = counterfactualScores[TIME][i];
-			score.withoutTopTermScore = counterfactualScores[3][i];
-			score.withoutBridgeScore = score.finalScore;
-			score.withoutDebiasScore = score.finalScore;
-			score.withoutTextRank = counterfactualRanks[TEXT][i];
-			score.withoutGraphRank = counterfactualRanks[GRAPH][i];
-			score.withoutTimeRank = counterfactualRanks[TIME][i];
-			score.withoutTopTermRank = counterfactualRanks[3][i];
-			score.withoutBridgeRank = score.rank;
-			score.withoutDebiasRank = score.rank;
-		}
-		for (int k = 0; k < kept.size(); k++)
-		{
-			CandidateScore score = kept.get(k);
-			score.textContribution = model.contribution(TEXT, score.text);
-			score.graphContribution = model.contribution(GRAPH, score.graph);
-			score.timeContribution = model.contribution(TIME, score.time);
-			score.model = model;
-			double[] draws = samples.get(score);
-			double[] sorted = draws.clone();
-			Arrays.sort(sorted);
-			score.confidenceLower = percentile(sorted, 0.05);
-			score.confidenceUpper = percentile(sorted, 0.95);
-			score.confidenceRadius = (score.confidenceUpper - score.confidenceLower) / 2.0;
-			score.stability = inTop.get(score).intValue() / (double)Math.max(1, model.bootstrap.length);
-			score.calibrationPValue = score.stability;
-			score.calibratedConfidence = score.finalScore;
-			score.marginToNext = k + 1 < all.size() ? Math.max(0.0, score.finalScore - all.get(k + 1).finalScore) : 0.0;
-			score.evidenceCoverage = coverage(score, prepared.corpus.available);
-			score.path = graphPath(score);
-			score.counterfactuals = counterfactuals(score, topTerm);
-			score.counterfactualFragility = fragility(score);
-			score.evidenceAtoms = atoms(score, prepared.corpus.available);
-			score.timeline = timeline(target, score, model, prepared.corpus);
-			CandidateScore challenger = k == 0 ? (all.size() > 1 ? all.get(1) : null) : all.get(0);
-			attachChallenger(score, challenger, model);
-			score.riskFlags = riskFlags(score, prepared.corpus, model);
-			score.reliabilityBand = score.stability >= 0.8 ? "stable" : score.stability >= 0.5 ? "reviewable" : "unstable";
-			score.calibrationVerdict = "in the top " + STABILITY_TOP + " under "
-					+ pct(score.stability) + " of " + model.bootstrap.length + " bootstrap refits";
-			score.calibrationNote = "90% bootstrap interval of the probability: "
-					+ fmt(score.confidenceLower) + " to " + fmt(score.confidenceUpper)
-					+ (model.supervised ? "" : " (unsupervised fusion: no sampling uncertainty)");
-			score.whyThis = whyThis(score);
-			score.whyNotChallenger = whyNotChallenger(score);
-			score.researchVerdict = score.reliabilityBand + " recommendation, led by " + leadingSignal(score);
-		}
-		assignTimelineRanks(kept);
-	}
-
-	private static int[] ranks(List<CandidateScore> all, final double[] scores)
-	{
-		int n = all.size();
-		Integer[] order = new Integer[n];
-		for (int i = 0; i < n; i++)
-		{
-			order[i] = Integer.valueOf(i);
-		}
-		final List<CandidateScore> candidates = all;
-		Arrays.sort(order, new Comparator<Integer>()
-		{
-			public int compare(Integer first, Integer second)
-			{
-				int byScore = Double.compare(scores[second.intValue()], scores[first.intValue()]);
-				return byScore != 0 ? byScore : candidates.get(first.intValue()).candidate.name
-						.compareTo(candidates.get(second.intValue()).candidate.name);
-			}
-		});
-		int[] ranks = new int[n];
-		for (int position = 0; position < n; position++)
-		{
-			ranks[order[position].intValue()] = position + 1;
-		}
-		return ranks;
-	}
-
-	private static double percentile(double[] sorted, double quantile)
-	{
-		if (sorted.length == 0)
-		{
-			return 0.0;
-		}
-		double position = quantile * (sorted.length - 1);
-		int low = (int)Math.floor(position);
-		int high = (int)Math.ceil(position);
-		return sorted[low] + (sorted[high] - sorted[low]) * (position - low);
-	}
-
-	private static double coverage(CandidateScore score, boolean timeAvailable)
-	{
-		int available = timeAvailable ? 3 : 2;
-		int present = (score.text > 0.0 ? 1 : 0) + (score.graph > 0.0 ? 1 : 0)
-				+ (timeAvailable && score.time > 0.0 ? 1 : 0);
-		return present / (double)available;
-	}
-
-	private static String graphPath(CandidateScore score)
-	{
-		if (score.graph <= 0.0)
-		{
-			return "no shared terms in the user-term graph";
-		}
-		return score.target.name + " -> " + (score.sharedTerms.isEmpty() ? "shared terms"
-				: joinTerms(score.sharedTerms)) + " -> " + score.candidate.name
-				+ " (diffusion " + pct(score.graph) + " of the target's best)";
-	}
-
-	private static List<CounterfactualProbe> counterfactuals(CandidateScore score, String topTerm)
-	{
-		ArrayList<CounterfactualProbe> probes = new ArrayList<CounterfactualProbe>();
-		probes.add(CounterfactualProbe.from("Remove text", score.withoutTextScore, score.withoutTextRank,
-				score.finalScore, score.rank));
-		probes.add(CounterfactualProbe.from("Remove graph", score.withoutGraphScore, score.withoutGraphRank,
-				score.finalScore, score.rank));
-		probes.add(CounterfactualProbe.from("Remove time", score.withoutTimeScore, score.withoutTimeRank,
-				score.finalScore, score.rank));
-		probes.add(CounterfactualProbe.from(topTerm == null ? "Remove top term"
-				: "Remove '" + topTerm + "' from the target",
-				score.withoutTopTermScore, score.withoutTopTermRank, score.finalScore, score.rank));
-		return Collections.unmodifiableList(probes);
-	}
-
-	/** The largest relative probability drop under any single counterfactual. */
-	private static double fragility(CandidateScore score)
-	{
-		if (score.finalScore <= 0.0)
-		{
-			return 0.0;
-		}
-		double worst = 0.0;
-		for (CounterfactualProbe probe : score.counterfactuals)
-		{
-			worst = Math.max(worst, probe.scoreDrop / score.finalScore);
-		}
-		return clamp01(worst);
-	}
-
-	private static List<EvidenceAtom> atoms(CandidateScore score, boolean timeAvailable)
-	{
-		ArrayList<EvidenceAtom> atoms = new ArrayList<EvidenceAtom>();
-		atoms.add(new EvidenceAtom("Text similarity", score.text, score.textContribution,
-				"TF-IDF cosine; shared terms: " + joinTerms(score.sharedTerms)));
-		atoms.add(new EvidenceAtom("Graph diffusion", score.graph, score.graphContribution, score.path));
-		atoms.add(new EvidenceAtom("Temporal co-activity", score.time, score.timeContribution,
-				timeAvailable ? "cosine of the two users' activity histograms over the dated span"
-						: "unavailable: the corpus has fewer than two distinct timestamps"));
-		return Collections.unmodifiableList(atoms);
-	}
-
-	/**
-	 * The probability recomputed with the temporal signal measured on activity
-	 * up to each frame's date (text and graph are this run's values).
-	 */
-	private static List<TimelineFrame> timeline(UserProfile target, CandidateScore score, FusionModel model,
-			TemporalCorpus corpus)
-	{
-		ArrayList<TimelineFrame> frames = new ArrayList<TimelineFrame>();
-		if (!corpus.available)
-		{
-			return Collections.unmodifiableList(frames);
-		}
-		double previous = 0.0;
-		for (int frame = 0; frame < TIMELINE_FRAME_COUNT; frame++)
-		{
-			double progress = (frame + 1) / (double)TIMELINE_FRAME_COUNT;
-			int bins = (int)Math.round(progress * ACTIVITY_BINS);
-			double time = coActivity(prefix(target.activity, bins), prefix(score.candidate.activity, bins));
-			double probability = model.probability(new double[] {score.text, score.graph, time});
-			long cutoff = corpus.minTime + Math.round(progress * (corpus.maxTime - corpus.minTime));
-			String label = date(cutoff);
-			String evidence = "co-activity up to " + label + ": " + pct(time);
-			frames.add(new TimelineFrame(frame, progress, label, probability, score.text, score.graph, time,
-					0.0, 0.0, 0.0, evidence, frame == 0 ? probability : probability - previous,
-					strongest(model, score.text, score.graph, time),
-					"probability " + fmt(probability) + " with activity observed up to " + label + "."));
-			previous = probability;
-		}
-		return Collections.unmodifiableList(frames);
-	}
-
-	private static String strongest(FusionModel model, double text, double graph, double time)
-	{
-		double[] contributions = {
-				model.contribution(TEXT, text), model.contribution(GRAPH, graph), model.contribution(TIME, time)};
-		int best = 0;
-		for (int i = 1; i < 3; i++)
-		{
-			if (contributions[i] > contributions[best])
-			{
-				best = i;
-			}
-		}
-		return SIGNALS[best];
-	}
-
-	private static void assignTimelineRanks(List<CandidateScore> scores)
-	{
-		if (scores.isEmpty() || scores.get(0).timeline.isEmpty())
-		{
-			return;
-		}
-		int frames = scores.get(0).timeline.size();
-		for (int frame = 0; frame < frames; frame++)
-		{
-			final int index = frame;
-			ArrayList<CandidateScore> ordered = new ArrayList<CandidateScore>(scores);
-			Collections.sort(ordered, new Comparator<CandidateScore>()
-			{
-				public int compare(CandidateScore first, CandidateScore second)
-				{
-					return CandidateScore.compareScore(first, second,
-							first.timeline.get(index).score, second.timeline.get(index).score);
-				}
-			});
-			for (int i = 0; i < ordered.size(); i++)
-			{
-				TimelineFrame current = ordered.get(i).timeline.get(frame);
-				current.rank = i + 1;
-				current.previousRank = frame == 0 ? current.rank : ordered.get(i).timeline.get(frame - 1).rank;
-			}
-		}
-	}
-
-	private static void attachChallenger(CandidateScore score, CandidateScore challenger, FusionModel model)
-	{
-		if (challenger == null)
-		{
-			return;
-		}
-		score.challengerName = challenger.candidate.name;
-		score.challengerFollowee = challenger.candidate.followee;
-		score.challengerScore = challenger.finalScore;
-		score.challengerText = challenger.text;
-		score.challengerGraph = challenger.graph;
-		score.challengerTime = challenger.time;
-		score.challengerGap = score.finalScore - challenger.finalScore;
-		double[] deltas = {
-				model.contribution(TEXT, score.text) - model.contribution(TEXT, challenger.text),
-				model.contribution(GRAPH, score.graph) - model.contribution(GRAPH, challenger.graph),
-				model.contribution(TIME, score.time) - model.contribution(TIME, challenger.time)};
-		int best = 0;
-		for (int i = 1; i < 3; i++)
-		{
-			if (Math.abs(deltas[i]) > Math.abs(deltas[best]))
-			{
-				best = i;
-			}
-		}
-		score.bestContrastSignal = SIGNALS[best] + " " + String.format(Locale.US, "%+.3f", deltas[best])
-				+ " log-odds";
-	}
-
-	private static List<String> riskFlags(CandidateScore score, TemporalCorpus corpus, FusionModel model)
-	{
-		ArrayList<String> flags = new ArrayList<String>();
-		if (score.rank == 1 && score.marginToNext < score.confidenceRadius)
-		{
-			flags.add("the lead over the next candidate is inside the bootstrap interval");
-		}
-		if (score.stability < 0.5)
-		{
-			flags.add("in the top " + STABILITY_TOP + " under fewer than half of the bootstrap refits");
-		}
-		if (!corpus.available)
-		{
-			flags.add("temporal signal unavailable");
-		}
-		if (!model.supervised)
-		{
-			flags.add("unsupervised fusion (no labelled pairs to learn from)");
-		}
-		double total = Math.abs(score.textContribution) + Math.abs(score.graphContribution)
-				+ Math.abs(score.timeContribution);
-		double largest = Math.max(Math.abs(score.textContribution),
-				Math.max(Math.abs(score.graphContribution), Math.abs(score.timeContribution)));
-		if (total > 0.0 && largest / total > 0.85)
-		{
-			flags.add("one signal carries over 85% of the evidence");
-		}
-		if (flags.isEmpty())
-		{
-			flags.add("no evidence-limit flags");
-		}
-		return Collections.unmodifiableList(flags);
-	}
-
-	private static String leadingSignal(CandidateScore score)
-	{
-		double[] contributions = {score.textContribution, score.graphContribution, score.timeContribution};
-		int best = 0;
-		for (int i = 1; i < 3; i++)
-		{
-			if (contributions[i] > contributions[best])
-			{
-				best = i;
-			}
-		}
-		return SIGNALS[best];
-	}
-
-	private static String whyThis(CandidateScore score)
-	{
-		return "Rank " + rankText(score.rank) + ": probability " + fmt(score.finalScore)
-				+ " (90% bootstrap " + fmt(score.confidenceLower) + "-" + fmt(score.confidenceUpper)
-				+ ") of sharing the target's community, led by " + leadingSignal(score)
-				+ "; log-odds contributions text " + signedFmt(score.textContribution)
-				+ ", graph " + signedFmt(score.graphContribution)
-				+ ", time " + signedFmt(score.timeContribution) + ".";
-	}
-
-	private static String whyNotChallenger(CandidateScore score)
-	{
-		if (score.challengerName == null || score.challengerName.length() == 0)
-		{
-			return "No other candidate to contrast.";
-		}
-		return score.candidate.name + (score.challengerGap >= 0.0 ? " leads " : " trails ")
-				+ score.challengerName + " by " + String.format(Locale.US, "%.4f", Math.abs(score.challengerGap))
-				+ "; largest difference: " + score.bestContrastSignal + ".";
-	}
-
-	private static String detailFor(CandidateScore score)
-	{
-		return "TGF probability " + fmt(score.finalScore)
-				+ " (text " + pct(score.text) + ", graph " + pct(score.graph) + ", time " + pct(score.time)
-				+ "); " + score.calibrationVerdict + "; shared " + joinTerms(score.sharedTerms);
-	}
-
-	// ============================================================= evaluation
-
-	/**
-	 * Ablation lenses over all candidates: the fusion and each signal alone,
-	 * graded against the target's followee (Hit@1, Hit@3, MRR, NDCG@5).
-	 */
-	private static List<BenchmarkRow> benchmarkRows(UserProfile target, List<CandidateScore> all,
-			boolean timeAvailable)
-	{
-		ArrayList<BenchmarkRow> rows = new ArrayList<BenchmarkRow>();
-		if (all.isEmpty() || target.followee.length() == 0)
-		{
-			return rows;
-		}
-		rows.add(lens("TGF fusion", "learned fusion of text, graph and time", target, all, -1));
-		rows.add(lens("Text only", "TF-IDF cosine (the Similarity algorithm)", target, all, TEXT));
-		rows.add(lens("Graph only", "mass diffusion on the user-term graph", target, all, GRAPH));
-		if (timeAvailable)
-		{
-			rows.add(lens("Time only", "temporal co-activity", target, all, TIME));
-		}
-		return Collections.unmodifiableList(rows);
-	}
-
-	private static BenchmarkRow lens(String label, String note, UserProfile target, List<CandidateScore> all,
-			final int signal)
-	{
-		ArrayList<CandidateScore> ordered = new ArrayList<CandidateScore>(all);
-		Collections.sort(ordered, new Comparator<CandidateScore>()
-		{
-			public int compare(CandidateScore first, CandidateScore second)
-			{
-				return CandidateScore.compareScore(first, second, value(first, signal), value(second, signal));
-			}
-		});
-		int relevant = 0;
-		for (CandidateScore score : all)
-		{
-			relevant += sameCommunity(target, score.candidate) ? 1 : 0;
-		}
-		int firstRelevant = 0;
-		double dcg = 0.0;
-		for (int i = 0; i < ordered.size(); i++)
-		{
-			if (sameCommunity(target, ordered.get(i).candidate))
-			{
-				if (firstRelevant == 0)
-				{
-					firstRelevant = i + 1;
-				}
-				if (i < 5)
-				{
-					dcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
-				}
-			}
-		}
-		double idcg = 0.0;
-		for (int i = 0; i < Math.min(5, relevant); i++)
-		{
-			idcg += 1.0 / (Math.log(i + 2.0) / Math.log(2.0));
-		}
-		CandidateScore top = ordered.get(0);
-		return new BenchmarkRow(label, top.candidate.name, value(top, signal), firstRelevant,
-				firstRelevant == 1 ? 1.0 : 0.0, firstRelevant > 0 && firstRelevant <= 3 ? 1.0 : 0.0,
-				firstRelevant > 0 ? 1.0 / firstRelevant : 0.0, idcg > 0.0 ? dcg / idcg : 0.0, note);
-	}
-
-	private static double value(CandidateScore score, int signal)
-	{
-		return signal == TEXT ? score.text : signal == GRAPH ? score.graph : signal == TIME ? score.time
-				: score.finalScore;
-	}
-
-	/** Grading only: whether a candidate follows the target's followee. */
-	private static boolean sameCommunity(UserProfile target, UserProfile candidate)
-	{
-		return target.followee.length() > 0 && target.followee.equals(candidate.followee);
-	}
-
-	static String weightsDescription()
-	{
-		return "learned per run by logistic regression on labelled non-target pairs (see the run summary)";
-	}
-
-	static String methodologySummary()
-	{
-		return "TGF ranks candidates by the probability that they share the target's community, from a "
-				+ "logistic fusion of three label-free signals: TF-IDF cosine, mass diffusion on the user-term "
-				+ "graph and temporal co-activity. The fusion is learned on labelled users that are not targets, "
-				+ "with bootstrap intervals and rank stability; the target's own followee is used only to grade "
-				+ "the result.";
-	}
-
-	// ================================================================= helpers
-
-	private static double cosine(Map<String,Double> first, Map<String,Double> second)
-	{
-		if (first == null || second == null || first.isEmpty() || second.isEmpty())
-		{
-			return 0.0;
-		}
-		Map<String,Double> smaller = first.size() <= second.size() ? first : second;
-		Map<String,Double> larger = smaller == first ? second : first;
-		double dot = 0.0;
-		for (Map.Entry<String,Double> entry : smaller.entrySet())
-		{
-			Double other = larger.get(entry.getKey());
-			if (other != null)
-			{
-				dot += finite(entry.getValue()) * finite(other);
-			}
-		}
-		double norm = vectorNorm(first, null) * vectorNorm(second, null);
-		return norm <= 0.0 ? 0.0 : clamp01(dot / norm);
-	}
-
-	private static double cosineExcluding(Map<String,Double> first, Map<String,Double> second, String excluded)
-	{
-		if (first == null || second == null || first.isEmpty() || second.isEmpty())
-		{
-			return 0.0;
-		}
-		double dot = 0.0;
-		for (Map.Entry<String,Double> entry : first.entrySet())
-		{
-			if (entry.getKey().equals(excluded))
-			{
-				continue;
-			}
-			Double other = second.get(entry.getKey());
-			if (other != null)
-			{
-				dot += finite(entry.getValue()) * finite(other);
-			}
-		}
-		double norm = vectorNorm(first, excluded) * vectorNorm(second, excluded);
-		return norm <= 0.0 ? 0.0 : clamp01(dot / norm);
-	}
-
-	private static double vectorNorm(Map<String,Double> vector, String excluded)
-	{
-		double total = 0.0;
-		for (Map.Entry<String,Double> entry : vector.entrySet())
-		{
-			if (entry.getKey().equals(excluded))
-			{
-				continue;
-			}
-			double value = finite(entry.getValue());
-			total += value * value;
-		}
-		return Math.sqrt(total);
-	}
-
-	/** Shared terms by their contribution to the cosine (product of weights), ties by name. */
-	private static List<String> sharedTerms(Map<String,Double> first, Map<String,Double> second, int limit)
-	{
-		ArrayList<Map.Entry<String,Double>> shared = new ArrayList<Map.Entry<String,Double>>();
-		for (Map.Entry<String,Double> entry : first.entrySet())
-		{
-			Double other = second.get(entry.getKey());
-			double product = finite(entry.getValue()) * finite(other);
-			if (other != null && product > 0.0)
-			{
-				shared.add(new java.util.AbstractMap.SimpleImmutableEntry<String,Double>(
-						entry.getKey(), Double.valueOf(product)));
-			}
-		}
-		Collections.sort(shared, new Comparator<Map.Entry<String,Double>>()
-		{
-			public int compare(Map.Entry<String,Double> a, Map.Entry<String,Double> b)
-			{
-				int byWeight = Double.compare(b.getValue(), a.getValue());
-				return byWeight != 0 ? byWeight : a.getKey().compareTo(b.getKey());
+				int byProduct = Double.compare(b[1], a[1]);
+				return byProduct != 0 ? byProduct : Double.compare(a[0], b[0]);
 			}
 		});
 		ArrayList<String> terms = new ArrayList<String>();
-		for (int i = 0; i < shared.size() && i < limit; i++)
+		for (int k = 0; k < Math.min(limit, shared.size()); k++)
 		{
-			terms.add(shared.get(i).getKey());
+			terms.add(features.terms[(int)shared.get(k)[0]]);
 		}
 		return terms;
 	}
 
-	private static String date(long millis)
+	/** (term, month) features two users share, strongest first, as "term (yyyy-MM)". */
+	private static List<String> sharedPairs(TgfFeatures features, int u, int v, int limit)
+	{
+		TgfFeatures.Sparse pairs = features.termTime;
+		final ArrayList<double[]> shared = new ArrayList<double[]>();
+		int i = pairs.pointer[u];
+		int j = pairs.pointer[v];
+		while (i < pairs.pointer[u + 1] && j < pairs.pointer[v + 1])
+		{
+			int a = pairs.column[i];
+			int b = pairs.column[j];
+			if (a == b)
+			{
+				shared.add(new double[] {a, pairs.value[i] * pairs.value[j]});
+				i++;
+				j++;
+			}
+			else if (a < b)
+			{
+				i++;
+			}
+			else
+			{
+				j++;
+			}
+		}
+		Collections.sort(shared, new Comparator<double[]>()
+		{
+			public int compare(double[] a, double[] b)
+			{
+				int byProduct = Double.compare(b[1], a[1]);
+				return byProduct != 0 ? byProduct : Double.compare(a[0], b[0]);
+			}
+		});
+		ArrayList<String> result = new ArrayList<String>();
+		for (int k = 0; k < Math.min(limit, shared.size()); k++)
+		{
+			int feature = (int)shared.get(k)[0];
+			result.add(features.terms[features.pairTerm[feature]] + " (" + features.monthLabel(features.pairMonth[feature])
+					+ ")");
+		}
+		return result;
+	}
+
+	private static int[] rankClasses(final double[] p)
+	{
+		Integer[] order = new Integer[p.length];
+		for (int c = 0; c < p.length; c++)
+		{
+			order[c] = Integer.valueOf(c);
+		}
+		Arrays.sort(order, new Comparator<Integer>()
+		{
+			public int compare(Integer a, Integer b)
+			{
+				int byP = Double.compare(p[b.intValue()], p[a.intValue()]);
+				return byP != 0 ? byP : Integer.compare(a.intValue(), b.intValue());
+			}
+		});
+		int[] ranked = new int[p.length];
+		for (int i = 0; i < p.length; i++)
+		{
+			ranked[i] = order[i].intValue();
+		}
+		return ranked;
+	}
+
+	private static int rankOf(int[] ranked, int c)
+	{
+		for (int i = 0; i < ranked.length; i++)
+		{
+			if (ranked[i] == c)
+			{
+				return i + 1;
+			}
+		}
+		return 0;
+	}
+
+	/** Shannon entropy over log(K): 0 when certain, 1 when uniform. */
+	private static double entropy(double[] p)
+	{
+		double h = 0.0;
+		for (double value : p)
+		{
+			if (value > 0.0)
+			{
+				h -= value * Math.log(value);
+			}
+		}
+		return p.length < 2 ? 0.0 : h / Math.log(p.length);
+	}
+
+	private static double[] shares(double[] counts)
+	{
+		double total = 0.0;
+		for (double value : counts)
+		{
+			total += value;
+		}
+		double[] result = new double[counts.length];
+		for (int i = 0; i < counts.length; i++)
+		{
+			result[i] = total > 0.0 ? counts[i] / total : 0.0;
+		}
+		return result;
+	}
+
+	private static int activeCount(TgfModel model)
+	{
+		int count = 0;
+		for (int channel = 0; channel < TgfModel.CHANNELS; channel++)
+		{
+			count += model.active[channel] ? 1 : 0;
+		}
+		return count;
+	}
+
+	static List<Object> toList(double[] values)
+	{
+		ArrayList<Object> list = new ArrayList<Object>();
+		for (double value : values)
+		{
+			list.add(Double.valueOf(value));
+		}
+		return list;
+	}
+
+	private static String day(long millis)
 	{
 		SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
 		format.setTimeZone(TimeZone.getTimeZone("UTC"));
 		return format.format(new Date(millis));
 	}
 
-	private static String rankText(int rank)
-	{
-		return rank <= 0 ? "n/a" : "#" + rank;
-	}
-
-	private static String pct(double value)
-	{
-		return Integer.toString((int)Math.round(clamp01(value) * 100.0)) + "%";
-	}
-
-	private static String fmt(double value)
+	private static String fixed(double value)
 	{
 		return String.format(Locale.US, "%.3f", Double.isFinite(value) ? value : 0.0);
 	}
 
-	private static String signedFmt(double value)
+	private static String join(List<String> values)
 	{
-		double safe = Double.isFinite(value) ? value : 0.0;
-		return String.format(Locale.US, "%+.3f", safe);
-	}
-
-	private static String joinTerms(List<String> terms)
-	{
-		if (terms == null || terms.isEmpty())
-		{
-			return "no shared terms";
-		}
 		StringBuilder builder = new StringBuilder();
-		for (int i = 0; i < terms.size(); i++)
+		for (String value : values)
 		{
-			if (i > 0)
+			if (builder.length() > 0)
 			{
 				builder.append(", ");
 			}
-			builder.append(terms.get(i));
+			builder.append(value);
 		}
 		return builder.toString();
 	}
 
-	private static double finite(Double value)
+	static String methodologySummary()
 	{
-		return value == null || !Double.isFinite(value) ? 0.0 : value.doubleValue();
-	}
-
-	private static double clamp01(double value)
-	{
-		if (!Double.isFinite(value) || value < 0.0)
-		{
-			return 0.0;
-		}
-		return value > 1.0 ? 1.0 : value;
+		return "TGF estimates the probability that the target follows each account with a cross-fitted Super Learner"
+				+ " over six learners (text logistic regression, label propagation over the text and term-time graphs,"
+				+ " an activity model and two neighbour votes) stacked by a non-negative logarithmic opinion pool, with"
+				+ " 90% split-conformal prediction sets. Users are recommended by the probability of sharing the"
+				+ " target's community; the target's own follow is used only to grade the result.";
 	}
 
 	// ================================================================ records
@@ -1730,7 +1348,7 @@ final class TemporalGraphFoundationModelSupport
 	static final class Input
 	{
 		final String runId;
-		/** The run corpus (RunCorpus) or a raw dataset file; read for timestamps only. */
+		/** The run corpus (RunCorpus); without it the TF-IDF vectors are used and time is off. */
 		final File datasetFile;
 		final Map<String,? extends Map<String,Double>> tfidfDocuments;
 		final Map<String,String> userFollowees;
@@ -1740,6 +1358,8 @@ final class TemporalGraphFoundationModelSupport
 		final int currentNode;
 		final int numRecAgents;
 		final int localResultLimit;
+		/** The dataset's own name, shown instead of the run corpus's content-addressed file name. */
+		final String datasetName;
 
 		Input(
 				String runId,
@@ -1767,6 +1387,28 @@ final class TemporalGraphFoundationModelSupport
 			this.currentNode = currentNode;
 			this.numRecAgents = Math.max(1, numRecAgents);
 			this.localResultLimit = Math.max(0, localResultLimit);
+			this.datasetName = datasetFile == null ? null : datasetFile.getName();
+		}
+
+		private Input(Input source, String datasetName)
+		{
+			this.runId = source.runId;
+			this.datasetFile = source.datasetFile;
+			this.tfidfDocuments = source.tfidfDocuments;
+			this.userFollowees = source.userFollowees;
+			this.datasetUserFollowees = source.datasetUserFollowees;
+			this.targetUsers = source.targetUsers;
+			this.userPrimaryRecServer = source.userPrimaryRecServer;
+			this.currentNode = source.currentNode;
+			this.numRecAgents = source.numRecAgents;
+			this.localResultLimit = source.localResultLimit;
+			this.datasetName = datasetName;
+		}
+
+		/** The same input naming the dataset the run read (its corpus file is named by a hash). */
+		Input named(String name)
+		{
+			return new Input(this, name == null || name.trim().isEmpty() ? datasetName : name.trim());
 		}
 
 		static Input empty()
@@ -1777,6 +1419,7 @@ final class TemporalGraphFoundationModelSupport
 		}
 	}
 
+	/** One run's TGF result: the ranked lists and the report (model card and per-target explanations). */
 	static final class Result
 	{
 		private final String runId;
@@ -1784,49 +1427,59 @@ final class TemporalGraphFoundationModelSupport
 		private final String summary;
 		private final long rowsScanned;
 		private final long datedRows;
-		private final int graphArtifactEdges;
 		private final TreeMap<String,TreeMap<String,Double>> scores;
 		private final TreeMap<String,TreeMap<String,String>> details;
-		private final LinkedHashMap<String,TargetReport> reports;
-		private final ResearchSummary researchSummary;
+		private final TreeMap<String,TreeMap<String,Double>> accounts;
+		private final TreeMap<String,TreeMap<String,String>> accountDetails;
+		private final LinkedHashMap<String,Object> json;
 
 		private Result(String runId, File datasetFile, String summary, long rowsScanned, long datedRows,
-				int graphArtifactEdges, Map<String,TreeMap<String,Double>> scores,
-				Map<String,TreeMap<String,String>> details, Map<String,TargetReport> reports,
-				ResearchSummary researchSummary)
+				TreeMap<String,TreeMap<String,Double>> scores, TreeMap<String,TreeMap<String,String>> details,
+				TreeMap<String,TreeMap<String,Double>> accounts, TreeMap<String,TreeMap<String,String>> accountDetails,
+				LinkedHashMap<String,Object> json)
 		{
 			this.runId = runId == null ? "" : runId;
 			this.datasetFile = datasetFile;
 			this.summary = summary == null ? "" : summary;
-			this.rowsScanned = Math.max(0L, rowsScanned);
-			this.datedRows = Math.max(0L, datedRows);
-			this.graphArtifactEdges = Math.max(0, graphArtifactEdges);
-			this.scores = copyNestedDouble(scores);
-			this.details = copyNestedString(details);
-			this.reports = new LinkedHashMap<String,TargetReport>();
-			if (reports != null)
-			{
-				this.reports.putAll(reports);
-			}
-			this.researchSummary = researchSummary == null ? ResearchSummary.empty() : researchSummary;
+			this.rowsScanned = rowsScanned;
+			this.datedRows = datedRows;
+			this.scores = scores;
+			this.details = details;
+			this.accounts = accounts;
+			this.accountDetails = accountDetails;
+			this.json = json;
 		}
 
-		static Result empty(String runId, File datasetFile, String summary)
-		{
-			return new Result(runId, datasetFile, summary, 0L, 0L, 0,
-					Collections.<String,TreeMap<String,Double>>emptyMap(),
-					Collections.<String,TreeMap<String,String>>emptyMap(),
-					Collections.<String,TargetReport>emptyMap(), ResearchSummary.empty());
-		}
-
+		/** Each target's kept users and their probability of sharing its community (copies). */
 		TreeMap<String,TreeMap<String,Double>> getScores()
 		{
-			return copyNestedDouble(scores);
+			return copy(scores);
 		}
 
 		TreeMap<String,TreeMap<String,String>> getDetails()
 		{
-			return copyNestedString(details);
+			TreeMap<String,TreeMap<String,String>> copy = new TreeMap<String,TreeMap<String,String>>();
+			for (Map.Entry<String,TreeMap<String,String>> entry : details.entrySet())
+			{
+				copy.put(entry.getKey(), new TreeMap<String,String>(entry.getValue()));
+			}
+			return copy;
+		}
+
+		/** Each target's accounts and the probability that it follows them (copies). */
+		TreeMap<String,TreeMap<String,Double>> getAccountScores()
+		{
+			return copy(accounts);
+		}
+
+		TreeMap<String,TreeMap<String,String>> getAccountDetails()
+		{
+			TreeMap<String,TreeMap<String,String>> copy = new TreeMap<String,TreeMap<String,String>>();
+			for (Map.Entry<String,TreeMap<String,String>> entry : accountDetails.entrySet())
+			{
+				copy.put(entry.getKey(), new TreeMap<String,String>(entry.getValue()));
+			}
+			return copy;
 		}
 
 		String getSummary()
@@ -1844,6 +1497,13 @@ final class TemporalGraphFoundationModelSupport
 			return datasetFile;
 		}
 
+		/** The dataset's name (not the run corpus's hashed file name). */
+		String getDatasetName()
+		{
+			Object name = json.get("dataset");
+			return name == null ? (datasetFile == null ? "" : datasetFile.getName()) : name.toString();
+		}
+
 		long getRowsScanned()
 		{
 			return rowsScanned;
@@ -1854,573 +1514,25 @@ final class TemporalGraphFoundationModelSupport
 			return datedRows;
 		}
 
-		/** Always 0: TGF reads no graph files; its graph is built from the run's own text. */
-		int getGraphArtifactEdges()
+		int targetCount()
 		{
-			return graphArtifactEdges;
+			return scores.size();
 		}
 
-		Map<String,TargetReport> getReports()
+		/** The report as JSON values (ordered maps, lists, numbers, strings): what the record stores. */
+		Map<String,Object> toJson()
 		{
-			return Collections.unmodifiableMap(reports);
+			return Collections.unmodifiableMap(json);
 		}
 
-		ResearchSummary getResearchSummary()
+		private static TreeMap<String,TreeMap<String,Double>> copy(TreeMap<String,TreeMap<String,Double>> source)
 		{
-			return researchSummary;
-		}
-	}
-
-	static final class TargetReport
-	{
-		final String targetUser;
-		/** The target's actual followee, used only to grade the ranking. */
-		final String targetFollowee;
-		final List<CandidateScore> topCandidates;
-		final String headline;
-		/** Rank of the first same-community candidate among all candidates (0: none). */
-		final int relevantRank;
-		/** NDCG@5 against same-community relevance, ideal over min(|relevant|, 5). */
-		final double ndcgAtFive;
-		final int observedRows;
-		final String temporalCoverage;
-		final List<BenchmarkRow> benchmarkRows;
-
-		private TargetReport(String targetUser, String targetFollowee, List<CandidateScore> topCandidates,
-				String headline, int relevantRank, double ndcgAtFive, int observedRows, String temporalCoverage,
-				List<BenchmarkRow> benchmarkRows)
-		{
-			this.targetUser = targetUser;
-			this.targetFollowee = targetFollowee;
-			this.topCandidates = Collections.unmodifiableList(new ArrayList<CandidateScore>(topCandidates));
-			this.headline = headline;
-			this.relevantRank = relevantRank;
-			this.ndcgAtFive = ndcgAtFive;
-			this.observedRows = observedRows;
-			this.temporalCoverage = temporalCoverage;
-			this.benchmarkRows = Collections.unmodifiableList(new ArrayList<BenchmarkRow>(
-					benchmarkRows == null ? Collections.<BenchmarkRow>emptyList() : benchmarkRows));
-		}
-
-		static TargetReport from(UserProfile target, List<CandidateScore> kept, List<CandidateScore> all,
-				List<BenchmarkRow> lenses, TemporalCorpus corpus)
-		{
-			String headline;
-			if (kept.isEmpty())
-			{
-				headline = "No candidate received a positive probability.";
-			}
-			else
-			{
-				CandidateScore top = kept.get(0);
-				headline = top.candidate.name + " leads with probability " + fmt(top.finalScore)
-						+ " (text " + pct(top.text) + ", graph " + pct(top.graph) + ", time " + pct(top.time) + ").";
-			}
-			BenchmarkRow fused = lenses.isEmpty() ? null : lenses.get(0);
-			String coverage = target.observedRows <= 0 ? "no rows in the corpus"
-					: corpus.available && target.latestTime != Long.MIN_VALUE
-							? target.observedRows + " rows from " + date(target.firstTime) + " to " + date(target.latestTime)
-							: target.observedRows + " rows, undated";
-			return new TargetReport(target.name, target.followee, kept, headline,
-					fused == null ? 0 : fused.relevantRank, fused == null ? 0.0 : fused.ndcgAtFive,
-					target.observedRows, coverage, lenses);
-		}
-	}
-
-	static final class BenchmarkRow
-	{
-		final String label;
-		final String topCandidate;
-		final double topScore;
-		final int relevantRank;
-		final double hitAtOne;
-		final double hitAtThree;
-		final double mrr;
-		final double ndcgAtFive;
-		final String note;
-
-		private BenchmarkRow(String label, String topCandidate, double topScore, int relevantRank,
-				double hitAtOne, double hitAtThree, double mrr, double ndcgAtFive, String note)
-		{
-			this.label = label == null ? "" : label;
-			this.topCandidate = topCandidate == null ? "" : topCandidate;
-			this.topScore = clamp01(topScore);
-			this.relevantRank = Math.max(0, relevantRank);
-			this.hitAtOne = clamp01(hitAtOne);
-			this.hitAtThree = clamp01(hitAtThree);
-			this.mrr = clamp01(mrr);
-			this.ndcgAtFive = clamp01(ndcgAtFive);
-			this.note = note == null ? "" : note;
-		}
-	}
-
-	static final class CandidateScore
-	{
-		static final Comparator<CandidateScore> FINAL_ORDER = new Comparator<CandidateScore>()
-		{
-			public int compare(CandidateScore first, CandidateScore second)
-			{
-				return compareScore(first, second, first.finalScore, second.finalScore);
-			}
-		};
-
-		final UserProfile target;
-		final UserProfile candidate;
-		private FusionModel model;
-		double text;
-		double graph;
-		double time;
-		/** Retired signals of the earlier heuristic model; always 0. */
-		double bridge;
-		double debias;
-		double robust;
-		double finalScore;
-		double withoutTextScore;
-		double withoutGraphScore;
-		double withoutTimeScore;
-		double withoutBridgeScore;
-		double withoutDebiasScore;
-		double withoutTopTermScore;
-		double withoutTopTermText;
-		/** Additive log-odds contributions relative to the mean training pair. */
-		double textContribution;
-		double graphContribution;
-		double timeContribution;
-		double bridgeContribution;
-		double debiasContribution;
-		double robustContribution;
-		double marginToNext;
-		double confidenceRadius;
-		double confidenceLower;
-		double confidenceUpper;
-		/** Share of bootstrap refits that keep the candidate in the top ten. */
-		double stability;
-		double evidenceCoverage;
-		double counterfactualFragility;
-		double calibrationResidual;
-		double calibrationThreshold;
-		double calibrationPValue;
-		double calibratedConfidence;
-		double challengerScore;
-		double challengerGap;
-		double challengerText;
-		double challengerGraph;
-		double challengerTime;
-		double challengerBridge;
-		double challengerDebias;
-		double challengerRobust;
-		int rank;
-		int withoutTextRank;
-		int withoutGraphRank;
-		int withoutTimeRank;
-		int withoutBridgeRank;
-		int withoutDebiasRank;
-		int withoutTopTermRank;
-		String path = "";
-		String challengerName = "";
-		String challengerFollowee = "";
-		String bestContrastSignal = "n/a";
-		String reliabilityBand = "pending";
-		String calibrationVerdict = "";
-		String calibrationNote = "";
-		String whyThis = "";
-		String whyNotChallenger = "";
-		List<String> sharedTerms = Collections.emptyList();
-		List<TimelineFrame> timeline = Collections.emptyList();
-		List<CounterfactualProbe> counterfactuals = Collections.emptyList();
-		List<EvidenceAtom> evidenceAtoms = Collections.emptyList();
-		List<String> riskFlags = Collections.emptyList();
-		String researchVerdict = "";
-
-		private CandidateScore(UserProfile target, UserProfile candidate)
-		{
-			this.target = target;
-			this.candidate = candidate;
-		}
-
-		String candidateName()
-		{
-			return candidate.name;
-		}
-
-		String candidateFollowee()
-		{
-			return candidate.followee;
-		}
-
-		String impactSummary()
-		{
-			return whyThis + " " + whyNotChallenger + " Without text: rank " + rankText(withoutTextRank)
-					+ "; without graph: rank " + rankText(withoutGraphRank) + "; without time: rank "
-					+ rankText(withoutTimeRank) + "; stability " + pct(stability) + ".";
-		}
-
-		/**
-		 * The probability with the chosen signals removed (set to the mean
-		 * training pair); the bridge and debias switches are ignored (those
-		 * signals were retired).
-		 */
-		double counterfactualScore(boolean removeGraph, boolean removeTime, boolean removeBridge,
-				boolean removeDebias, boolean removeTopTerm)
-		{
-			if (model == null)
-			{
-				return finalScore;
-			}
-			double[] x = {removeTopTerm ? withoutTopTermText : text, graph, time};
-			return model.probabilityWithout(x, new boolean[] {false, removeGraph, removeTime});
-		}
-
-		private static int compareScore(CandidateScore first, CandidateScore second, double firstScore,
-				double secondScore)
-		{
-			int score = Double.compare(secondScore, firstScore);
-			return score != 0 ? score : first.candidate.name.compareTo(second.candidate.name);
-		}
-	}
-
-	static final class EvidenceAtom
-	{
-		final String label;
-		final double value;
-		/** Additive log-odds contribution (may be negative). */
-		final double contribution;
-		final String explanation;
-
-		private EvidenceAtom(String label, double value, double contribution, String explanation)
-		{
-			this.label = label == null ? "" : label;
-			this.value = clamp01(value);
-			this.contribution = contribution;
-			this.explanation = explanation == null ? "" : explanation;
-		}
-	}
-
-	static final class TimelineFrame
-	{
-		final int index;
-		final double progress;
-		final String label;
-		final double score;
-		final double text;
-		final double graph;
-		final double time;
-		final double bridge;
-		final double debias;
-		final double robust;
-		final String evidence;
-		final double scoreDelta;
-		final String dominantSignal;
-		final String auditNote;
-		int rank;
-		int previousRank;
-
-		private TimelineFrame(int index, double progress, String label, double score, double text, double graph,
-				double time, double bridge, double debias, double robust, String evidence, double scoreDelta,
-				String dominantSignal, String auditNote)
-		{
-			this.index = index;
-			this.progress = clamp01(progress);
-			this.label = label == null ? "" : label;
-			this.score = clamp01(score);
-			this.text = clamp01(text);
-			this.graph = clamp01(graph);
-			this.time = clamp01(time);
-			this.bridge = clamp01(bridge);
-			this.debias = clamp01(debias);
-			this.robust = clamp01(robust);
-			this.evidence = evidence == null ? "" : evidence;
-			this.scoreDelta = scoreDelta;
-			this.dominantSignal = dominantSignal == null ? "" : dominantSignal;
-			this.auditNote = auditNote == null ? "" : auditNote;
-		}
-	}
-
-	static final class CounterfactualProbe
-	{
-		final String label;
-		final double score;
-		final int rank;
-		final double scoreDrop;
-		final boolean rankChanged;
-		final int rankShift;
-
-		private CounterfactualProbe(String label, double score, int rank, double scoreDrop, boolean rankChanged,
-				int rankShift)
-		{
-			this.label = label == null ? "" : label;
-			this.score = clamp01(score);
-			this.rank = rank;
-			this.scoreDrop = Math.max(0.0, scoreDrop);
-			this.rankChanged = rankChanged;
-			this.rankShift = Math.max(0, rankShift);
-		}
-
-		static CounterfactualProbe from(String label, double score, int rank, double originalScore, int originalRank)
-		{
-			return new CounterfactualProbe(label, score, rank, Math.max(0.0, originalScore - score),
-					originalRank > 0 && rank != originalRank,
-					originalRank > 0 && rank > 0 ? Math.abs(rank - originalRank) : 0);
-		}
-	}
-
-	static final class ResearchSummary
-	{
-		final int targetCount;
-		final int scoredPairs;
-		final int timelineFrames;
-		/** Fusion lens, averaged over the targets. */
-		final double hitAtOne;
-		final double hitAtThree;
-		final double mrr;
-		final double ndcgAtFive;
-		final double averageStability;
-		final double averageConfidenceWidth;
-		/** Share of kept candidates whose rank changes when one signal is removed. */
-		final double counterfactualFlipRate;
-		final double averageEvidenceCoverage;
-		final double averageCounterfactualFragility;
-		final double averageCalibrationPValue;
-		/** Share of kept candidates in the top ten under fewer than half of the refits. */
-		final double abstainRate;
-		final int evidenceLimitFlags;
-		final List<BenchmarkRow> benchmarkRows;
-		final FoundationReadiness foundationReadiness;
-		final String headline;
-
-		private ResearchSummary(int targetCount, int scoredPairs, int timelineFrames, double hitAtOne,
-				double hitAtThree, double mrr, double ndcgAtFive, double averageStability,
-				double averageConfidenceWidth, double counterfactualFlipRate, double averageEvidenceCoverage,
-				double averageCounterfactualFragility, double averageCalibrationPValue, double abstainRate,
-				int evidenceLimitFlags, List<BenchmarkRow> benchmarkRows, FoundationReadiness foundationReadiness,
-				String headline)
-		{
-			this.targetCount = Math.max(0, targetCount);
-			this.scoredPairs = Math.max(0, scoredPairs);
-			this.timelineFrames = Math.max(0, timelineFrames);
-			this.hitAtOne = clamp01(hitAtOne);
-			this.hitAtThree = clamp01(hitAtThree);
-			this.mrr = clamp01(mrr);
-			this.ndcgAtFive = clamp01(ndcgAtFive);
-			this.averageStability = clamp01(averageStability);
-			this.averageConfidenceWidth = clamp01(averageConfidenceWidth);
-			this.counterfactualFlipRate = clamp01(counterfactualFlipRate);
-			this.averageEvidenceCoverage = clamp01(averageEvidenceCoverage);
-			this.averageCounterfactualFragility = clamp01(averageCounterfactualFragility);
-			this.averageCalibrationPValue = clamp01(averageCalibrationPValue);
-			this.abstainRate = clamp01(abstainRate);
-			this.evidenceLimitFlags = Math.max(0, evidenceLimitFlags);
-			this.benchmarkRows = Collections.unmodifiableList(new ArrayList<BenchmarkRow>(
-					benchmarkRows == null ? Collections.<BenchmarkRow>emptyList() : benchmarkRows));
-			this.foundationReadiness = foundationReadiness == null ? FoundationReadiness.empty() : foundationReadiness;
-			this.headline = headline == null ? "" : headline;
-		}
-
-		static ResearchSummary empty()
-		{
-			return new ResearchSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-					Collections.<BenchmarkRow>emptyList(), FoundationReadiness.empty(),
-					"No TGF run has been recorded yet.");
-		}
-
-		static ResearchSummary from(Collection<TargetReport> reports, int scoredPairs, TemporalCorpus corpus,
-				FusionModel model)
-		{
-			if (reports == null || reports.isEmpty())
-			{
-				return empty();
-			}
-			int targets = 0;
-			int frames = 0;
-			int candidates = 0;
-			int flips = 0;
-			int unstable = 0;
-			int flags = 0;
-			double stability = 0.0;
-			double width = 0.0;
-			double coverage = 0.0;
-			double fragility = 0.0;
-			for (TargetReport report : reports)
-			{
-				targets++;
-				for (CandidateScore score : report.topCandidates)
-				{
-					candidates++;
-					frames += score.timeline.size();
-					stability += score.stability;
-					width += Math.max(0.0, score.confidenceUpper - score.confidenceLower);
-					coverage += score.evidenceCoverage;
-					fragility += score.counterfactualFragility;
-					if (score.stability < 0.5)
-					{
-						unstable++;
-					}
-					if (score.withoutTextRank != score.rank || score.withoutGraphRank != score.rank
-							|| score.withoutTimeRank != score.rank)
-					{
-						flips++;
-					}
-					for (String flag : score.riskFlags)
-					{
-						if (!"no evidence-limit flags".equals(flag))
-						{
-							flags++;
-						}
-					}
-				}
-			}
-			List<BenchmarkRow> lenses = aggregate(reports);
-			BenchmarkRow fused = lenses.isEmpty() ? null : lenses.get(0);
-			double denominator = Math.max(1, candidates);
-			String headline = fused == null ? "No graded targets."
-					: "Fusion lens over " + targets + " target(s): Hit@1 " + pct(fused.hitAtOne) + ", Hit@3 "
-							+ pct(fused.hitAtThree) + ", MRR " + fmt(fused.mrr) + ", NDCG@5 " + fmt(fused.ndcgAtFive) + ".";
-			return new ResearchSummary(targets, scoredPairs, frames,
-					fused == null ? 0.0 : fused.hitAtOne, fused == null ? 0.0 : fused.hitAtThree,
-					fused == null ? 0.0 : fused.mrr, fused == null ? 0.0 : fused.ndcgAtFive,
-					stability / denominator, width / denominator, flips / denominator, coverage / denominator,
-					fragility / denominator, stability / denominator, unstable / denominator, flags, lenses,
-					FoundationReadiness.from(corpus, model, coverage / denominator), headline);
-		}
-
-		private static List<BenchmarkRow> aggregate(Collection<TargetReport> reports)
-		{
-			LinkedHashMap<String,double[]> totals = new LinkedHashMap<String,double[]>();
-			LinkedHashMap<String,String> notes = new LinkedHashMap<String,String>();
-			LinkedHashMap<String,String> tops = new LinkedHashMap<String,String>();
-			for (TargetReport report : reports)
-			{
-				for (BenchmarkRow row : report.benchmarkRows)
-				{
-					double[] total = totals.get(row.label);
-					if (total == null)
-					{
-						total = new double[6];
-						totals.put(row.label, total);
-						notes.put(row.label, row.note);
-						tops.put(row.label, row.topCandidate);
-					}
-					total[0] += 1.0;
-					total[1] += row.hitAtOne;
-					total[2] += row.hitAtThree;
-					total[3] += row.mrr;
-					total[4] += row.ndcgAtFive;
-					total[5] += row.topScore;
-				}
-			}
-			ArrayList<BenchmarkRow> rows = new ArrayList<BenchmarkRow>();
-			for (Map.Entry<String,double[]> entry : totals.entrySet())
-			{
-				double[] t = entry.getValue();
-				double n = Math.max(1.0, t[0]);
-				rows.add(new BenchmarkRow(entry.getKey(), tops.get(entry.getKey()), t[5] / n, 0, t[1] / n, t[2] / n,
-						t[3] / n, t[4] / n, notes.get(entry.getKey())));
-			}
-			return Collections.unmodifiableList(rows);
-		}
-	}
-
-	/**
-	 * What the run's evidence rests on: the share of dated rows, the share of
-	 * training pairs with graph evidence, the mean evidence coverage of the kept
-	 * candidates, and the fusion's held-out pair AUC ({@code overall}).
-	 */
-	static final class FoundationReadiness
-	{
-		final double temporalDepth;
-		final double graphCoverage;
-		final double evidenceCoverage;
-		final double calibrationTrust;
-		final double benchmarkHonesty;
-		final double overall;
-		final String label;
-		final String note;
-
-		private FoundationReadiness(double temporalDepth, double graphCoverage, double evidenceCoverage,
-				double calibrationTrust, double benchmarkHonesty, double overall, String label, String note)
-		{
-			this.temporalDepth = clamp01(temporalDepth);
-			this.graphCoverage = clamp01(graphCoverage);
-			this.evidenceCoverage = clamp01(evidenceCoverage);
-			this.calibrationTrust = clamp01(calibrationTrust);
-			this.benchmarkHonesty = clamp01(benchmarkHonesty);
-			this.overall = clamp01(overall);
-			this.label = label == null ? "" : label;
-			this.note = note == null ? "" : note;
-		}
-
-		static FoundationReadiness empty()
-		{
-			return new FoundationReadiness(0, 0, 0, 0, 0, 0, "no run yet", "Run TGF to fit and evaluate the fusion.");
-		}
-
-		static FoundationReadiness from(TemporalCorpus corpus, FusionModel model, double coverage)
-		{
-			double dated = corpus.rowsScanned <= 0 ? 0.0 : corpus.datedRows / (double)corpus.rowsScanned;
-			double auc = Double.isNaN(model.heldOutAuc) ? 0.0 : model.heldOutAuc;
-			String label = !model.supervised ? "unsupervised fusion"
-					: Double.isNaN(model.heldOutAuc) ? "learned fusion (no held-out anchors)"
-					: "learned fusion, held-out pair AUC " + fmt(model.heldOutAuc);
-			return new FoundationReadiness(dated, model.active[GRAPH] ? 1.0 : 0.0, coverage, auc,
-					model.supervised ? 1.0 : 0.0, auc, label, model.describe());
-		}
-	}
-
-	private static final class UserProfile
-	{
-		final int index;
-		final String name;
-		final String followee;
-		final LinkedHashMap<String,Double> tfidf;
-		double[] activity;
-		long firstTime = Long.MAX_VALUE;
-		long latestTime = Long.MIN_VALUE;
-		int observedRows;
-
-		UserProfile(int index, String name, String followee, Map<String,Double> tfidf)
-		{
-			this.index = index;
-			this.name = name;
-			this.followee = followee == null ? "" : followee.trim();
-			this.tfidf = new LinkedHashMap<String,Double>(tfidf);
-		}
-	}
-
-	private static final class TemporalCorpus
-	{
-		long rowsScanned;
-		long datedRows;
-		long minTime = Long.MAX_VALUE;
-		long maxTime = Long.MIN_VALUE;
-		boolean available;
-		String warning = "";
-	}
-
-	private static TreeMap<String,TreeMap<String,Double>> copyNestedDouble(Map<String,TreeMap<String,Double>> source)
-	{
-		TreeMap<String,TreeMap<String,Double>> copy = new TreeMap<String,TreeMap<String,Double>>();
-		if (source != null)
-		{
+			TreeMap<String,TreeMap<String,Double>> copy = new TreeMap<String,TreeMap<String,Double>>();
 			for (Map.Entry<String,TreeMap<String,Double>> entry : source.entrySet())
 			{
-				copy.put(entry.getKey(), entry.getValue() == null
-						? new TreeMap<String,Double>() : new TreeMap<String,Double>(entry.getValue()));
+				copy.put(entry.getKey(), new TreeMap<String,Double>(entry.getValue()));
 			}
+			return copy;
 		}
-		return copy;
-	}
-
-	private static TreeMap<String,TreeMap<String,String>> copyNestedString(Map<String,TreeMap<String,String>> source)
-	{
-		TreeMap<String,TreeMap<String,String>> copy = new TreeMap<String,TreeMap<String,String>>();
-		if (source != null)
-		{
-			for (Map.Entry<String,TreeMap<String,String>> entry : source.entrySet())
-			{
-				copy.put(entry.getKey(), entry.getValue() == null
-						? new TreeMap<String,String>() : new TreeMap<String,String>(entry.getValue()));
-			}
-		}
-		return copy;
 	}
 }

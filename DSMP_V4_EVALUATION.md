@@ -63,9 +63,10 @@ the underlying setting is kept for compatibility.
 **The run corpus** (`RunCorpus`). Every tweet the run uses, normalised
 exactly as the nodes normalise it. Each line is user, followee, UTC
 timestamp and text. Lines are sorted by user, then tweet id, and the file is
-named by the SHA-256 of its content. Doc2Vec's worker and the temporal graph
+named by the SHA-256 of its content. Every run writes it (an unchanged corpus
+only once) and its record names it. Doc2Vec's worker and the temporal graph
 model read this file, so every algorithm sees the same users, tweets and
-words. Doc2Vec no longer stems, uses its own stop words or ignores the date
+words, and Evidence Studio explains any run with the text it read. Doc2Vec no longer stems, uses its own stop words or ignores the date
 window and tweet limit.
 
 ## 3. Algorithms
@@ -77,7 +78,7 @@ window and tweet limit.
 | K-Means | users | K-Means on TF-IDF vectors with cosine assignment and farthest-first seeding; the target's cluster mates ranked by cosine | no |
 | K-Means Euclidean | users | The same clustering with Euclidean distance | no |
 | Doc2Vec | users | Paragraph vectors (Le and Mikolov 2014) trained on the run corpus, single-threaded and seeded; nearest documents by cosine | no |
-| Temporal Graph Foundation | users | Logistic fusion of three signals, learned from labelled non-target users (see below) | yes, never the targets |
+| Temporal Graph Foundation | users and followee accounts | Cross-fitted Super Learner over text, graph and temporal learners, stacked into calibrated community probabilities (see below) | yes, never the targets |
 | SVM | followee accounts | Exact Weka SMO with calibrated probabilities; one model per target, trained on every other labelled user | yes, never the targets |
 | Scalable Linear SVM | followee accounts | One-vs-rest linear model learned online with Passive-Aggressive PA-I hinge-loss updates (Crammer et al. 2006) | yes, never the targets |
 | MLP | followee accounts | Softmax network trained with cross-entropy and early stopping (default), or the V3 Neuroph network | yes, never the targets |
@@ -101,34 +102,46 @@ under Parameters:
 - **Adamic–Adar** (Adamic and Adar 2003): Σ 1/ln df over shared terms.
 - **Resource allocation** (Zhou, Lü and Zhang 2009): Σ 1/df over shared terms.
 
+Until this version, the corpus-wide degrees were released before Common
+Neighbors scored, so every degree took its floor of 2. As a result:
+- the Adamic–Adar tie-break ordered equal counts by name after all;
+- the Adamic–Adar and resource-allocation variants reduced to the
+  shared-term count.
+
+Evidence Studio's exactness check found the bug: its reference reproduced the
+other algorithms' scores to 1e-8, but not these. The degrees are now kept
+until scoring, and the reference reproduces Common Neighbors exactly.
+
 ### Temporal Graph Foundation
 
-The model scores the probability that a candidate belongs to the target's
-community from three signals:
-- **Text**: TF-IDF cosine.
-- **Graph**: mass diffusion on the user-term bipartite graph (Zhou et al.
-  2007), normalised by the target's best candidate.
-- **Time**: cosine of the two users' 24-bin activity profiles. It is used
-  only when the corpus has real dates; there is no line-order clock.
+TGF estimates the probability that the target belongs to each community and
+recommends from it. Accounts are ranked by that probability. Users are ranked
+by the probability of sharing the target's community: p(account of v) when v's
+follow is known, and the sum over c of p(c) q_v(c) for another target.
 
-The weights are an L2-regularised logistic regression fitted by IRLS. The
-training pairs are balanced pairs of non-target users, up to 200 anchors with
-10 pairs per class. The intercept is corrected to the population base rate
-(King and Zeng 2001). The fit is checked on 20% held-out anchors, and the
-pair AUC is reported as the fusion's fit. Thirty anchor-cluster bootstrap
-refits give each candidate a 5–95% interval and a stability: the share of
-refits that keep it in the top ten.
+The probabilities come from six learners, each with its own view of the
+run's corpus:
+- a text model (logistic regression on sublinear TF-IDF);
+- label propagation over the text graph;
+- label propagation over the term-time graph, which links users who wrote the
+  same words in the same month;
+- an activity model;
+- two neighbour votes.
 
-The explanations in the TGF Studio come from the same model:
-- additive log-odds contributions of each signal;
-- counterfactuals that set a signal to its training mean or remove the top
-  shared term;
-- a rank timeline recomputed on growing prefixes of the dated activity;
-- ablation lenses (text only, graph only, time only) graded with NDCG@5.
+Each learner is cross-fitted over stratified folds of the labelled users who
+are not targets. A non-negative logarithmic opinion pool stacks them, fitted by
+maximum likelihood (a Super Learner). Every prediction carries:
+- a 90% split-conformal set;
+- an exact explanation: the log-odds split by learner, the words, the
+  influential labelled users, the months, the ablations and a minimal word
+  counterfactual.
 
-Earlier versions mixed in signals that used the target's own followee, and
-read follow edges that earlier runs had appended to files. Both are gone: the
-model uses nothing outside the run's corpus.
+`DSMP_V4_TGF.md` gives the definitions, the validation and the studio.
+
+The previous TGF scored (target, candidate) pairs from three signals and
+never used the candidates' known follows. Its fusion's held-out pair AUC was
+about 0.515 on Retail. Its successor more than doubles the margin over chance
+(section 8).
 
 ### Classifiers: the targets are never trained on
 
@@ -322,6 +335,8 @@ written with older columns is migrated in place, matching columns by name.
 | — | Accented and non-Latin letters deleted | Unicode letters kept, NFC, `Locale.ROOT` | `TweetTextNormalizerSelfTest` |
 | — | Late failures: two-class checks after the input stage, MLP retried the same error | Early fold-aware check; deterministic errors not retried | `EvaluationIntegritySelfTest` |
 | — | Database SQL built by string concatenation | Bound parameters | `EvaluationIntegritySelfTest` (hostile names) |
+| — | Common-Neighbors scored with every term degree at 2 (the degrees were released before scoring), so its tie-break and two variants reduced to the shared-term count (found on 2 Oct 2026 by Evidence Studio's exactness check) | Degrees kept until scoring | Evidence Studio reproduces the recorded scores to 1e-8 |
+| — | TGF's pairwise fusion ignored the candidates' known follows (held-out pair AUC about 0.515) | Cross-fitted Super Learner over six learners with conformal sets and exact explanations (`DSMP_V4_TGF.md`) | Retail P@10 0.475 to 0.725; `TemporalGraphFoundationModelSupportSelfTest` |
 | — | "Scalable Linear SVM" is a passive-aggressive learner | Described as PA-I online hinge-loss learning everywhere | — |
 
 Further fixes found while fixing these:
@@ -352,11 +367,11 @@ print four decimals).
 | Algorithm | P@10 [95% CI] | NDCG@10 | MRR | vs chance (P@10) | vs MostPop (P@10) | Top-1 |
 |---|---|---|---|---|---|---|
 | Similarity | 0.445 [0.366, 0.524] | 0.452 | 0.592 | p = 0.006 | p = 0.78 | 40.0% |
-| Common-Neighbors | 0.440 [0.373, 0.507] | 0.442 | 0.624 | p = 0.0001 | p = 0.85 | 45.0% |
+| Common-Neighbors | 0.428 [0.359, 0.496] | 0.434 | 0.619 | p = 0.001 | p = 0.97 | 42.5% |
 | K-Means | 0.438 [0.373, 0.502] | 0.448 | 0.626 | p = 0.002 | p = 0.87 | 42.5% |
 | K-Means Euclidean | 0.435 [0.360, 0.511] | 0.438 | 0.582 | p = 0.012 | p = 0.88 | 37.5% |
 | Doc2Vec | 0.385 [0.320, 0.450] | 0.389 | 0.579 | p = 0.28 | p = 0.61 | 40.0% |
-| Temporal Graph Foundation | 0.475 [0.398, 0.552] | 0.501 | 0.727 | p < 0.0001 | p = 0.47 (MRR: p < 0.0001) | 62.5% |
+| Temporal Graph Foundation | 0.725 [0.580, 0.870] | 0.725 | 0.725 | p < 0.0001 | p = 0.002 | 72.5% |
 | SVM (classifier-guided) | 0.500 [0.338, 0.662] | 0.500 | 0.500 | p = 0.088 | p = 0.50 | 50.0% |
 | Scalable Linear SVM (classifier-guided) | 0.600 [0.475, 0.725] | 0.606 | 0.698 | p < 0.0001 | p = 0.055 | 62.5% |
 | MLP (classifier-guided) | 0.620 [0.468, 0.772] | 0.625 | 0.638 | p = 0.0003 | p = 0.033 | 62.5% |
@@ -368,11 +383,11 @@ informative metric (chance 0.521, MostPop 0.679; top-1 majority 42.5%):
 | Algorithm | MRR [95% CI] | NDCG@10 | Top-1 | vs chance (MRR) | vs MostPop (MRR) |
 |---|---|---|---|---|---|
 | Similarity | 0.646 [0.549, 0.743] | 0.736 | 40.0% | p = 0.013 | p = 0.57 |
-| Common-Neighbors | 0.688 [0.593, 0.782] | 0.767 | 45.0% | p = 0.0009 | p = 0.91 |
+| Common-Neighbors | 0.692 [0.599, 0.785] | 0.771 | 45.0% | p = 0.0006 | p = 0.86 |
 | K-Means | 0.671 [0.576, 0.766] | 0.755 | 42.5% | p = 0.003 | p = 0.89 |
 | K-Means Euclidean | 0.642 [0.549, 0.735] | 0.733 | 37.5% | p = 0.012 | p = 0.50 |
 | Doc2Vec | 0.642 [0.544, 0.740] | 0.732 | 40.0% | p = 0.017 | p = 0.52 |
-| Temporal Graph Foundation | 0.775 [0.679, 0.871] | 0.832 | 62.5% | p < 0.0001 | p = 0.020 |
+| Temporal Graph Foundation | 0.829 [0.738, 0.921] | 0.872 | 72.5% | p < 0.0001 | p = 0.002 |
 | SVM | 0.721 [0.628, 0.814] | 0.792 | 50.0% | p < 0.0001 | p = 0.49 |
 | Scalable Linear SVM | 0.752 [0.652, 0.852] | 0.814 | 60.0% | p < 0.0001 | p = 0.18 |
 | MLP | 0.775 [0.679, 0.871] | 0.832 | 62.5% | p < 0.0001 | p = 0.054 |
@@ -381,8 +396,8 @@ informative metric (chance 0.521, MostPop 0.679; top-1 majority 42.5%):
 
 | | Audit | Now |
 |---|---|---|
-| TGF, similar users, P@10 | 0.805 (used the answer) | 0.475 |
-| TGF, followee accounts, top-1 | 0.275 (with the answer hidden) | 62.5% |
+| TGF, similar users, P@10 | 0.805 (used the answer) | 0.725 (0.475 with the previous fusion) |
+| TGF, followee accounts, top-1 | 0.275 (with the answer hidden) | 72.5% (62.5% with the previous fusion) |
 | Scalable SVM, followee accounts, top-1 | 85.0% (trained on the targets) | 60.0% |
 | MLP, followee accounts, top-1 | 50.0% (broken softmax) | 62.5% |
 | MLP, similar users, P@10 | 0.510 | 0.620 |
@@ -392,8 +407,12 @@ On this dataset:
 - Every algorithm beats chance.
 - The text-similarity rankers do not beat the non-personalised MostPop list.
   Retail's text separates its four retailers only weakly.
-- The learned temporal graph model and the classifiers are the only methods
-  with a significant margin over MostPop on some metric.
+- TGF is the best method in both modes and beats MostPop significantly in
+  both (p = 0.002 for P@10 and for MRR). Its similar-user lists hold the
+  most similar users of the most likely community, so its precision, NDCG
+  and MRR all equal its top-1 accuracy.
+- The classifiers come next. Only MLP is near a significant margin over
+  MostPop (MRR p = 0.054).
 - Doc2Vec's change when it moved to the shared corpus is within the
   sampling error (about 1.3 standard errors). The shared corpus makes the
   comparison fair: every algorithm now reads the same words.
