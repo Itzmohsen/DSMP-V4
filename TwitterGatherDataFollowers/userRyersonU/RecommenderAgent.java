@@ -347,6 +347,11 @@ public class RecommenderAgent extends Agent
 	private Map<String,TreeMap<String,Double>> allUserScores = new TreeMap<String,TreeMap<String,Double>>();
 	private Map<String,TreeMap<String,String>> temporalGraphCandidateDetails =
 			new TreeMap<String,TreeMap<String,String>>();
+	/** TGF's probability that each committed target follows each account, and its explanation. */
+	private Map<String,TreeMap<String,Double>> temporalGraphAccountScores =
+			new TreeMap<String,TreeMap<String,Double>>();
+	private Map<String,TreeMap<String,String>> temporalGraphAccountDetails =
+			new TreeMap<String,TreeMap<String,String>>();
 	private RecommendationExperimentConfig recommendationConfig;
 	private Map<String,String> datasetUserFollowee = new LinkedHashMap<String,String>();
 	private Map<String,TreeMap<String,RecommendationCandidateEvidence>>
@@ -601,6 +606,8 @@ public class RecommenderAgent extends Agent
 		userPrimaryRecServer.clear();
 		allUserScores.clear();
 		temporalGraphCandidateDetails.clear();
+		temporalGraphAccountScores.clear();
+		temporalGraphAccountDetails.clear();
 		userFollowee.clear();
 		followeeFollowerCounts.clear();
 		followeeFollowers.clear();
@@ -2364,7 +2371,14 @@ public class RecommenderAgent extends Agent
 				{
 					allUserDocuments.clear();
 				}
-				allTermsDocumentFreq.clear();
+				//Common Neighbors weighs shared terms by their corpus-wide degree (the
+				//Adamic-Adar tie-break and variants), so it keeps the document
+				//frequencies until it has scored; clearing them here left every degree
+				//at its floor of 2 and reduced those weights to the shared-term count.
+				if (algorithmRec != CommonNeighbors)
+				{
+					allTermsDocumentFreq.clear();
+				}
 				if (algorithmRec != MLP)
 				{
 					allUniqueDocTerms.clear();
@@ -2991,7 +3005,34 @@ public class RecommenderAgent extends Agent
 			Serializable content;
 			int scoreTargetsForTelemetry;
 			int scoreCandidatesForTelemetry;
-			if (isUserRankerFolloweeMode())
+			if (algorithmRec == TEMPORAL_GRAPH_FOUNDATION)
+			{
+				//TGF estimates each account's probability directly, so asked for
+				//accounts it publishes that distribution rather than projecting
+				//its user ranking. Each target is scored on the one node that
+				//committed it; the other nodes do not hold it, which is not an error.
+				boolean accounts = recommendationConfig != null
+						&& recommendationConfig.getCandidateType() == RecommendationCandidateType.FOLLOWEE;
+				Map<String,TreeMap<String,Double>> published =
+						accounts ? temporalGraphAccountScores : allUserScores;
+				Map<String,String> errors = buildMissingScoreErrorsForHeldTargets(
+						published,
+						accounts ? "Temporal Graph Foundation has no labelled account to recommend."
+								: "Temporal Graph Foundation found no candidate user.");
+				content = RecommendationScorePayload.directWithDetails(
+						recommendationConfig.getTargetMode(),
+						accounts ? RecommendationCandidateType.FOLLOWEE : RecommendationCandidateType.USER,
+						RecommendationMergePolicy.MAX,
+						usersRec,
+						published,
+						accounts ? temporalGraphAccountDetails : temporalGraphCandidateDetails,
+						errors);
+				toMergeMsg.setOntology("Merge Recommendation Scores V2");
+				scoreTargetsForTelemetry = published.size();
+				scoreCandidatesForTelemetry =
+						countScoreCandidates(published);
+			}
+			else if (isUserRankerFolloweeMode())
 			{
 				Map<String,TreeMap<String,String>> projectionDetails =
 						new TreeMap<String,TreeMap<String,String>>();
@@ -3029,26 +3070,6 @@ public class RecommenderAgent extends Agent
 						evidence,
 						RecommendationModeSupport.algorithmName(algorithmRec)
 								+ "-guided users",
-						errors);
-				toMergeMsg.setOntology("Merge Recommendation Scores V2");
-				scoreTargetsForTelemetry = allUserScores.size();
-				scoreCandidatesForTelemetry =
-						countScoreCandidates(allUserScores);
-			}
-			else if (algorithmRec == TEMPORAL_GRAPH_FOUNDATION)
-			{
-				//Each target is scored on the one node that committed it; the other
-				//nodes do not hold it, which is not an error.
-				Map<String,String> errors = buildMissingScoreErrorsForHeldTargets(
-						allUserScores,
-						"Temporal Graph Foundation found no positive text, graph, or temporal candidates.");
-				content = RecommendationScorePayload.directWithDetails(
-						recommendationConfig.getTargetMode(),
-						RecommendationCandidateType.USER,
-						RecommendationMergePolicy.MAX,
-						usersRec,
-						allUserScores,
-						temporalGraphCandidateDetails,
 						errors);
 				toMergeMsg.setOntology("Merge Recommendation Scores V2");
 				scoreTargetsForTelemetry = allUserScores.size();
@@ -3798,6 +3819,11 @@ public class RecommenderAgent extends Agent
 				//Corpus-wide term degrees (users per term), the same on every node.
 				final Map<String,Integer> termDegrees = allTermsDocumentFreq;
 				final String linkVariant = algorithmSettings().getCommonNeighborsVariant();
+				if (commonNeighbors)
+				{
+					//Recorded so a run's link scores can be reproduced (Evidence Studio).
+					context.recorder().property("linkVariant", linkVariant);
+				}
 				final LinkedHashMap<String,Map<String,Double>> targetDocuments =
 						new LinkedHashMap<String,Map<String,Double>>();
 				final TreeMap<String,TreeMap<String,Double>> rows =
@@ -4084,6 +4110,8 @@ public class RecommenderAgent extends Agent
 				//Activity profiles come from the run's canonical corpus (RunCorpus).
 				File runCorpus = recommendationConfig == null ? null : recommendationConfig.getRunCorpusFile();
 				final File dataset = runCorpus != null && runCorpus.isFile() ? runCorpus : getConfiguredDatasetFile();
+				final String datasetName = getConfiguredDatasetFile() == null ? null
+						: getConfiguredDatasetFile().getName();
 				final LinkedHashMap<String,String> datasetFollowees =
 						new LinkedHashMap<String,String>(datasetUserFollowee);
 				final String runId = runLifecycle.getActiveRunId();
@@ -4108,7 +4136,7 @@ public class RecommenderAgent extends Agent
 												Collections.<String,Integer>emptyMap(),
 												1,
 												1,
-												limit));
+												limit).named(datasetName));
 							}
 						});
 				final List<String> scorable = new ArrayList<String>();
@@ -4181,17 +4209,17 @@ public class RecommenderAgent extends Agent
 				{
 					TemporalGraphFoundationRegistry.record(result);
 				}
-				TreeMap<String,TreeMap<String,Double>> scores = result.getScores();
-				Map<String,TreeMap<String,String>> details = result.getDetails();
 				allUserScores = new TreeMap<String,TreeMap<String,Double>>();
 				temporalGraphCandidateDetails.clear();
-				for (String target : committed.keySet())
+				temporalGraphAccountScores.clear();
+				temporalGraphAccountDetails.clear();
+				for (Map.Entry<String,TemporalGraphFoundationModelSupport.TargetOutcome> entry : committed.entrySet())
 				{
-					allUserScores.put(target, scores.get(target));
-					if (details.get(target) != null)
-					{
-						temporalGraphCandidateDetails.put(target, details.get(target));
-					}
+					TemporalGraphFoundationModelSupport.TargetOutcome outcome = entry.getValue();
+					allUserScores.put(entry.getKey(), outcome.getScores());
+					temporalGraphCandidateDetails.put(entry.getKey(), outcome.getDetails());
+					temporalGraphAccountScores.put(entry.getKey(), outcome.getAccountScores());
+					temporalGraphAccountDetails.put(entry.getKey(), outcome.getAccountDetails());
 				}
 				return result;
 			}

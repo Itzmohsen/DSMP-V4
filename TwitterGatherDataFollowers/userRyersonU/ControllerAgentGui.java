@@ -1297,6 +1297,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			}
 			RecommendationEvidenceEngine.RecommendationEvent event =
 					new RecommendationEvidenceEngine.RecommendationEvent(
+							myAgent == null ? "" : myAgent.getCurrentRecommendationRunId(),
 							result.targetUser,
 							candidateType,
 							result.status,
@@ -4427,7 +4428,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		JComponent tgfStudioTab =
 				StudioNightTheme.wrapTab(temporalGraphFoundationPanel, false);
 		JComponent evidenceStudioTab =
-				StudioNightTheme.wrapTab(recommendationEvidenceStudioPanel, true);
+				StudioNightTheme.wrapTab(recommendationEvidenceStudioPanel, false);
 		JComponent userStudioTab =
 				StudioNightTheme.wrapTab(userGenMainPanel, true);
 		JComponent populationTab =
@@ -4466,12 +4467,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				"TGF Studio",
 				new LineIcon(LineIconType.NODES, 16),
 				tgfStudioTab,
-				"Inspect the latest Temporal Graph Foundation recommendation run");
+				"The Temporal Graph Foundation model of a run: predictions, exact explanations, calibration and communities");
 		applicationTabs.addTab(
 				"Evidence Studio",
 				new LineIcon(LineIconType.RECOMMENDER, 16),
 				evidenceStudioTab,
-				"Explain completed recommendations with dataset, term, and graph evidence");
+				"Why each recommendation was made: exact evidence, counterfactuals and how faithful the evidence is");
 		applicationTabs.addTab(
 				"User Studio",
 				new LineIcon(LineIconType.STUDIO, 16),

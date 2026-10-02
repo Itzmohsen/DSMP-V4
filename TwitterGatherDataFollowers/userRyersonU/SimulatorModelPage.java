@@ -152,8 +152,8 @@ final class SimulatorModelPage extends SimulatorPanel.Page
 			case RecommendationModeSupport.DOC2VEC:
 				return "Paragraph vectors learned from the run's corpus; recommends the nearest documents.";
 			case RecommendationModeSupport.TEMPORAL_GRAPH_FOUNDATION:
-				return "A logistic fusion of text, graph diffusion and time co-activity, learned from labelled"
-						+ " non-target users.";
+				return "A cross-fitted Super Learner over text, graph and time learners: calibrated community"
+						+ " probabilities with conformal sets and exact explanations.";
 			case RecommendationModeSupport.SVM:
 				return "Exact Weka SMO with calibrated probabilities; one model per target, trained without it.";
 			case RecommendationModeSupport.SCALABLE_SVM:

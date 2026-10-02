@@ -102,6 +102,7 @@ final class RunRecordWriter
 			writePhaseJoins(new File(directory, "phase-joins.csv"), recorder.allPhaseJoins());
 			RecommendationQualityEvaluator.Report quality = writeQuality(directory, context.getRunId());
 			RunGraphAnalysis graph = writeGraph(directory, context);
+			writeTemporalGraphFoundation(directory, context);
 			appendIndex(name, context, metrics, resultsHash, quality, graph);
 			return directory;
 		}
@@ -593,6 +594,27 @@ final class RunRecordWriter
 		{
 			System.err.println("Could not write the run graph of " + context.getRunId() + ": " + failure);
 			return null;
+		}
+	}
+
+	/**
+	 * Writes the TGF report (model card and every target's explanation) into
+	 * the record's tgf folder when this run used TGF.
+	 */
+	private static void writeTemporalGraphFoundation(File directory, SchedulingRunContext context)
+	{
+		TemporalGraphFoundationModelSupport.Result result = TemporalGraphFoundationRegistry.latest();
+		if (result == null || !context.getRunId().equals(result.getRunId()))
+		{
+			return;
+		}
+		try
+		{
+			TgfReport.write(directory, result);
+		}
+		catch (IOException | RuntimeException failure)
+		{
+			System.err.println("Could not write the TGF report of " + context.getRunId() + ": " + failure);
 		}
 	}
 

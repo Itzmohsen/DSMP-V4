@@ -12,10 +12,11 @@ import java.util.Random;
 import java.util.TreeMap;
 
 /**
- * The Temporal Graph Foundation model: the target's own followee never
- * influences its ranking, no file outside the run changes it, the fusion is
- * learned from labelled non-target users, and the evidence it reports
- * (intervals, counterfactuals, timeline, ablation lenses) is well formed.
+ * The Temporal Graph Foundation model: the target's own follow is never read,
+ * nothing outside the run changes the result, the result is deterministic and
+ * right on separable communities, every explanation adds up exactly, and the
+ * learning machinery (label propagation, logistic regression, the stack, the
+ * conformal threshold) is correct on its own.
  */
 public final class TemporalGraphFoundationModelSupportSelfTest
 {
@@ -31,51 +32,80 @@ public final class TemporalGraphFoundationModelSupportSelfTest
 
 	public static void main(String[] args) throws Exception
 	{
+		learningMachinery();
 		File directory = java.nio.file.Files.createTempDirectory("dsmp-tgf").toFile();
-		File dataset = new File(directory, "tgf-self-test.txt");
+		File raw = new File(directory, "tgf-self-test.txt");
 		Map<String,String> followees = new LinkedHashMap<String,String>();
 		Map<String,Map<String,Double>> tfidf = new LinkedHashMap<String,Map<String,Double>>();
-		writeCorpus(dataset, followees, tfidf);
+		writeCorpus(raw, followees, tfidf);
+		File corpus = asRunCorpus(raw, directory);
 		List<String> targets = new ArrayList<String>();
 		targets.add("user-0-0");
 		targets.add("user-1-0");
 		targets.add("user-2-0");
 
-		TemporalGraphFoundationModelSupport.Result result = score(dataset, tfidf, followees, targets);
-		TreeMap<String,Double> row = result.getScores().get("user-0-0");
-		require(row != null && row.size() > 3, "missing score row");
-		for (double probability : row.values())
-		{
-			require(probability > 0.0 && probability < 1.0, "a score is not a probability: " + probability);
-		}
-		require(result.getSummary().contains("Learned fusion"), "the fusion was not learned: " + result.getSummary());
-		TemporalGraphFoundationModelSupport.FoundationReadiness fit =
-				result.getResearchSummary().foundationReadiness;
-		require(fit.overall > 0.8, "held-out pair AUC should be high on separable communities, got " + fit.overall);
+		TemporalGraphFoundationModelSupport.Result result = score(corpus, tfidf, followees, targets);
+		TgfReport report = TgfReport.of(result);
+		require(report.supervised, "the model was not learned: " + report.note);
+		require(report.learners.size() == TgfModel.CHANNELS, "expected six learners");
+		require(report.learner("term-time-graph").active && report.learner("activity").active,
+				"the dated corpus should switch the temporal learners on");
 
-		//1. The target's own followee is never used to score it.
+		//1. Scores are probabilities: users in (0, 1], accounts summing to one.
+		for (String target : targets)
+		{
+			TreeMap<String,Double> users = result.getScores().get(target);
+			require(users != null && users.size() > 3, "missing user ranking for " + target);
+			for (double p : users.values())
+			{
+				//A probability plus the 1e-6 text-similarity tie-break.
+				require(p > 0.0 && p <= 1.0 + TemporalGraphFoundationModelSupport.TIE_BREAK,
+						"a user score is not a probability: " + p);
+			}
+			//Users of one community are delivered by text similarity, not by name.
+			List<Map.Entry<String,Double>> delivered = new ArrayList<Map.Entry<String,Double>>(users.entrySet());
+			java.util.Collections.sort(delivered, new java.util.Comparator<Map.Entry<String,Double>>()
+			{
+				public int compare(Map.Entry<String,Double> a, Map.Entry<String,Double> b)
+				{
+					return Double.compare(b.getValue(), a.getValue());
+				}
+			});
+			TgfReport.Target explained = TgfReport.of(result).target(target);
+			for (int i = 0; i + 1 < Math.min(5, delivered.size()); i++)
+			{
+				require(explained.recommendations.get(i).user.equals(delivered.get(i).getKey()),
+						"the delivered order differs from the explanation's at rank " + (i + 1));
+			}
+			double total = 0.0;
+			for (double p : result.getAccountScores().get(target).values())
+			{
+				total += p;
+			}
+			require(Math.abs(total - 1.0) < 1e-9, "account probabilities of " + target + " sum to " + total);
+		}
+
+		//2. The targets' own follows are never read.
 		Map<String,String> relabelled = new LinkedHashMap<String,String>(followees);
 		relabelled.put("user-0-0", "@travel");
 		relabelled.put("user-1-0", "");
-		requireSameScores(result, score(dataset, tfidf, relabelled, targets),
-				"changing the targets' own followees changed their rankings");
+		TemporalGraphFoundationModelSupport.Result blind = score(corpus, tfidf, relabelled, targets);
+		require(result.getScores().equals(blind.getScores()), "changing the targets' own follows changed the users");
+		require(result.getAccountScores().equals(blind.getAccountScores()),
+				"changing the targets' own follows changed the accounts");
 
-		//2. Nothing outside the run's corpus changes the result (the old model read
-		//   accumulated graph files from important-stuff/).
+		//3. Nothing outside the run's corpus changes the result.
 		File importantStuff = new File("important-stuff");
 		boolean created = importantStuff.mkdirs();
-		File mapping = new File(importantStuff, "name-number-" + dataset.getName());
 		File edges = new File(importantStuff, "edges-numbers-tgf-self-test.txt");
 		try
 		{
-			writeLines(mapping, "user-0-0\t1", "user-2-5\t2");
 			writeLines(edges, "1 2", "1 2", "1 2");
-			requireSameScores(result, score(dataset, tfidf, followees, targets),
-					"a graph file outside the run changed the rankings");
+			require(result.getScores().equals(score(corpus, tfidf, followees, targets).getScores()),
+					"a file outside the run changed the rankings");
 		}
 		finally
 		{
-			mapping.delete();
 			edges.delete();
 			if (created)
 			{
@@ -83,43 +113,215 @@ public final class TemporalGraphFoundationModelSupportSelfTest
 			}
 		}
 
-		//3. Deterministic.
-		requireSameScores(result, score(dataset, tfidf, followees, targets), "two identical runs differ");
+		//4. Deterministic, report included (all but the fit's wall-clock time).
+		TemporalGraphFoundationModelSupport.Result again = score(corpus, tfidf, followees, targets);
+		require(JsonText.of(withoutTiming(result)).equals(JsonText.of(withoutTiming(again))),
+				"two identical runs differ");
 
-		//4. The ranking: same-vocabulary users first.
-		TemporalGraphFoundationModelSupport.TargetReport report = result.getReports().get("user-0-0");
-		require(report.relevantRank == 1, "a same-community user should rank first, got " + report.relevantRank);
-		require(report.ndcgAtFive > 0.9, "NDCG@5 should be near 1 on separable communities, got " + report.ndcgAtFive);
-		TemporalGraphFoundationModelSupport.CandidateScore top = report.topCandidates.get(0);
-		require(top.candidateFollowee().equals("@research"), "top candidate is not from the research community");
+		//5. Right on separable communities.
+		for (TgfReport.Target target : report.targets)
+		{
+			require(target.truth != null && target.truth.equals(target.predicted),
+					target.user + " follows " + target.truth + " but was predicted " + target.predicted);
+			require(target.set.contains(target.predicted), "the conformal set must hold the most likely account");
+			TgfReport.Recommendation first = target.recommendations.get(0);
+			require(Boolean.TRUE.equals(first.relevant), target.user + "'s first recommended user is not in its"
+					+ " community");
+		}
+		require(report.validation.accuracy > 0.9, "cross-validated accuracy should be near 1, got "
+				+ report.validation.accuracy);
 
-		//5. Evidence: interval, stability, counterfactuals, contributions, timeline.
-		require(top.confidenceLower <= top.confidenceUpper, "invalid bootstrap interval");
-		require(top.stability >= 0.0 && top.stability <= 1.0, "stability is not a share");
-		require(top.counterfactuals.size() == 4, "expected four counterfactual probes");
-		require(top.counterfactualScore(true, false, false, false, false) <= top.finalScore + 1e-12,
-				"removing positive graph evidence raised the probability");
-		require(top.evidenceAtoms.size() == 3, "expected text, graph and time evidence");
-		require(top.timeline.size() == 12, "expected twelve dated timeline frames");
-		require(top.timeline.get(11).rank > 0, "timeline ranks were not assigned");
-		require(top.whyThis.startsWith("Rank #1"), "missing explanation");
-		require(top.bridge == 0.0 && top.debias == 0.0 && top.robust == 0.0, "retired signals must be zero");
+		//6. Every explanation adds up exactly.
+		for (TgfReport.Target target : report.targets)
+		{
+			double sum = target.prior;
+			for (TgfReport.TargetLearner learner : target.learners)
+			{
+				sum += learner.active ? learner.contribution : 0.0;
+			}
+			require(Math.abs(sum - target.logOdds) < 1e-8, "learner contributions " + sum
+					+ " do not add up to the log-odds " + target.logOdds);
+			TgfReport.TargetLearner text = target.learners.get(TgfModel.TEXT);
+			require(Math.abs(target.termTotal + target.textIntercept - text.contribution) < 1e-8,
+					"the text model's words and intercept do not add up to its contribution");
+			double shares = 0.0;
+			for (TgfReport.Neighbour neighbour : target.textNeighbours)
+			{
+				require(neighbour.influence > 0.0, "a listed neighbour has no influence");
+				shares += neighbour.share;
+			}
+			require(shares <= 1.0 + 1e-9, "influence shares exceed one");
+			if (target.counterfactualFound)
+			{
+				require(!target.counterfactualTerms.isEmpty() && target.counterfactualFlipsTo != null
+						&& !target.counterfactualFlipsTo.equals(target.predicted), "malformed counterfactual");
+			}
+		}
 
-		//6. Ablation lenses rank all candidates and grade with the proper NDCG.
-		require(report.benchmarkRows.size() == 4, "expected fusion, text, graph and time lenses");
-		require("TGF fusion".equals(report.benchmarkRows.get(0).label), "the fusion lens comes first");
-		require(result.getResearchSummary().benchmarkRows.size() == 4, "summary lenses missing");
+		//7. The record round trip keeps everything the studio shows.
+		File record = new File(directory, "record");
+		record.mkdirs();
+		TgfReport.write(record, result);
+		TgfReport loaded = TgfReport.load(record);
+		require(loaded != null && loaded.targets.size() == report.targets.size(), "the record lost targets");
+		for (int i = 0; i < report.targets.size(); i++)
+		{
+			TgfReport.Target live = report.targets.get(i);
+			TgfReport.Target stored = loaded.targets.get(i);
+			require(live.predicted.equals(stored.predicted) && Math.abs(live.probability - stored.probability) < 1e-8
+					&& live.recommendations.size() == stored.recommendations.size(),
+					"the record changed " + live.user + "'s report");
+		}
+		require(new File(new File(record, TgfReport.FOLDER), "predictions.csv").isFile(), "missing predictions.csv");
 
-		//7. Undated corpora: no temporal signal and no line-order clock.
+		//8. Undated: the temporal learners are off and the rest still works.
 		File undated = new File(directory, "tgf-undated.txt");
-		writeUndated(dataset, undated);
-		TemporalGraphFoundationModelSupport.Result plain = score(undated, tfidf, followees, targets);
-		TemporalGraphFoundationModelSupport.CandidateScore plainTop =
-				plain.getReports().get("user-0-0").topCandidates.get(0);
-		require(plainTop.time == 0.0 && plainTop.timeline.isEmpty(), "undated rows must not produce a temporal signal");
-		require(plain.getReports().get("user-0-0").benchmarkRows.size() == 3, "no time lens without dates");
+		writeUndated(raw, undated);
+		TgfReport plain = TgfReport.of(score(undated, tfidf, followees, targets));
+		require(!plain.learner("term-time-graph").active && !plain.learner("activity").active
+				&& !plain.learner("activity-neighbours").active, "undated rows must not produce temporal learners");
+		require(plain.supervised && plain.targets.get(0).predicted.equals("@research"), "undated TGF failed");
+
+		//9. A raw dataset file (no run corpus) gives the same model as its run corpus.
+		TemporalGraphFoundationModelSupport.Result fromRaw = score(raw, tfidf, followees, targets);
+		require(fromRaw.getAccountScores().equals(result.getAccountScores()),
+				"the raw dataset and its run corpus gave different models");
+
+		//10. One labelled account: no model, users ranked by text similarity.
+		Map<String,String> single = new LinkedHashMap<String,String>();
+		for (String user : followees.keySet())
+		{
+			single.put(user, "@only");
+		}
+		TemporalGraphFoundationModelSupport.Result fallback = score(corpus, tfidf, single, targets);
+		require(!TgfReport.of(fallback).supervised, "a single account cannot be learned");
+		require(fallback.getScores().get("user-0-0").size() > 3, "the fallback must still rank users");
 
 		System.out.println("TemporalGraphFoundationModelSupportSelfTest passed");
+	}
+
+	/** Label propagation, its influence rows, logistic regression, the stack and the conformal threshold. */
+	private static void learningMachinery()
+	{
+		Random random = new Random(11L);
+		int n = 40;
+		int classes = 3;
+		int[] label = new int[n];
+		//Clustered points on a circle: users of a class are close.
+		int[] pointer = new int[n + 1];
+		int[] column = new int[n * 3];
+		double[] value = new double[n * 3];
+		for (int u = 0; u < n; u++)
+		{
+			label[u] = u % classes;
+			double[] x = {0.2, 0.2, 0.2};
+			x[label[u]] = 1.0 + random.nextDouble();
+			x[(label[u] + 1) % classes] += 0.3 * random.nextDouble();
+			double norm = Math.sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+			pointer[u] = 3 * u;
+			for (int d = 0; d < 3; d++)
+			{
+				column[3 * u + d] = d;
+				value[3 * u + d] = x[d] / norm;
+			}
+		}
+		pointer[n] = 3 * n;
+		TgfFeatures.Sparse rows = new TgfFeatures.Sparse(pointer, column, value, 3);
+		TgfLearning.Graph graph = TgfLearning.knn(rows, 5, 10);
+		int[] visible = label.clone();
+		for (int u = 0; u < n; u += 4)
+		{
+			visible[u] = -1;
+		}
+		double alpha = 0.9;
+		double[][] mass = TgfLearning.propagate(graph, visible, classes, alpha);
+		//(I - alpha S) F = (1 - alpha) Y holds.
+		for (int u = 0; u < n; u++)
+		{
+			for (int c = 0; c < classes; c++)
+			{
+				double residual = mass[u][c] - (visible[u] == c ? 1.0 - alpha : 0.0);
+				for (int i = 0; i < graph.adjacent[u].length; i++)
+				{
+					residual -= alpha * graph.normalised[u][i] * mass[graph.adjacent[u][i]][c];
+				}
+				require(Math.abs(residual) < 1e-8, "label propagation residual " + residual);
+			}
+		}
+		//The class mass is exactly the sum of the labelled users' influence.
+		for (int u = 0; u < n; u += 7)
+		{
+			double[] influence = TgfLearning.influence(graph, u, alpha);
+			for (int c = 0; c < classes; c++)
+			{
+				double sum = 0.0;
+				for (int v = 0; v < n; v++)
+				{
+					sum += visible[v] == c ? influence[v] : 0.0;
+				}
+				require(Math.abs(sum - mass[u][c]) < 1e-8, "influence " + sum + " does not give the mass " + mass[u][c]);
+			}
+		}
+		//Logistic regression: separable clusters are learned, and the penalised gradient vanishes.
+		int[] train = TgfModel.labelledUsers(visible);
+		TgfLearning.Logistic logistic = TgfLearning.logistic(rows, train, visible, classes, 1e-3, 300);
+		require(logistic.converged, "logistic regression did not converge");
+		int correct = 0;
+		for (int u = 0; u < n; u++)
+		{
+			correct += TgfModel.argmax(logistic.logits(rows, u)) == label[u] ? 1 : 0;
+		}
+		require(correct >= n - 2, "logistic regression misclassified " + (n - correct) + " clustered users");
+		double[][] gradient = new double[classes][4];
+		for (int u : train)
+		{
+			double[] p = TgfLearning.softmax(logistic.logits(rows, u));
+			for (int c = 0; c < classes; c++)
+			{
+				double r = (p[c] - (c == visible[u] ? 1.0 : 0.0)) / train.length;
+				for (int q = rows.pointer[u]; q < rows.pointer[u + 1]; q++)
+				{
+					gradient[c][rows.column[q]] += r * rows.value[q];
+				}
+				gradient[c][3] += r;
+			}
+		}
+		for (int c = 0; c < classes; c++)
+		{
+			for (int d = 0; d < 3; d++)
+			{
+				gradient[c][d] += 1e-3 * logistic.weights[c][d];
+				require(Math.abs(gradient[c][d]) < 1e-4, "logistic gradient not zero at the optimum: " + gradient[c][d]);
+			}
+			require(Math.abs(gradient[c][3]) < 1e-4, "intercept gradient not zero: " + gradient[c][3]);
+		}
+		//The stack: an informative channel gets weight, pure noise none.
+		double[][][] scores = new double[2][n][classes];
+		for (int u = 0; u < n; u++)
+		{
+			for (int c = 0; c < classes; c++)
+			{
+				scores[0][u][c] = (c == label[u] ? 1.0 : -0.5) + 0.3 * random.nextGaussian();
+				scores[1][u][c] = random.nextGaussian();
+			}
+		}
+		double[] theta = TgfLearning.pool(scores, label, classes, 1e-2, 1e-1);
+		require(theta[0] > 0.5, "the informative channel got weight " + theta[0]);
+		require(theta[1] >= 0.0 && theta[1] < 0.25, "the noise channel got weight " + theta[1]);
+		//Conformal threshold: the ceil((n + 1)(1 - alpha))-th smallest score.
+		double[] nonconformity = {0.9, 0.1, 0.5, 0.3, 0.7, 0.2, 0.8, 0.4, 0.6};
+		require(TgfLearning.conformalThreshold(nonconformity, 0.2) == 0.8, "conformal threshold");
+		require(TgfLearning.conformalThreshold(nonconformity, 0.05) == 1.0, "too few users: the full set");
+	}
+
+	private static Map<String,Object> withoutTiming(TemporalGraphFoundationModelSupport.Result result)
+	{
+		LinkedHashMap<String,Object> json = new LinkedHashMap<String,Object>(result.toJson());
+		@SuppressWarnings("unchecked")
+		LinkedHashMap<String,Object> fit = new LinkedHashMap<String,Object>((Map<String,Object>)json.get("fit"));
+		fit.remove("millis");
+		json.put("fit", fit);
+		return json;
 	}
 
 	private static TemporalGraphFoundationModelSupport.Result score(File dataset,
@@ -128,12 +330,6 @@ public final class TemporalGraphFoundationModelSupportSelfTest
 		return TemporalGraphFoundationModelSupport.score(new TemporalGraphFoundationModelSupport.Input(
 				"self-test", dataset, tfidf, followees, followees, targets,
 				Collections.<String,Integer>emptyMap(), 1, 1, 20));
-	}
-
-	private static void requireSameScores(TemporalGraphFoundationModelSupport.Result first,
-			TemporalGraphFoundationModelSupport.Result second, String message)
-	{
-		require(first.getScores().equals(second.getScores()), message);
 	}
 
 	/**
@@ -145,7 +341,7 @@ public final class TemporalGraphFoundationModelSupportSelfTest
 			Map<String,Map<String,Double>> tfidf) throws Exception
 	{
 		Random random = new Random(7L);
-		String[] noise = {"today", "great", "news", "photo", "friends"};
+		String[] noise = {"sunny", "weekend", "coffee", "photo", "friends"};
 		BufferedWriter writer = new BufferedWriter(new FileWriter(dataset));
 		try
 		{
@@ -161,9 +357,10 @@ public final class TemporalGraphFoundationModelSupportSelfTest
 					{
 						String a = VOCABULARY[community][random.nextInt(6)];
 						String b = VOCABULARY[community][random.nextInt(6)];
-						String c = random.nextInt(4) == 0 ? VOCABULARY[random.nextInt(3)][random.nextInt(6)]
+						String c = VOCABULARY[community][random.nextInt(6)];
+						String d = random.nextInt(4) == 0 ? VOCABULARY[random.nextInt(3)][random.nextInt(6)]
 								: noise[random.nextInt(noise.length)];
-						for (String term : new String[] {a, b, c})
+						for (String term : new String[] {a, b, c, d})
 						{
 							Double old = vector.get(term);
 							vector.put(term, Double.valueOf(old == null ? 1.0 : old.doubleValue() + 1.0));
@@ -171,16 +368,7 @@ public final class TemporalGraphFoundationModelSupportSelfTest
 						int month = 1 + community * 4 + random.nextInt(4);
 						writer.write(COMMUNITIES[community] + "\t" + (id++) + "\t2025-"
 								+ (month < 10 ? "0" + month : "" + month) + "-1" + random.nextInt(9) + " 12:00:00\t"
-								+ (100 + community) + "\t" + user + "\t" + a + " " + b + " " + c + "\n");
-					}
-					double norm = 0.0;
-					for (double value : vector.values())
-					{
-						norm += value * value;
-					}
-					for (Map.Entry<String,Double> entry : vector.entrySet())
-					{
-						entry.setValue(Double.valueOf(entry.getValue().doubleValue() / Math.sqrt(norm)));
+								+ (100 + community) + "\t" + user + "\t" + a + " " + b + " " + c + " " + d + "\n");
 					}
 					tfidf.put(user, vector);
 				}
@@ -190,6 +378,27 @@ public final class TemporalGraphFoundationModelSupportSelfTest
 		{
 			writer.close();
 		}
+	}
+
+	/** The run corpus of a raw dataset, written by the application's own RunCorpus. */
+	private static File asRunCorpus(File raw, File directory) throws Exception
+	{
+		final LinkedHashMap<String,List<Tweet>> tweets = new LinkedHashMap<String,List<Tweet>>();
+		final LinkedHashMap<String,String> followees = new LinkedHashMap<String,String>();
+		for (String line : java.nio.file.Files.readAllLines(raw.toPath()))
+		{
+			String[] fields = line.split("\t", 6);
+			List<Tweet> list = tweets.get(fields[4]);
+			if (list == null)
+			{
+				list = new ArrayList<Tweet>();
+				tweets.put(fields[4], list);
+			}
+			list.add(new Tweet(fields[5], Long.parseLong(fields[1]), fields[2], fields[4]));
+			followees.put(fields[4], fields[0]);
+		}
+		return RunCorpus.write(new File(directory, "corpus"), tweets.keySet(), tweets, followees, true, true, true,
+				ControllerAgent.STOP_WORD_SET);
 	}
 
 	private static void writeUndated(File dated, File undated) throws Exception
