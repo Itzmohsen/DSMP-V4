@@ -434,7 +434,13 @@ final class NodeEmulator
 		return cpu;
 	}
 
-	/** Pays the thread's debt when due (always with {@code settle}). */
+	/**
+	 * Pays the thread's debt when due (always with {@code settle}). A settling
+	 * thread is at a synchronization point, which it never passes while its node
+	 * is down, even with nothing to pay (a credit from an overlong sleep, or a
+	 * node as fast as the dilation): it stalls until the repair and then pays
+	 * the redo of the work the crash lost.
+	 */
 	private void pay(ThreadState state, boolean settle)
 	{
 		if (!isEmulating())
@@ -442,8 +448,24 @@ final class NodeEmulator
 			state.debt = 0L;
 			return;
 		}
-		while (state.debt > 0L && (settle || state.debt >= PAY_THRESHOLD_NANOS))
+		while (true)
 		{
+			if (settle && context.isDown(node))
+			{
+				long start = System.nanoTime();
+				try
+				{
+					awaitUp(state);
+				}
+				finally
+				{
+					state.excluded += System.nanoTime() - start;
+				}
+			}
+			if (state.debt <= 0L || !(settle || state.debt >= PAY_THRESHOLD_NANOS))
+			{
+				return;
+			}
 			long target = state.debt;
 			int replacements = state.replacements;
 			long slept;
@@ -627,12 +649,8 @@ final class NodeEmulator
 		{
 			while (true)
 			{
-				long now = System.nanoTime();
-				long remaining = deadline - now;
-				if (remaining <= RESIDUAL_NANOS)
-				{
-					break;
-				}
+				//The outage is checked before the deadline: a thread the host
+				//schedules past its deadline must still stop while its node is down.
 				if (context != null)
 				{
 					context.requireActive();
@@ -648,6 +666,12 @@ final class NodeEmulator
 						}
 						continue;
 					}
+				}
+				long now = System.nanoTime();
+				long remaining = deadline - now;
+				if (remaining <= RESIDUAL_NANOS)
+				{
+					break;
 				}
 				UnitCancellation.check();
 				if (Thread.currentThread().isInterrupted())
