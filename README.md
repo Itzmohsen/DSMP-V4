@@ -70,13 +70,12 @@ required because DSMP is a Swing application.
 Java 17 is the bytecode target even when a newer JDK performs the compile, so a
 clone built with Java 21 can still run on Java 17. Maven is not required for
 normal startup. The simulator uses the checked-in `lib/*.jar` runtime set so
-students do not have to reconstruct PDFBox, JADE, Weka, Gephi, Neuroph,
-Twitter4J, MySQL, or other classpath dependencies manually.
+students do not have to reconstruct JADE, Weka, Neuroph, Twitter4J, MySQL, or
+other classpath dependencies manually.
 
-Git LFS is optional for opening the core application. The required Gephi jar is
-stored as an ordinary Git file. Some very large benchmark datasets and cached
-models still use LFS; users who need every research artifact should install Git
-LFS and run:
+Git LFS is optional for opening the core application. Some very large benchmark
+datasets and cached models use LFS; users who need every research artifact
+should install Git LFS and run:
 
 ```bash
 git lfs install
@@ -245,8 +244,10 @@ Every stochastic step is seeded, and the seed is printed in the run log.
 - **One corpus.** Doc2Vec and the temporal graph model read the run's
   normalised corpus (`RunCorpus`), so every algorithm sees the same tweets
   and words.
-- **Graph modularity** runs Gephi's Louvain with randomisation disabled, so the
-  community assignment and the modularity value are stable across runs.
+- **The run graph** is deterministic: nodes are ordered by name, Leiden and
+  every permutation test use fixed seeds, and the ForceAtlas2 layout starts
+  from positions seeded by node name, so a run's communities, tests and
+  picture are the same every time.
 
 ## Distributed Correctness
 
@@ -352,6 +353,42 @@ The per-candidate number shown next to each recommendation is a
 **within-list relative rank score**: it is rescaled so the best candidate is
 exactly 100. It is not a similarity, a probability or a confidence, and it is
 not comparable between targets or between runs.
+
+## Graph Insights
+
+Every run records the network it creates (`RunGraph`). The graph has three
+layers:
+- the dataset's follows (each user to the account it follows, the ground
+  truth);
+- each target's top-k recommendations, weighted by rank;
+- the follow each simulated user adopts.
+
+The analysis asks whether recommendations stay inside the target's community
+or bridge communities, each measured against chance:
+- homophily, with an exact test against random lists;
+- Newman's assortativity, with a jackknife error;
+- community recovery, the AMI and ARI of Leiden communities against the
+  real ones;
+- the exposure each candidate receives (Gini, coverage, hubness);
+- what the adopted follows do to the network, tested against random
+  adoption.
+
+The Graph Insights tab shows the newest run and follows new runs as they
+finish; any earlier run can be picked. Its pages:
+- **Overview:** the findings, with their tests.
+- **Explorer:** the graph, interactive.
+- **Communities.**
+- **Influence:** PageRank, betweenness and the Guimerà-Amaral roles.
+- **Adoption:** the network before and after.
+- **Methods:** every definition and its reference.
+
+Each run record's `graph` folder holds the analysis (`graph.json`) and the
+nodes and edges as CSV. With **Generate Final Graph Output** on (the
+default) it also holds the layout, GEXF for Gephi, GraphML for NetworkX,
+and the figure as SVG and PNG.
+
+`DSMP_V4_GRAPH.md` describes the graph, the measures, the layout, the files
+and their verification against NetworkX, scikit-learn and SciPy.
 
 ## Credentials
 

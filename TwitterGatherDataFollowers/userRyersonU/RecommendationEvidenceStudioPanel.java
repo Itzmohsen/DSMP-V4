@@ -125,6 +125,21 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			}
 		});
 
+		//A run's graph is written with its record, after its recommendations arrived here.
+		RunRecords.addListener(new RunRecords.Listener()
+		{
+			public void runRecorded(SchedulingRunContext context, RunMetrics metrics, java.io.File directory)
+			{
+				SwingUtilities.invokeLater(new Runnable()
+				{
+					public void run()
+					{
+						refreshGraphEvidence();
+					}
+				});
+			}
+		});
+
 		animationTimer = new Timer(33, new ActionListener()
 		{
 			public void actionPerformed(ActionEvent event)
@@ -222,6 +237,20 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 		if (entryModel.isEmpty())
 		{
 			renderReport(RecommendationEvidenceEngine.EvidenceReport.empty(latestSnapshot));
+		}
+		else
+		{
+			refreshGraphEvidence();
+		}
+	}
+
+	/** Re-reads the selected recommendation once its run's graph exists (it is written at the run's end). */
+	private void refreshGraphEvidence()
+	{
+		if (currentReport != null && currentReport.available && !currentReport.graphAvailable
+				&& RunGraphRecord.latest() != null)
+		{
+			analyzeSelected();
 		}
 	}
 
@@ -1036,7 +1065,7 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 					report.modeLabel,
 					"selected user/entity",
 					"rank " + report.rank,
-					report.graphAvailable ? "graph evidence available" : "dataset evidence"
+					report.graphAvailable ? "run graph evidence" : "dataset evidence"
 			};
 			Color[] colors = { BLUE, PURPLE, GREEN, AMBER };
 			for (int i = 0; i < labels.length; i++)
@@ -1212,14 +1241,13 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			g.drawRoundRect(x, y, w, panelH, RADIUS, RADIUS);
 			g.setFont(NebulaDesign.fontSection());
 			g.setColor(BLUE);
-			g.drawString("GRAPH SIDE EFFECT READ", x + 14, y + 20);
+			g.drawString("IN THE RUN GRAPH", x + 14, y + 20);
 			g.setFont(NebulaDesign.fontMedium(12.5f));
 			g.setColor(TEXT);
 			drawClipped(g, report.graphAvailable
-					? "Persisted edge changed from "
-							+ report.lastOriginalEdge + " to "
+					? "Follows " + report.lastOriginalEdge + "; adopted "
 							+ report.lastRecommendedEdge
-					: "Graph artifacts are not available for this recommendation yet.",
+					: "The run graph appears when the run's record is written.",
 					x + 14, y + 43, w - 28);
 			g.setFont(font(Font.PLAIN, 11));
 			g.setColor(MUTED);
@@ -2059,9 +2087,9 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			int rightW = Math.max(132, Math.min(184, getWidth() / 3));
 			int rightX = Math.max(leftX + nodeW + 86, getWidth() - rightW - 24);
 			drawNode(g, leftX, centerY - 31, nodeW, 62, "Target", report.targetUser, BLUE);
-			drawNode(g, rightX, graphTop + 6, rightW, 58, "Original edge",
+			drawNode(g, rightX, graphTop + 6, rightW, 58, "Follows (observed)",
 					report.lastOriginalEdge, AMBER);
-			drawNode(g, rightX, graphBottom - 64, rightW, 58, "Recommended edge",
+			drawNode(g, rightX, graphBottom - 64, rightW, 58, "Adopted (simulated)",
 					report.lastRecommendedEdge, GREEN);
 			g.setStroke(new BasicStroke(2f));
 			g.setColor(NebulaDesign.withAlpha(AMBER, 125));
@@ -2097,12 +2125,12 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 
 		private void drawMetrics(Graphics2D g, int y, int rows)
 		{
-			String[] labels = { "Health", "Communities", "Edges", "Candidate" };
+			String[] labels = { "Candidate", "Exposure", "PageRank", "Communities" };
 			String[] values = {
-					report.graphHealthScore + "/100",
-					Integer.toString(report.graphCommunities),
-					RecommendationEvidenceEngine.formatCount(report.graphEdges),
-					report.graphCandidateRank
+					report.graphRelation,
+					report.graphExposure,
+					report.graphCandidateRank,
+					Integer.toString(report.graphCommunities)
 			};
 			Color[] colors = { BLUE, PURPLE, GREEN, AMBER };
 			int columns = rows == 2 ? 2 : 4;

@@ -140,12 +140,11 @@ final class ExperimentObservatoryEngine
 		}
 
 		TimingSummary timings = readTimingSummary(new File(root, "resultsTiming.txt"));
-		File importantStuff = new File(root, "important-stuff");
 		File reports = new File(root, "reports");
 		File recommendations = new File(root, "Results/Recommendations");
 		ArtifactInventory inventory = new ArtifactInventory(
-				countFiles(importantStuff, "edges-numbers-", ".txt"),
-				countFiles(importantStuff, "name-number-", ".txt"),
+				countRunGraphs(new File(root, "Results/Runs"), "graph.json"),
+				countRunGraphs(new File(root, "Results/Runs"), "graph.gexf"),
 				countFiles(reports, "", ""),
 				countFiles(recommendations, "", ""),
 				new File(root, "MessagePassingTimes.txt").isFile(),
@@ -218,8 +217,8 @@ final class ExperimentObservatoryEngine
 		b.append("## Artifact Summary\n\n");
 		b.append("- Timing entries: ").append(report.timingSummary.stageLineCount).append("\n");
 		b.append("- Latest simulation total: ").append(report.timingSummary.latestTotalBeforeGraphMs).append(" ms\n");
-		b.append("- Edge files: ").append(report.inventory.edgeFiles).append("\n");
-		b.append("- Node-map files: ").append(report.inventory.nodeMapFiles).append("\n");
+		b.append("- Run graphs: ").append(report.inventory.runGraphs).append("\n");
+		b.append("- Run graphs with figures: ").append(report.inventory.runGraphFigures).append("\n");
 		b.append("- Recommendation folders/files: ").append(report.inventory.recommendationArtifacts).append("\n");
 		b.append("- Reports: ").append(report.inventory.reportFiles).append("\n\n");
 		b.append("## Comparison Read\n\n");
@@ -259,8 +258,8 @@ final class ExperimentObservatoryEngine
 		jsonNumberField(b, 1, "plannedRuns", report.matrix.size(), true);
 		jsonNumberField(b, 1, "latestTotalBeforeGraphMs",
 				report.timingSummary.latestTotalBeforeGraphMs, true);
-		jsonNumberField(b, 1, "edgeFiles", report.inventory.edgeFiles, true);
-		jsonNumberField(b, 1, "nodeMapFiles", report.inventory.nodeMapFiles, true);
+		jsonNumberField(b, 1, "runGraphs", report.inventory.runGraphs, true);
+		jsonNumberField(b, 1, "runGraphFigures", report.inventory.runGraphFigures, true);
 		jsonNumberField(b, 1, "recommendationArtifacts",
 				report.inventory.recommendationArtifacts, true);
 		jsonNumberField(b, 1, "artifactCompletenessScore",
@@ -308,7 +307,7 @@ final class ExperimentObservatoryEngine
 		{
 			score += 18;
 		}
-		if (inventory.edgeFiles > 0 && inventory.nodeMapFiles > 0)
+		if (inventory.runGraphs > 0)
 		{
 			score += 18;
 		}
@@ -327,16 +326,16 @@ final class ExperimentObservatoryEngine
 		score = Math.max(0, Math.min(100, score));
 		String fastest = timing.latestTotalBeforeGraphMs > 0
 				? "Latest completed simulator run: "
-						+ timing.latestTotalBeforeGraphMs + " ms before graph visualization."
+						+ timing.latestTotalBeforeGraphMs + " ms end to end."
 				: "No completed simulator timing artifact was found yet.";
 		String stability = recommendations.detectedTargets > 0
 				? recommendations.detectedTargets
 						+ " target recommendation blocks found in saved output."
 				: "No recommendation output artifact found yet; run the simulator to measure drift.";
-		String graph = inventory.edgeFiles > 0
-				? inventory.edgeFiles + " graph edge artifact(s) and "
-						+ inventory.nodeMapFiles + " node-map artifact(s) are available."
-				: "Graph edge artifacts are not available yet.";
+		String graph = inventory.runGraphs > 0
+				? inventory.runGraphs + " run graph(s) recorded, " + inventory.runGraphFigures
+						+ " with layout and figures (Graph Insights)."
+				: "No run graph recorded yet; every finished run writes one.";
 		String bottleneck = timing.longestStageLabel.length() == 0
 				? "Unknown until timing artifacts exist."
 				: timing.longestStageLabel + " (" + timing.longestStageMs + " ms)";
@@ -371,7 +370,9 @@ final class ExperimentObservatoryEngine
 						lines.remove(0);
 					}
 				}
-				if (line.indexOf("SIMULATION total before graph visualization") >= 0)
+				//"SIMULATION total" (older runs logged "... before graph visualization").
+				if (line.indexOf("SIMULATION total before graph visualization") >= 0
+						|| line.indexOf("SIMULATION total:") >= 0)
 				{
 					long parsed = trailingMilliseconds(line);
 					if (parsed >= 0)
@@ -508,6 +509,21 @@ final class ExperimentObservatoryEngine
 		{
 			return "unavailable";
 		}
+	}
+
+	/** Run records whose graph folder holds {@code fileName}. */
+	private static int countRunGraphs(File runs, String fileName)
+	{
+		File[] directories = runs.listFiles();
+		int count = 0;
+		if (directories != null)
+		{
+			for (File directory : directories)
+			{
+				count += new File(new File(directory, RunGraphRecord.FOLDER), fileName).isFile() ? 1 : 0;
+			}
+		}
+		return count;
 	}
 
 	private static int countFiles(File root, String prefix, String suffix)
@@ -994,8 +1010,10 @@ final class ExperimentObservatoryEngine
 
 	static final class ArtifactInventory
 	{
-		final int edgeFiles;
-		final int nodeMapFiles;
+		/** Run records with a graph (Results/Runs/.../graph/graph.json). */
+		final int runGraphs;
+		/** Those with a layout and figures (graph.gexf). */
+		final int runGraphFigures;
 		final int reportFiles;
 		final int recommendationArtifacts;
 		final boolean hasMessagePassing;
@@ -1004,8 +1022,8 @@ final class ExperimentObservatoryEngine
 		final boolean hasFolloweeAccountsList;
 
 		ArtifactInventory(
-				int edgeFiles,
-				int nodeMapFiles,
+				int runGraphs,
+				int runGraphFigures,
 				int reportFiles,
 				int recommendationArtifacts,
 				boolean hasMessagePassing,
@@ -1013,8 +1031,8 @@ final class ExperimentObservatoryEngine
 				boolean hasSimilarUsersList,
 				boolean hasFolloweeAccountsList)
 		{
-			this.edgeFiles = edgeFiles;
-			this.nodeMapFiles = nodeMapFiles;
+			this.runGraphs = runGraphs;
+			this.runGraphFigures = runGraphFigures;
 			this.reportFiles = reportFiles;
 			this.recommendationArtifacts = recommendationArtifacts;
 			this.hasMessagePassing = hasMessagePassing;

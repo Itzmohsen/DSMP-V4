@@ -886,8 +886,6 @@ public class MobileAgent extends Agent {
 
 							long postProcessingStartTime = System.currentTimeMillis();
 							File selectedDataset = getConfiguredDatasetFile();
-							String currentGraphEdgesBaseName = selectedDataset == null
-									? null : getDatasetGraphBaseName(selectedDataset.getName());
 							try
 							{
 								RecommendationPostProcessor.Result postProcessingResult =
@@ -895,13 +893,12 @@ public class MobileAgent extends Agent {
 												new RecommendationPostProcessor.Request(
 														selectedDataset,
 														new File("important-stuff"),
-														currentGraphEdgesBaseName,
 														getCurrentUserName(),
 														followeeName,
 														userScoresText,
 														scoreReceived,
 														kRecommend,
-														new Random(SimulationSeeds.forName(getCurrentUserName())),
+														BatchRecommendationSelector.adoptionRandom(getCurrentUserName()),
 														recommendationDatasetContext));
 								int persistedSelectionBoxIndex =
 										postProcessingResult.getSelectedRecommendationIndex() + 1;
@@ -915,15 +912,15 @@ public class MobileAgent extends Agent {
 							}
 							catch (IOException postProcessingError)
 							{
-								String warning = "Recommendation was calculated, but its graph "
-										+ "edge/artifact update failed: "
+								String warning = "Recommendation was calculated, but its legacy "
+										+ "output files could not be written: "
 										+ postProcessingError.getMessage();
 								System.err.println(warning);
 								postProcessingError.printStackTrace();
 								myGui.appendResult(warning);
 							}
 							String postProcessingTiming =
-									"[StageTimer] Persist recommendation choice and graph edges: "
+									"[StageTimer] Persist recommendation choice: "
 									+ (System.currentTimeMillis() - postProcessingStartTime) + " ms";
 							System.out.println(postProcessingTiming);
 							myGui.appendResult(postProcessingTiming);

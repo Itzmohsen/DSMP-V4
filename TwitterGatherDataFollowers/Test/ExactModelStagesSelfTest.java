@@ -13,6 +13,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The building blocks that make the model stages exact regardless of
@@ -43,6 +44,7 @@ public final class ExactModelStagesSelfTest
 		emulatorSpansDilateWorkOnce();
 		emulatorCrashRedoesOnlyWorkSinceTheLastDurablePoint(false);
 		emulatorCrashRedoesOnlyWorkSinceTheLastDurablePoint(true);
+		emulatorStallsAtASynchronizationPointWithNothingOwed();
 		System.out.println("ExactModelStagesSelfTest passed");
 	}
 
@@ -320,6 +322,26 @@ public final class ExactModelStagesSelfTest
 	private static void emulatorCrashRedoesOnlyWorkSinceTheLastDurablePoint(final boolean crashDuringRedo)
 			throws Exception
 	{
+		//The second crash must land while the thread is still redoing. On a busy
+		//host the redo can finish first; such an attempt tests nothing and is run
+		//again, so the outcome never depends on how the host schedules threads.
+		for (int attempt = 1; attempt <= CRASH_ATTEMPTS; attempt++)
+		{
+			if (crashScenario(crashDuringRedo))
+			{
+				return;
+			}
+			System.out.println("The redo finished before the second crash (attempt " + attempt + "); running again.");
+		}
+		throw new AssertionError("the second crash never landed during the redo in " + CRASH_ATTEMPTS
+				+ " attempts");
+	}
+
+	private static final int CRASH_ATTEMPTS = 8;
+
+	/** One crash scenario; false when the thread finished its redo before the second crash. */
+	private static boolean crashScenario(final boolean crashDuringRedo) throws Exception
+	{
 		ArrayList<NodeCapacityProfile> profiles = new ArrayList<NodeCapacityProfile>();
 		profiles.add(NodeCapacityProfile.rolePreset(1, NodeCapacityProfile.Role.NORMAL, 2, 4096));
 		profiles.add(NodeCapacityProfile.rolePreset(2, NodeCapacityProfile.Role.WEAK, 2, 4096));
@@ -342,36 +364,54 @@ public final class ExactModelStagesSelfTest
 		//so nothing below depends on how promptly the host wakes threads.
 		context.crashNode(2, Double.NaN);
 		final Throwable[] operatorFailure = new Throwable[1];
+		final boolean[] missed = new boolean[1];
+		final AtomicBoolean left = new AtomicBoolean();
 		Thread operator = new Thread(new Runnable()
 		{
 			public void run()
 			{
 				try
 				{
-					awaitStalled(context, 2);
+					if (!awaitStalled(context, 2, left))
+					{
+						throw new IllegalStateException("the thread left the emulator during the first outage"
+								+ " (down " + context.isDown(2) + ", downtime " + ledger.getDowntimeNanos()
+								+ " ns, owed " + ledger.getOwedNanos() + " ns, slept " + ledger.getDilationNanos()
+								+ " ns, compute " + ledger.getComputeNanos() + " ns, factor " + factor + ")");
+					}
 					context.recoverNode(2);
 					if (crashDuringRedo)
 					{
 						//Crash again as soon as the thread is back to redoing the work.
-						long deadline = System.currentTimeMillis() + 10000L;
+						long deadline = System.currentTimeMillis() + 60000L;
 						while (ledger.getDowntimeNanos() == 0L && System.currentTimeMillis() < deadline)
 						{
 							Thread.onSpinWait();
 						}
 						context.crashNode(2, Double.NaN);
-						awaitStalled(context, 2);
+						boolean stalled = awaitStalled(context, 2, left);
 						context.recoverNode(2);
+						missed[0] = !stalled;
 					}
 				}
 				catch (Throwable failure)
 				{
 					operatorFailure[0] = failure;
+					//The test's thread must not wait forever for a repair.
+					context.recoverNode(2);
 				}
 			}
 		});
 		operator.start();
 		weak.checkpoint();
+		left.set(true);
 		operator.join();
+		if (missed[0])
+		{
+			weak.end(span);
+			context.close("self-test attempt missed the redo");
+			return false;
+		}
 		weak.checkpoint();
 		require(operatorFailure[0] == null, "operator failed: " + operatorFailure[0]);
 		long sinceDurable = NodeEmulator.threadCpuNanos() - durable;
@@ -391,20 +431,103 @@ public final class ExactModelStagesSelfTest
 				"slept " + ledger.getDilationNanos() + " ns but owed " + ledger.getOwedNanos() + " ns");
 		weak.end(span);
 		context.close("self-test finished");
+		return true;
 	}
 
-	/** Waits until a thread of the node is stalled by its outage. */
-	private static void awaitStalled(SchedulingRunContext context, int node) throws InterruptedException
+	/**
+	 * A synchronization point is never passed while the node is down, even by a
+	 * thread that owes nothing: here a node as fast as the time dilation, on a
+	 * busy host also a thread whose credit from an overlong sleep covers its
+	 * work. The thread stalls until the repair and then redoes the lost work.
+	 */
+	private static void emulatorStallsAtASynchronizationPointWithNothingOwed() throws Exception
 	{
-		long deadline = System.currentTimeMillis() + 10000L;
+		ArrayList<NodeCapacityProfile> profiles = new ArrayList<NodeCapacityProfile>();
+		profiles.add(NodeCapacityProfile.rolePreset(1, NodeCapacityProfile.Role.NORMAL, 2, 4096));
+		profiles.add(NodeCapacityProfile.rolePreset(2, NodeCapacityProfile.Role.NORMAL, 2, 4096));
+		final SchedulingRunContext context = new SchedulingRunContext(
+				"emulator-free-crash-self-test-" + System.nanoTime(),
+				SchedulingRunContext.Mode.EMULATED,
+				SchedulerLabEngine.SchedulingPolicy.CAPACITY_WEIGHTED,
+				profiles, 2, -1,
+				NodeCapacityRegistry.clusterSettings().withSeed(1L).withTimeDilation(1.0), Scenario.NONE,
+				3, 60000L, 0);
+		require(context.clock().getDilation() == 1.0 && context.speedOf(1) == 1.0,
+				"node 1 should run at the dilation: speed " + context.speedOf(1) + ", dilation "
+				+ context.clock().getDilation());
+		NodeEmulator fast = context.emulator(1);
+		NodeEmulator.Ledger ledger = fast.getLedger();
+		NodeEmulator.Span span = fast.begin();
+		spin(20);
+		fast.checkpoint();
+		long durable = NodeEmulator.threadCpuNanos();
+		long lost = spin(40);
+		require(ledger.getOwedNanos() == 0L, "a node at the dilation owed " + ledger.getOwedNanos() + " ns");
+		context.crashNode(1, Double.NaN);
+		final Throwable[] operatorFailure = new Throwable[1];
+		final AtomicBoolean left = new AtomicBoolean();
+		Thread operator = new Thread(new Runnable()
+		{
+			public void run()
+			{
+				try
+				{
+					if (!awaitStalled(context, 1, left))
+					{
+						throw new IllegalStateException(
+								"the thread passed a synchronization point while its node was down");
+					}
+				}
+				catch (Throwable failure)
+				{
+					operatorFailure[0] = failure;
+				}
+				finally
+				{
+					context.recoverNode(1);
+				}
+			}
+		});
+		operator.start();
+		fast.checkpoint();
+		left.set(true);
+		operator.join();
+		require(operatorFailure[0] == null, "operator failed: " + operatorFailure[0]);
+		long sinceDurable = NodeEmulator.threadCpuNanos() - durable;
+		double redo = ledger.getRedoNanos();
+		require(ledger.getDowntimeNanos() > 0L, "the outage was not spent blocked");
+		require(redo >= lost * 0.8 - 1000000.0, "the lost " + lost + " ns of work were not redone: redo " + redo + " ns");
+		require(redo <= 1.15 * sinceDurable + 2000000.0,
+				"redo " + redo + " ns is more than the work since the durable point (" + sinceDurable + " ns)");
+		long excess = ledger.getDilationNanos() - ledger.getOwedNanos();
+		require(excess >= -1000L && excess <= ledger.getSleepErrorNanos() + 1000L,
+				"slept " + ledger.getDilationNanos() + " ns but owed " + ledger.getOwedNanos() + " ns");
+		fast.end(span);
+		context.close("self-test finished");
+	}
+
+	/**
+	 * Waits until a thread of the node is stalled by its outage. False when the
+	 * test's thread has already left the emulator ({@code left}), so it can no
+	 * longer stall.
+	 */
+	private static boolean awaitStalled(SchedulingRunContext context, int node, AtomicBoolean left)
+			throws InterruptedException
+	{
+		long deadline = System.currentTimeMillis() + 60000L;
 		while (context.threadsWaitingForRepair(node) == 0)
 		{
+			if (left.get())
+			{
+				return context.threadsWaitingForRepair(node) > 0;
+			}
 			if (System.currentTimeMillis() > deadline)
 			{
 				throw new IllegalStateException("node " + node + "'s thread never stalled on the outage");
 			}
 			Thread.sleep(1L);
 		}
+		return true;
 	}
 
 	/** Burns about {@code millis} of this thread's CPU; returns the CPU time the clock measured. */

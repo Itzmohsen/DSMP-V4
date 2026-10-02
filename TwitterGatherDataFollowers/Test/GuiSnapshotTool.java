@@ -156,6 +156,11 @@ public final class GuiSnapshotTool
 				{
 					snapshotSimulator((SimulatorPanel)selected, gui, output, index, night, width, height, written);
 				}
+				if (selected instanceof GraphInsightsPanel)
+				{
+					snapshotGraphInsights((GraphInsightsPanel)selected, gui, output, index, night, width, height,
+							written);
+				}
 			}
 		}
 		for (String path : written)
@@ -206,9 +211,11 @@ public final class GuiSnapshotTool
 					box.setAccessible(true);
 					((javax.swing.JComboBox<?>)box.get(gui)).setSelectedIndex(
 							Integer.getInteger("snapshot.algorithm", ControllerAgent.COS_SIM).intValue());
+					//The run graph's layout and figures are part of the run record now (no external viewer).
 					Field graph = ControllerAgentGui.class.getDeclaredField("generateGraphOutput");
 					graph.setAccessible(true);
-					((javax.swing.AbstractButton)graph.get(gui)).setSelected(false);
+					((javax.swing.AbstractButton)graph.get(gui)).setSelected(
+							Boolean.parseBoolean(System.getProperty("snapshot.figures", "true")));
 				}
 				catch (Exception unavailable)
 				{
@@ -472,6 +479,95 @@ public final class GuiSnapshotTool
 		}
 	}
 
+	/** A tab with pages the tool steps through (the Simulator, Graph Insights). */
+	private interface Paged
+	{
+		void show(String key);
+
+		Component page(String key);
+	}
+
+	private static Paged paged(final SimulatorPanel simulator)
+	{
+		return new Paged()
+		{
+			public void show(String key)
+			{
+				simulator.show(key);
+			}
+
+			public Component page(String key)
+			{
+				return simulator.page(key);
+			}
+		};
+	}
+
+	/**
+	 * Renders every Graph Insights page for the newest recorded run (or the
+	 * empty state without one), once its graph has loaded and been laid out.
+	 */
+	private static void snapshotGraphInsights(final GraphInsightsPanel insights, final ControllerAgentGui gui,
+			File output, int index, boolean night, final int width, final int height, List<String> written)
+			throws Exception
+	{
+		Paged paged = new Paged()
+		{
+			public void show(String key)
+			{
+				insights.show(key);
+			}
+
+			public Component page(String key)
+			{
+				return insights.page(key);
+			}
+		};
+		SwingUtilities.invokeAndWait(new Runnable()
+		{
+			public void run()
+			{
+				insights.refreshFromSimulator();
+				insights.show(GraphInsightsPanel.EXPLORER);
+				gui.validate();
+			}
+		});
+		long deadline = System.currentTimeMillis() + 30000L;
+		while (System.currentTimeMillis() < deadline)
+		{
+			final boolean[] ready = new boolean[1];
+			SwingUtilities.invokeAndWait(new Runnable()
+			{
+				public void run()
+				{
+					RunGraphRecord.Loaded loaded = insights.loaded();
+					ready[0] = loaded != null && loaded.hasLayout();
+				}
+			});
+			if (ready[0] || RunRecordReader.index().isEmpty())
+			{
+				break;
+			}
+			Thread.sleep(200L);
+		}
+		String[] keys = {GraphInsightsPanel.OVERVIEW, GraphInsightsPanel.EXPLORER, GraphInsightsPanel.COMMUNITIES,
+			GraphInsightsPanel.INFLUENCE, GraphInsightsPanel.ADOPTION, GraphInsightsPanel.METHODS};
+		for (final String key : keys)
+		{
+			SwingUtilities.invokeAndWait(new Runnable()
+			{
+				public void run()
+				{
+					insights.show(key);
+					gui.validate();
+				}
+			});
+			Thread.sleep(Long.getLong("snapshot.settle", 900L).longValue());
+			String base = String.format("%02d-graph-insights-%s-%s", index, key, night ? "night" : "day");
+			written.addAll(writePaged(paged, key, gui, output, base, width, height));
+		}
+	}
+
 	/** Renders every Simulator page: the window, and the whole scrollable page at full height. */
 	private static void snapshotSimulator(final SimulatorPanel simulator, final ControllerAgentGui gui, File output,
 			int index, boolean night, final int width, final int height, List<String> written) throws Exception
@@ -490,12 +586,12 @@ public final class GuiSnapshotTool
 			});
 			Thread.sleep(Long.getLong("snapshot.settle", 900L).longValue());
 			String base = String.format("%02d-simulator-%s-%s", index, key, night ? "night" : "day");
-			written.addAll(writeSimulator(simulator, key, gui, output, base, width, height));
+			written.addAll(writePaged(paged(simulator), key, gui, output, base, width, height));
 		}
 	}
 
-	/** The window and the Simulator page at full height; returns the files written. */
-	private static List<String> writeSimulator(final SimulatorPanel simulator, final String key,
+	/** The window and a page at full height; returns the files written. */
+	private static List<String> writePaged(final Paged simulator, final String key,
 			final ControllerAgentGui gui, File output, String base, final int width, final int height)
 			throws Exception
 	{
@@ -593,7 +689,8 @@ public final class GuiSnapshotTool
 				gui.getUsers();
 				gui.simulatorAlgorithmBox().setSelectedIndex(
 						Integer.getInteger("snapshot.algorithm", ControllerAgent.COS_SIM).intValue());
-				gui.simulatorGraphOutput().setSelected(false);
+				gui.simulatorGraphOutput().setSelected(Boolean.parseBoolean(System.getProperty("snapshot.figures",
+						"true")));
 			}
 		});
 		long deadline = System.currentTimeMillis() + 600000L;
@@ -616,7 +713,7 @@ public final class GuiSnapshotTool
 			}
 		});
 		Thread.sleep(900L);
-		writeSimulator(simulator[0], SimulatorPanel.TARGETS, gui, output, "sim-1-targets", width, height);
+		writePaged(paged(simulator[0]), SimulatorPanel.TARGETS, gui, output, "sim-1-targets", width, height);
 		SwingUtilities.invokeAndWait(new Runnable()
 		{
 			public void run()
@@ -625,7 +722,7 @@ public final class GuiSnapshotTool
 			}
 		});
 		Thread.sleep(900L);
-		writeSimulator(simulator[0], SimulatorPanel.DATA, gui, output, "sim-0-data", width, height);
+		writePaged(paged(simulator[0]), SimulatorPanel.DATA, gui, output, "sim-0-data", width, height);
 		SwingUtilities.invokeAndWait(new Runnable()
 		{
 			public void run()
@@ -644,7 +741,7 @@ public final class GuiSnapshotTool
 			Thread.sleep(250L);
 		}
 		Thread.sleep(800L);
-		writeSimulator(simulator[0], SimulatorPanel.RUN, gui, output, "sim-2-run-initialized", width, height);
+		writePaged(paged(simulator[0]), SimulatorPanel.RUN, gui, output, "sim-2-run-initialized", width, height);
 		SwingUtilities.invokeAndWait(new Runnable()
 		{
 			public void run()
@@ -653,7 +750,7 @@ public final class GuiSnapshotTool
 			}
 		});
 		Thread.sleep(2500L);
-		writeSimulator(simulator[0], SimulatorPanel.RUN, gui, output, "sim-3-run-running", width, height);
+		writePaged(paged(simulator[0]), SimulatorPanel.RUN, gui, output, "sim-3-run-running", width, height);
 		deadline = System.currentTimeMillis() + 1800000L;
 		while (gui.getLatestQualityReport() == null)
 		{
@@ -681,7 +778,7 @@ public final class GuiSnapshotTool
 				}
 			});
 			Thread.sleep(1200L);
-			writeSimulator(simulator[0], key, gui, output, "sim-" + (4 + index) + "-" + key + "-after", width, height);
+			writePaged(paged(simulator[0]), key, gui, output, "sim-" + (4 + index) + "-" + key + "-after", width, height);
 		}
 		System.out.println("[snapshot] quality:\n" + gui.getLatestQualityReport().describe());
 		//Every other tab that shows this run (the TGF Studio, the evidence studio).
@@ -704,6 +801,26 @@ public final class GuiSnapshotTool
 			Thread.sleep(1500L);
 			write(gui, output, "sim-9-" + title.replaceAll("[^A-Za-z0-9]+", "-").toLowerCase(java.util.Locale.US),
 					width, height);
+		}
+		//The run's graph, which Graph Insights follows as soon as the run's record is written.
+		for (int index = 0; index < tabs.getTabCount(); index++)
+		{
+			final int tab = index;
+			Component component = StudioNightTheme.unwrap(tabs.getComponentAt(index));
+			if (!(component instanceof GraphInsightsPanel))
+			{
+				continue;
+			}
+			SwingUtilities.invokeAndWait(new Runnable()
+			{
+				public void run()
+				{
+					tabs.setSelectedIndex(tab);
+					gui.validate();
+				}
+			});
+			snapshotGraphInsights((GraphInsightsPanel)component, gui, output, 10, StudioNightTheme.isNightMode(),
+					width, height, new ArrayList<String>());
 		}
 	}
 

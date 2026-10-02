@@ -201,7 +201,10 @@ what keeps the distributed algorithms bit-identical.
   (500 ms by default) and only then reschedules that node's work. While the
   node is down its data cannot be read, so units homed there wait for its
   repair. A crash stops the node's emulated work at once; its threads block
-  until the repair. A repaired node rejoins empty.
+  until the repair. No thread passes a synchronisation point while its node
+  is down, even one with nothing left to pay (a node as fast as the time
+  dilation, or a thread whose oversleep left it a credit). A repaired node
+  rejoins empty.
 - **What a crash loses.** A unit in progress is revoked and restarts wherever
   the scheduler sends it. Node-local work is durable at every
   synchronisation point (a collective, a message to the coordinator, the end

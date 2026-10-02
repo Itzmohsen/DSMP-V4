@@ -33,9 +33,10 @@ public final class ExperimentObservatoryEngineSelfTest
 				"================ Recommendations for Alice ================\n"
 						+ "Recommendation 1: Bob\n"
 						+ "Recommendation 2: Carol\n");
-		Path importantStuff = Files.createDirectories(project.resolve("important-stuff"));
-		write(importantStuff, "name-number-sample.txt", "StoreA\t1\nAlice\t2\nStoreB\t3\nBob\t4\n");
-		write(importantStuff, "edges-numbers-sample.txt", "2 1\n2 3\n4 3\n4 1\n");
+		Path runGraph = Files.createDirectories(project.resolve("Results").resolve("Runs")
+				.resolve("20260101-000000_SVM_1n_dsmp_default_abc").resolve("graph"));
+		write(runGraph, "graph.json", "{}\n");
+		write(runGraph, "graph.gexf", "<gexf/>\n");
 		Path recommendationDir =
 				Files.createDirectories(project.resolve("Results").resolve("Recommendations").resolve("Alice"));
 		write(recommendationDir, "Recommendations_Alice.txt",
@@ -74,8 +75,8 @@ public final class ExperimentObservatoryEngineSelfTest
 		require(report.timingSummary.stageLineCount == 3, "stage timing lines not counted");
 		require(report.timingSummary.latestTotalBeforeGraphMs == 1448L,
 				"latest total before graph was not parsed");
-		require(report.inventory.edgeFiles == 1, "edge artifacts not detected");
-		require(report.inventory.nodeMapFiles == 1, "node-map artifacts not detected");
+		require(report.inventory.runGraphs == 1, "run graphs not detected");
+		require(report.inventory.runGraphFigures == 1, "run graph figures not detected");
 		require(report.inventory.reportFiles == 1, "report artifacts not detected");
 		require(report.inventory.recommendationArtifacts == 1,
 				"recommendation artifacts not detected");

@@ -9,12 +9,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -22,13 +18,16 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
+/**
+ * What a user agent does with its merged list: the follow simulation's choice
+ * (one of the top recommendations, as {@link BatchRecommendationSelector}
+ * draws it) and the legacy text outputs in important-stuff. The run's graph,
+ * follows, recommendations and adoptions, is built from the run's lists when
+ * its record is written ({@link RunGraph}), not from files written here.
+ */
 final class RecommendationPostProcessor
 {
 	private static final int LEGACY_RESULT_LIMIT = 5;
-	private static final Object MAPPING_LOCK = new Object();
-	private static final Object EDGE_WRITE_LOCK = new Object();
-	private static final Map<String, MappingCacheEntry> MAPPING_CACHE =
-			new HashMap<String, MappingCacheEntry>();
 
 	private RecommendationPostProcessor()
 	{
@@ -72,19 +71,9 @@ final class RecommendationPostProcessor
 			}
 		}
 
-		List<String> graphNodeNames = request.datasetContext.getGraphNodeNames();
-		if (request.selectedDataset != null
-				&& (!unresolvedIdentities.isEmpty() || graphNodeNames.isEmpty()))
+		if (request.selectedDataset != null && !unresolvedIdentities.isEmpty())
 		{
-			DatasetFallback fallback = scanDatasetOnce(
-					request.selectedDataset,
-					unresolvedIdentities,
-					graphNodeNames.isEmpty());
-			firstColumnByIdentity.putAll(fallback.firstColumnByIdentity);
-			if (graphNodeNames.isEmpty())
-			{
-				graphNodeNames = fallback.graphNodeNames;
-			}
+			firstColumnByIdentity.putAll(scanDatasetOnce(request.selectedDataset, unresolvedIdentities));
 		}
 
 		writeLegacyOutputs(
@@ -114,29 +103,9 @@ final class RecommendationPostProcessor
 					selectedRecommendationIndex);
 		}
 
-		boolean edgesWritten = false;
-		if (request.selectedDataset != null
-				&& request.graphEdgesBaseName != null
-				&& selectedRecommendation != null)
-		{
-			File mappingFile = new File(
-					request.importantStuffDirectory,
-					"name-number-" + request.selectedDataset.getName());
-			Map<String, String> nodeNumbers =
-					ensureAndLoadMapping(mappingFile, graphNodeNames);
-			edgesWritten = appendEdges(
-					new File(
-							request.importantStuffDirectory,
-							request.graphEdgesBaseName + ".txt"),
-					nodeNumbers.get(request.userName),
-					nodeNumbers.get(request.originalFollowee),
-					nodeNumbers.get(selectedRecommendation));
-		}
-
 		return new Result(
 				selectedRecommendationIndex,
-				selectedRecommendation,
-				edgesWritten);
+				selectedRecommendation);
 	}
 
 	private static void writeLegacyOutputs(
@@ -192,10 +161,10 @@ final class RecommendationPostProcessor
 		}
 	}
 
-	private static DatasetFallback scanDatasetOnce(
+	/** The first column (the followed account) of each identity, from one pass over the dataset. */
+	private static Map<String, String> scanDatasetOnce(
 			File selectedDataset,
-			Set<String> identities,
-			boolean collectGraphNodes) throws IOException
+			Set<String> identities) throws IOException
 	{
 		if (!selectedDataset.isFile())
 		{
@@ -204,7 +173,6 @@ final class RecommendationPostProcessor
 		}
 
 		Map<String, String> matches = new LinkedHashMap<String, String>();
-		LinkedHashSet<String> graphNodes = new LinkedHashSet<String>();
 		try (BufferedReader reader = new BufferedReader(
 				new InputStreamReader(
 						new FileInputStream(selectedDataset),
@@ -213,7 +181,7 @@ final class RecommendationPostProcessor
 		{
 			String line;
 			boolean firstLine = true;
-			while ((line = reader.readLine()) != null)
+			while ((line = reader.readLine()) != null && matches.size() < identities.size())
 			{
 				if (firstLine && line.startsWith("\uFEFF"))
 				{
@@ -226,27 +194,17 @@ final class RecommendationPostProcessor
 				{
 					continue;
 				}
-				if (collectGraphNodes)
+				for (String identity : identities)
 				{
-					graphNodes.add(fields[0]);
-					graphNodes.add(fields[4]);
-				}
-				if (matches.size() < identities.size())
-				{
-					for (String identity : identities)
+					if (!matches.containsKey(identity)
+							&& containsField(fields, identity))
 					{
-						if (!matches.containsKey(identity)
-								&& containsField(fields, identity))
-						{
-							matches.put(identity, fields[0]);
-						}
+						matches.put(identity, fields[0]);
 					}
 				}
 			}
 		}
-		return new DatasetFallback(
-				matches,
-				new ArrayList<String>(graphNodes));
+		return matches;
 	}
 
 	private static boolean containsField(String[] fields, String identity)
@@ -259,149 +217,6 @@ final class RecommendationPostProcessor
 			}
 		}
 		return false;
-	}
-
-	private static Map<String, String> ensureAndLoadMapping(
-			File mappingFile,
-			List<String> graphNodeNames) throws IOException
-	{
-		synchronized (MAPPING_LOCK)
-		{
-			if (!mappingFile.isFile())
-			{
-				if (graphNodeNames == null || graphNodeNames.isEmpty())
-				{
-					throw new IOException(
-							"Cannot create graph node mapping without dataset node names");
-				}
-				writeMappingAtomically(mappingFile, graphNodeNames);
-			}
-
-			String cacheKey = mappingFile.getCanonicalPath();
-			MappingCacheEntry cached = MAPPING_CACHE.get(cacheKey);
-			if (cached != null && cached.matches(mappingFile))
-			{
-				return cached.nodeNumbers;
-			}
-
-			Map<String, String> nodeNumbers = loadMapping(mappingFile);
-			Map<String, String> immutable =
-					Collections.unmodifiableMap(nodeNumbers);
-			MAPPING_CACHE.put(
-					cacheKey,
-					new MappingCacheEntry(
-							mappingFile.lastModified(),
-							mappingFile.length(),
-							immutable));
-			return immutable;
-		}
-	}
-
-	private static void writeMappingAtomically(
-			File mappingFile,
-			List<String> graphNodeNames) throws IOException
-	{
-		ensureDirectory(mappingFile.getParentFile());
-		File temporaryFile = File.createTempFile(
-				mappingFile.getName() + ".",
-				".tmp",
-				mappingFile.getParentFile());
-		boolean moved = false;
-		try
-		{
-			try (BufferedWriter writer = newUtf8Writer(temporaryFile, false))
-			{
-				LinkedHashSet<String> uniqueNames =
-						new LinkedHashSet<String>(graphNodeNames);
-				int nodeNumber = 1;
-				for (String nodeName : uniqueNames)
-				{
-					if (nodeName == null || nodeName.length() == 0)
-					{
-						continue;
-					}
-					writer.write(nodeName);
-					writer.write('\t');
-					writer.write(Integer.toString(nodeNumber++));
-					writer.newLine();
-				}
-			}
-			try
-			{
-				Files.move(
-						temporaryFile.toPath(),
-						mappingFile.toPath(),
-						StandardCopyOption.ATOMIC_MOVE);
-			}
-			catch (AtomicMoveNotSupportedException e)
-			{
-				Files.move(
-						temporaryFile.toPath(),
-						mappingFile.toPath());
-			}
-			moved = true;
-		}
-		finally
-		{
-			if (!moved)
-			{
-				temporaryFile.delete();
-			}
-		}
-	}
-
-	private static Map<String, String> loadMapping(File mappingFile)
-			throws IOException
-	{
-		Map<String, String> nodeNumbers = new LinkedHashMap<String, String>();
-		try (BufferedReader reader = new BufferedReader(
-				new InputStreamReader(
-						new FileInputStream(mappingFile),
-						StandardCharsets.UTF_8)))
-		{
-			String line;
-			while ((line = reader.readLine()) != null)
-			{
-				String[] fields = line.split("\\s+(?=\\d+$)", 2);
-				if (fields.length != 2)
-				{
-					throw new IOException(
-							"Malformed graph node mapping line: " + line);
-				}
-				nodeNumbers.put(fields[0], fields[1]);
-			}
-		}
-		return nodeNumbers;
-	}
-
-	private static boolean appendEdges(
-			File edgeFile,
-			String userNumber,
-			String originalFolloweeNumber,
-			String selectedFolloweeNumber) throws IOException
-	{
-		if (userNumber == null
-				|| originalFolloweeNumber == null
-				|| selectedFolloweeNumber == null)
-		{
-			return false;
-		}
-
-		synchronized (EDGE_WRITE_LOCK)
-		{
-			try (BufferedWriter writer = newUtf8Writer(edgeFile, true))
-			{
-				writer.write(userNumber);
-				writer.write(' ');
-				writer.write(originalFolloweeNumber);
-				writer.newLine();
-				writer.write(userNumber);
-				writer.write(' ');
-				writer.write(selectedFolloweeNumber);
-				writer.newLine();
-			}
-		}
-		return true;
 	}
 
 	private static List<String> firstKeys(
@@ -480,7 +295,6 @@ final class RecommendationPostProcessor
 	{
 		private final File selectedDataset;
 		private final File importantStuffDirectory;
-		private final String graphEdgesBaseName;
 		private final String userName;
 		private final String originalFollowee;
 		private final String userScoresText;
@@ -492,7 +306,6 @@ final class RecommendationPostProcessor
 		Request(
 				File selectedDataset,
 				File importantStuffDirectory,
-				String graphEdgesBaseName,
 				String userName,
 				String originalFollowee,
 				String userScoresText,
@@ -503,7 +316,6 @@ final class RecommendationPostProcessor
 		{
 			this.selectedDataset = selectedDataset;
 			this.importantStuffDirectory = importantStuffDirectory;
-			this.graphEdgesBaseName = graphEdgesBaseName;
 			this.userName = userName;
 			this.originalFollowee = originalFollowee;
 			this.userScoresText = userScoresText;
@@ -520,16 +332,13 @@ final class RecommendationPostProcessor
 	{
 		private final int selectedRecommendationIndex;
 		private final String selectedRecommendation;
-		private final boolean edgesWritten;
 
 		private Result(
 				int selectedRecommendationIndex,
-				String selectedRecommendation,
-				boolean edgesWritten)
+				String selectedRecommendation)
 		{
 			this.selectedRecommendationIndex = selectedRecommendationIndex;
 			this.selectedRecommendation = selectedRecommendation;
-			this.edgesWritten = edgesWritten;
 		}
 
 		int getSelectedRecommendationIndex()
@@ -540,48 +349,6 @@ final class RecommendationPostProcessor
 		String getSelectedRecommendation()
 		{
 			return selectedRecommendation;
-		}
-
-		boolean wereEdgesWritten()
-		{
-			return edgesWritten;
-		}
-	}
-
-	private static final class DatasetFallback
-	{
-		private final Map<String, String> firstColumnByIdentity;
-		private final List<String> graphNodeNames;
-
-		private DatasetFallback(
-				Map<String, String> firstColumnByIdentity,
-				List<String> graphNodeNames)
-		{
-			this.firstColumnByIdentity = firstColumnByIdentity;
-			this.graphNodeNames = graphNodeNames;
-		}
-	}
-
-	private static final class MappingCacheEntry
-	{
-		private final long lastModified;
-		private final long length;
-		private final Map<String, String> nodeNumbers;
-
-		private MappingCacheEntry(
-				long lastModified,
-				long length,
-				Map<String, String> nodeNumbers)
-		{
-			this.lastModified = lastModified;
-			this.length = length;
-			this.nodeNumbers = nodeNumbers;
-		}
-
-		private boolean matches(File file)
-		{
-			return file.lastModified() == lastModified
-					&& file.length() == length;
 		}
 	}
 }

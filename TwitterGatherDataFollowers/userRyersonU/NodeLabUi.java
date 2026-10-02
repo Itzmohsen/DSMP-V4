@@ -322,12 +322,22 @@ final class NodeLabUi
 	{
 		private static final long serialVersionUID = 1L;
 		private final int maxWidth;
+		private final int margin;
+		private final int minimum;
 		private final JPanel column = new JPanel();
 
 		Page(int maxWidth)
 		{
+			this(maxWidth, 24, 320);
+		}
+
+		/** A page with its own side margin and narrowest column (a side panel uses small ones). */
+		Page(int maxWidth, int margin, int minimum)
+		{
 			super(null);
 			this.maxWidth = maxWidth;
+			this.margin = margin;
+			this.minimum = minimum;
 			setOpaque(false);
 			column.setOpaque(false);
 			column.setLayout(new BoxLayout(column, BoxLayout.Y_AXIS));
@@ -354,17 +364,17 @@ final class NodeLabUi
 		public void doLayout()
 		{
 			int width = getWidth();
-			int content = Math.min(maxWidth, Math.max(320, width - 48));
-			int x = Math.max(24, (width - content) / 2);
+			int content = Math.min(maxWidth, Math.max(minimum, width - 2 * margin));
+			int x = Math.max(margin, (width - content) / 2);
 			int height = measure(content);
-			column.setBounds(x, 20, content, height);
+			column.setBounds(x, Math.min(20, margin), content, height);
 		}
 
 		public Dimension getPreferredSize()
 		{
-			int width = getParent() == null ? maxWidth + 48 : getParent().getWidth();
-			int content = Math.min(maxWidth, Math.max(320, width - 48));
-			return new Dimension(width, measure(content) + 48);
+			int width = getParent() == null ? maxWidth + 2 * margin : getParent().getWidth();
+			int content = Math.min(maxWidth, Math.max(minimum, width - 2 * margin));
+			return new Dimension(width, measure(content) + 2 * Math.min(24, margin));
 		}
 
 		/**
@@ -2865,6 +2875,13 @@ final class NodeLabUi
 		void setEmptyText(String text)
 		{
 			emptyText = text == null ? "" : text;
+		}
+
+		/** The row under a y coordinate, or -1 (the header or below the last row). */
+		int rowAt(int y)
+		{
+			int row = (y - HEADER) / ROW;
+			return y < HEADER || row < 0 || row >= rows.size() ? -1 : row;
 		}
 
 		public Dimension getPreferredSize()

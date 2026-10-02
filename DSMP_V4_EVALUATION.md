@@ -7,7 +7,8 @@ what the October 2026 audit found and how each finding was fixed.
 
 The node model, the scheduling policies and the timing measurements are in
 `DSMP_V4_NODE_LAB.md`. The exactness of distributed runs is covered in
-`DSMP_V4_SCHEDULING_REBUILD.md`.
+`DSMP_V4_SCHEDULING_REBUILD.md`. The network each run creates (the run graph
+behind Graph Insights) is described in `DSMP_V4_GRAPH.md`.
 
 ## 1. The Simulator tab
 
@@ -289,6 +290,10 @@ written with older columns is migrated in place, matching columns by name.
     work since the last durable point, and a second crash during the redo
     restarts it instead of adding another.
   - A crash stops a node's emulated work immediately.
+  - No thread passes a synchronisation point while its node is down, even
+    with nothing left to pay. Before, a node as fast as the time dilation,
+    or a thread whose oversleep had left it a credit, went straight through
+    and never redid its lost work.
   - A step or unit lost to 200 crashes in a row cannot finish between the
     node's crashes, so the run fails with that diagnosis instead of running
     forever.

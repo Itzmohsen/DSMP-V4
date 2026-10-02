@@ -4113,7 +4113,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			generateGraphOutput = new JCheckBox("Generate Final Graph Output");
 			styleCheckBox(generateGraphOutput);
 			generateGraphOutput.setSelected(true);
-			generateGraphOutput.setToolTipText("Node and edge data is always saved. Selected: also build, export, and open the final graph after recommendations.");
+			generateGraphOutput.setToolTipText("Every run records its graph and its analysis (Graph Insights). Selected: also lay the graph out and write GEXF, GraphML, SVG and PNG into the run record.");
 			generateGraphOutput.addItemListener(new ItemListener()
 			{
 				public void itemStateChanged(ItemEvent event)
@@ -4421,8 +4421,9 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		simulatorPanel = new SimulatorPanel(this);
 		JComponent simulatorTab =
 				StudioNightTheme.wrapTab(simulatorPanel, false);
+		//Graph Insights resolves its colours at paint time (like the Simulator and the Node Lab).
 		JComponent graphInsightsTab =
-				StudioNightTheme.wrapTab(graphInsightsPanel, true);
+				StudioNightTheme.wrapTab(graphInsightsPanel, false);
 		JComponent tgfStudioTab =
 				StudioNightTheme.wrapTab(temporalGraphFoundationPanel, false);
 		JComponent evidenceStudioTab =
@@ -5449,6 +5450,16 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		selectApplicationTab(APPLICATION_TAB_SIMULATOR);
 	}
 
+	/** Shows Graph Insights on one of its pages (the Simulator's results link here). */
+	void showGraphInsights(String page)
+	{
+		selectApplicationTab(APPLICATION_TAB_GRAPH_INSIGHTS);
+		if (graphInsightsPanel != null)
+		{
+			graphInsightsPanel.show(page);
+		}
+	}
+
 	private void refreshNodeLab()
 	{
 		if (nodeLabPanel != null)
@@ -5541,15 +5552,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 			setPerformanceStatus(
 					"DELIVERING",
 					"Delivering ranked recommendations to each target user.",
-					StatusTone.RUNNING);
-		}
-		else if (normalized.contains("graph visualization")
-				|| normalized.contains("graph export")
-				|| normalized.contains("graph build"))
-		{
-			setPerformanceStatus(
-					"GRAPH",
-					"Building and exporting the final accumulated network graph.",
 					StatusTone.RUNNING);
 		}
 	}
@@ -7545,7 +7547,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		{
 			simulatorHelpPanel.refreshFromSimulator();
 		}
-		refreshGraphInsightsPanel();
 	}
 
 	private void refreshGraphInsightsPanel()
@@ -7789,10 +7790,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		resultArea.append(resultText+"\n");
 		captureRunAccuracyLine(resultText);
 		updateStatusFromLog(resultText);
-		if (isGraphRelevantLog(resultText))
-		{
-			refreshGraphInsightsPanel();
-		}
 	}
 
 	private void resetRunAccuracyPanel()
@@ -7960,19 +7957,6 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 					|| lower.indexOf("sparse federated mlp accuracy") >= 0;
 		}
 		return false;
-	}
-
-	private boolean isGraphRelevantLog(String resultText)
-	{
-		if (resultText == null)
-		{
-			return false;
-		}
-		String lower = resultText.toLowerCase(Locale.US);
-		return lower.indexOf("graph") >= 0
-				|| lower.indexOf("persist recommendation choice") >= 0
-				|| lower.indexOf("simulation completed") >= 0
-				|| lower.indexOf("recommendations are complete") >= 0;
 	}
 
 	public void appendPreviousResult(String resultText)
@@ -8700,10 +8684,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 						: partialResults
 						? "The run finished with recommendations for some targets and "
 								+ "warnings for others. Review the recommendation cards."
-						: "Recommendations are complete"
-								+ (isGraphGenerationEnabled()
-								? " and final graph processing has finished."
-								: ". Graph display and export were skipped.");
+						: "Recommendations are complete; the run graph is in Graph Insights.";
 				setPerformanceStatus(statusLabel, statusMessage, statusTone);
 				if (outputTabs != null && recommendationUserCount > 0)
 				{

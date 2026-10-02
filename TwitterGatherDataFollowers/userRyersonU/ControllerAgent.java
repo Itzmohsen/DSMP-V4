@@ -285,7 +285,6 @@ public class ControllerAgent extends GuiAgent {
 	
 	private Map<String,String> userFolloweeMap = new LinkedHashMap<String,String>(); //list of users and their followeeNames before processing (may have extra since processing can remove users) From reading text file 
 	private final LinkedHashSet<String> datasetReferenceUsers = new LinkedHashSet<String>();
-	private final LinkedHashSet<String> datasetGraphNodeNames = new LinkedHashSet<String>();
 	private RecommendationDatasetContext recommendationDatasetContext =
 			RecommendationDatasetContext.empty();
 	private Map<String,Integer> followeeFollowerCounts = new LinkedHashMap<String,Integer>(); //number of followers for each followee/class
@@ -949,7 +948,6 @@ public class ControllerAgent extends GuiAgent {
 			userTweetCounts.clear();
 			userFolloweeMap.clear();
 			datasetReferenceUsers.clear();
-			datasetGraphNodeNames.clear();
 			recommendationDatasetContext = RecommendationDatasetContext.empty();
 			followeeFollowerCounts.clear();
 		followeeFollowers.clear();
@@ -4038,7 +4036,6 @@ public class ControllerAgent extends GuiAgent {
 				tweetIdUser.clear();
 				userFolloweeMap.clear();
 				datasetReferenceUsers.clear();
-				datasetGraphNodeNames.clear();
 				recommendationDatasetContext = RecommendationDatasetContext.empty();
 				boolean aggregateControllerDocuments =
 					retweetsFlag != null
@@ -4065,14 +4062,12 @@ public class ControllerAgent extends GuiAgent {
 					continue;
 				}
 
-				String graphLine = lineNumber == 1L && line.startsWith("\uFEFF")
+				String fieldLine = lineNumber == 1L && line.startsWith("\uFEFF")
 						? line.substring(1) : line;
-				String[] graphFields = graphLine.split("\t", 6);
-				if (graphFields.length >= 5)
+				String[] referenceFields = fieldLine.split("\t", 6);
+				if (referenceFields.length >= 5)
 				{
-					datasetReferenceUsers.add(graphFields[0]);
-					datasetGraphNodeNames.add(graphFields[0]);
-					datasetGraphNodeNames.add(graphFields[4]);
+					datasetReferenceUsers.add(referenceFields[0]);
 				}
 
 				DatasetRow row;
@@ -4119,8 +4114,7 @@ public class ControllerAgent extends GuiAgent {
 
 			recommendationDatasetContext = new RecommendationDatasetContext(
 					userFolloweeMap,
-					datasetReferenceUsers,
-					datasetGraphNodeNames);
+					datasetReferenceUsers);
 
 
 			if (malformedRows > 0)

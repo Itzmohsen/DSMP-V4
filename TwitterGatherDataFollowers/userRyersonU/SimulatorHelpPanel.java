@@ -1024,7 +1024,7 @@ final class SimulatorHelpPanel extends JPanel
 					snapshot.workingAlgorithm ? GREEN : RED);
 			drawCheckRow(g, x + 12, rowY + (rowH + 3) * 2, w - 24, rowH,
 					"side effects",
-					snapshot.graphEnabled ? "graph display on" : "edges retained",
+					snapshot.graphEnabled ? "graph figures on" : "graph data only",
 					snapshot.graphEnabled ? GREEN : AMBER);
 		}
 
@@ -2070,7 +2070,7 @@ final class SimulatorHelpPanel extends JPanel
 			String[] labels = {
 					snapshot.parameterProfile,
 					snapshot.batchUsers + (snapshot.batchUsers == 1 ? " target" : " targets"),
-					snapshot.graphEnabled ? "Graph export on" : "Graph export off",
+					snapshot.graphEnabled ? "Graph figures on" : "Graph data only",
 					snapshot.heapMb + " MB heap"
 			};
 			Color[] colors = {PURPLE, BLUE, snapshot.graphEnabled ? GREEN : AMBER, GREEN};
@@ -2106,8 +2106,8 @@ final class SimulatorHelpPanel extends JPanel
 					{"Output", outputMeaning(snapshot)},
 					{"Processing", cleaningSummary(snapshot)},
 					{"Graph", snapshot.graphEnabled
-							? "edge data plus graph display/export"
-							: "edge data retained, graph display skipped"},
+							? "run graph analysed, laid out and exported"
+							: "run graph analysed; layout and figures skipped"},
 					{"Meaning", beginnerQuestion(snapshot)},
 					{"Capacity", snapshot.capacitySummary}
 			};
