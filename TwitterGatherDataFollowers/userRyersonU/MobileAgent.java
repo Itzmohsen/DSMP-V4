@@ -2108,7 +2108,8 @@ public class MobileAgent extends Agent {
 
 	private boolean useTextBatchMode()
 	{
-		return readFrom == FROM_TEXT && algorithmRec != MLP;
+		return readFrom == FROM_TEXT
+        	&& (algorithmRec != MLP || (myGui != null && !myGui.isSimulateTweetDelayEnabled()));
 	}
 
 	private boolean startTimedTextTransfer()
