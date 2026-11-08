@@ -37,6 +37,8 @@ public class MobileAgent extends Agent {
 	private Location destination;
 
 	private long tweetpublishdelayinmillisecond=500000000;
+	/** Whether this agent sends its tweets in batches; decided once, when it is created. */
+	private boolean textBatchMode;
 	private long beginTweetTime; //Timing when tweets first begin to organizing agent, mapper to reducer
 	private long endTweetTime; //Timing when tweets received by recommender, mapper to reducer
 	private long firstTweetTime;   // added by Sepide 
@@ -210,6 +212,9 @@ public class MobileAgent extends Agent {
 
 		myGui = (ControllerAgentGui) args[19];
 		readFrom = (Integer) args[20];
+		//Fixed now, with the tweet delay this agent was created with, so starting and
+		//stopping always agree even if the delay option changes during the run.
+		textBatchMode = useTextBatchMode();
 		recommendationConfig = args.length > 9
 				&& args[9] instanceof RecommendationExperimentConfig
 				? (RecommendationExperimentConfig) args[9]
@@ -599,7 +604,7 @@ public class MobileAgent extends Agent {
 
 						if (readFrom == FROM_DB)
 							addBehaviour(TweetingFromDb);
-						else if (useTextBatchMode())
+						else if (textBatchMode)
 						{
 							if (!startTextBatchTransfer())
 							{
@@ -629,7 +634,7 @@ public class MobileAgent extends Agent {
 					//System.out.println(getLocalName()+" received Stop Tweeting");
 						if (readFrom == FROM_DB)
 							removeBehaviour(TweetingFromDb);
-						else if (!useTextBatchMode()) //read from text
+						else if (!textBatchMode) //read from text
 						{
 							removeBehaviour(TweetingFromText);
 							closeTextBatchReader();
@@ -2108,8 +2113,11 @@ public class MobileAgent extends Agent {
 
 	private boolean useTextBatchMode()
 	{
+		//With tweet delays simulated, MLP publishes one tweet per timer tick. With them
+		//off it sends batches like every other algorithm: JADE fires at most one timer
+		//per millisecond, which would hold its input to about one tweet per millisecond.
 		return readFrom == FROM_TEXT
-        	&& (algorithmRec != MLP || (myGui != null && !myGui.isSimulateTweetDelayEnabled()));
+				&& (algorithmRec != MLP || (myGui != null && !myGui.isSimulateTweetDelayEnabled()));
 	}
 
 	private boolean startTimedTextTransfer()

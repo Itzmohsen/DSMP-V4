@@ -587,13 +587,13 @@ the fix.
 - **Network model.** The network is a latency-bandwidth star with FIFO links.
   There is no TCP dynamics, packet loss, switch fabric or topology beyond the
   star.
-- **MLP input stage.** MLP's user agents publish one tweet per tick (other
-  algorithms send tweets in batches). With tweet delays off the tick is 1 ms,
-  and JADE's single timer thread fires at most one timer per millisecond for
-  the whole platform. MLP's input stage therefore lasts about 1 ms per tweet
-  (about 21 s for `Retail.txt`) whatever the cluster, and in model time it
-  shrinks with the TDF. Compare MLP input stages only at equal TDF. The model
-  stage is unaffected.
+- **MLP input stage with tweet delays on.** With simulated tweet delays,
+  MLP's user agents publish one tweet per timer tick, and JADE's single timer
+  thread fires at most one timer per millisecond for the whole platform. With
+  tweet delays off, as in every study, MLP sends its tweets in batches like
+  the other algorithms. On `Retail.txt` with two emulated nodes at TDF 2, its
+  input stage fell from about 10.6 s to under 0.2 s of model time, with
+  identical recommendations.
 - **K-Means** runs as synchronized collective steps rather than queue units,
   so its live controls act at phase boundaries and through node speed.
 - **Scalable SVM** keeps its shared coordinator and is not split into units.
