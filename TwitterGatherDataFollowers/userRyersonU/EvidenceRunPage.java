@@ -28,6 +28,8 @@ final class EvidenceRunPage extends RecommendationEvidenceStudioPanel.Page
 	private RecommendationEvidenceEngine.EvidenceRun run;
 	private int shownEvents = -1;
 	private int request;
+	/** Whether an analysis is running (on the event thread's view). */
+	private boolean analysing;
 
 	EvidenceRunPage(RecommendationEvidenceStudioPanel studio)
 	{
@@ -50,28 +52,57 @@ final class EvidenceRunPage extends RecommendationEvidenceStudioPanel.Page
 		{
 			return;
 		}
+		boolean newRun = next != run;
 		run = next;
 		shownEvents = next.size();
-		removeAll();
-		add(StudioShell.waiting(NodeLabUi.Glyph.CHART, "Analysing", "Loading the evidence…"), BorderLayout.CENTER);
-		revalidate();
-		repaint();
+		if (newRun || !analysing)
+		{
+			removeAll();
+			add(StudioShell.waiting(NodeLabUi.Glyph.CHART, "Analysing", "Loading the evidence…"), BorderLayout.CENTER);
+			revalidate();
+			repaint();
+		}
+		//One analysis at a time: a live run delivers one target after another, and each analysis
+		//reads the run's whole corpus. Changes that arrive meanwhile are analysed once it ends.
+		if (!analysing)
+		{
+			analyse(next);
+		}
+	}
+
+	private void analyse(final RecommendationEvidenceEngine.EvidenceRun target)
+	{
+		analysing = true;
 		final int ticket = ++request;
+		final int size = target.size();
 		Thread worker = new Thread(new Runnable()
 		{
 			public void run()
 			{
-				final RecommendationEvidenceEngine.RunAnalysis analysis = RecommendationEvidenceEngine.analyzeRun(next);
-				SwingUtilities.invokeLater(new Runnable()
+				RecommendationEvidenceEngine.RunAnalysis result = null;
+				try
 				{
-					public void run()
+					result = RecommendationEvidenceEngine.analyzeRun(target);
+				}
+				finally
+				{
+					final RecommendationEvidenceEngine.RunAnalysis analysis = result;
+					SwingUtilities.invokeLater(new Runnable()
 					{
-						if (ticket == request)
+						public void run()
 						{
-							render(next, analysis);
+							analysing = false;
+							if (run != null && (run != target || run.size() != size))
+							{
+								analyse(run);
+							}
+							else if (ticket == request && analysis != null)
+							{
+								render(target, analysis);
+							}
 						}
-					}
-				});
+					});
+				}
 			}
 		}, "DSMP-Evidence-Run");
 		worker.setDaemon(true);

@@ -98,6 +98,8 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 	private String message = "Run the Simulator: every recommendation it makes can be explained here.";
 	private boolean followLatest = true;
 	private boolean updating;
+	/** Whether the pages missed an update while the studio was off screen. */
+	private boolean stale;
 	private int request;
 	private String current = EXPLAIN;
 
@@ -196,10 +198,14 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 
 	// ======================================================== simulator hooks
 
-	/** Called when the tab is shown. */
+	/** Called when the tab is shown: the pages catch up with what arrived while it was hidden. */
 	void refreshFromSimulator()
 	{
 		refreshChoices();
+		if (stale)
+		{
+			publish(true);
+		}
 	}
 
 	/** Called when a new run starts: its results replace nothing, they become the newest run. */
@@ -493,6 +499,17 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 
 	private void publish()
 	{
+		publish(false);
+	}
+
+	/**
+	 * Shows the run on every page. The pages read the run's corpus, which can be
+	 * millions of tweets, so while the studio is off screen they wait: work done
+	 * there would only compete with the running experiment for memory and CPU.
+	 * {@code force}: the studio was just brought on screen.
+	 */
+	private void publish(boolean force)
+	{
 		folder.setEnabled(run != null && run.record != null);
 		if (run == null)
 		{
@@ -506,6 +523,13 @@ final class RecommendationEvidenceStudioPanel extends JPanel
 			status.setToolTipText(run.corpusFile == null ? "No corpus: ground truth and run graph only"
 					: "Corpus " + run.corpusFile.getName());
 		}
+		if (!force && getTopLevelAncestor() != null && !isShowing())
+		{
+			stale = true;
+			navigation.repaint();
+			return;
+		}
+		stale = false;
 		for (Page page : pages.values())
 		{
 			page.show(run, message);

@@ -1,0 +1,143 @@
+{
+  "name": "Synthetic-Communities-1500-Users-8.6M",
+  "seed": 20261002,
+  "users": 1500,
+  "rows": 8557653,
+  "tokens": 81298905,
+  "vocabulary_used": 29320,
+  "terms_used_by_two_or_more_users": 29320,
+  "communities": {
+    "AstroNightly": {
+      "users": 214,
+      "tweets": 1192108
+    },
+    "TrailRunnersClub": {
+      "users": 193,
+      "tweets": 1098272
+    },
+    "BakeHouseDaily": {
+      "users": 141,
+      "tweets": 780202
+    },
+    "CodeCraftDevs": {
+      "users": 172,
+      "tweets": 970539
+    },
+    "GreenThumbGarden": {
+      "users": 130,
+      "tweets": 762476
+    },
+    "JazzCellarLive": {
+      "users": 103,
+      "tweets": 614248
+    },
+    "PawsRescueNet": {
+      "users": 60,
+      "tweets": 344628
+    },
+    "MarketPulseFin": {
+      "users": 94,
+      "tweets": 548725
+    },
+    "PixelArcadeHQ": {
+      "users": 133,
+      "tweets": 772323
+    },
+    "SaltwaterSurfCo": {
+      "users": 58,
+      "tweets": 338117
+    },
+    "BookNookReads": {
+      "users": 89,
+      "tweets": 505086
+    },
+    "CityCycleHub": {
+      "users": 113,
+      "tweets": 630929
+    }
+  },
+  "dates": [
+    "2019-01-01",
+    "2024-12-31"
+  ],
+  "median_tweets_parameter": 5500.0,
+  "mixture": {
+    "own_scale": 0.04,
+    "own_floor": 0.008,
+    "season": 0.5,
+    "rhythm": 0.35,
+    "event": 0.3,
+    "silent": 0.15,
+    "cross": 0.75,
+    "cross_max": 0.1
+  },
+  "oracle_accuracy": 0.9053,
+  "majority_baseline": 0.1427,
+  "similarity_recomputed": {
+    "precision_at_10": 0.7177,
+    "top1": 0.918,
+    "chance_precision_at_10": 0.0946
+  },
+  "bytes": 1294765078,
+  "sha256": "14018bff7b0418d93f31206807227b5220ebb257d65ba4c8b63400d8358df013",
+  "lexicon_sizes": {
+    "AstroNightly": 145,
+    "TrailRunnersClub": 142,
+    "BakeHouseDaily": 143,
+    "CodeCraftDevs": 152,
+    "GreenThumbGarden": 133,
+    "JazzCellarLive": 115,
+    "PawsRescueNet": 110,
+    "MarketPulseFin": 112,
+    "PixelArcadeHQ": 101,
+    "SaltwaterSurfCo": 87,
+    "BookNookReads": 93,
+    "CityCycleHub": 93
+  },
+  "shared_topics": {
+    "outdoors": {
+      "members": [
+        "TrailRunnersClub",
+        "SaltwaterSurfCo",
+        "CityCycleHub",
+        "GreenThumbGarden",
+        "AstroNightly"
+      ],
+      "words": 55
+    },
+    "fitness": {
+      "members": [
+        "TrailRunnersClub",
+        "CityCycleHub",
+        "SaltwaterSurfCo"
+      ],
+      "words": 34
+    },
+    "tech": {
+      "members": [
+        "CodeCraftDevs",
+        "PixelArcadeHQ",
+        "MarketPulseFin"
+      ],
+      "words": 36
+    },
+    "culture": {
+      "members": [
+        "BookNookReads",
+        "JazzCellarLive",
+        "AstroNightly"
+      ],
+      "words": 33
+    },
+    "homelife": {
+      "members": [
+        "BakeHouseDaily",
+        "GreenThumbGarden",
+        "PawsRescueNet",
+        "BookNookReads"
+      ],
+      "words": 31
+    }
+  },
+  "background_words": 27705
+}
