@@ -513,7 +513,7 @@ final class StudyResult
 			md.append(index == 0 ? "" : ", ")
 					.append(RecommendationModeSupport.algorithmName(design.getAlgorithms().get(index).intValue()));
 		}
-		md.append(" (").append(design.getTargets()).append(" target(s))\n");
+		md.append(" (").append(design.getTargets()).append(" target(s), k = ").append(design.getK()).append(")\n");
 		md.append("- Clusters: ");
 		for (int index = 0; index < design.getClusters().size(); index++)
 		{

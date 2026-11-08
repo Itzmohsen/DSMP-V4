@@ -27,8 +27,36 @@ public final class NodeLabAnalysisSelfTest
 		checkJson();
 		checkCsv();
 		checkLowerBoundCases();
+		checkStudyListLength();
 		checkStudyDirectoryIsSelfContained();
 		System.out.println("NodeLabAnalysisSelfTest passed");
+	}
+
+	/** A design's list length k: its default, its text round trip and its range. */
+	private static void checkStudyListLength() throws Exception
+	{
+		String base = "name: k check\nalgorithms: SIMILARITY\ntargets: 4\npolicies: capacity-weighted\n"
+				+ "clusters: preset:1 normal node (reference)\n";
+		StudyDesign older = StudyDesign.parse(base, null, 4096);
+		require(older.getK() == StudyDesign.DEFAULT_K && StudyDesign.DEFAULT_K == 10,
+				"a design without k keeps the list length every study used before (10)");
+		StudyDesign three = StudyDesign.parse(base + "k: 3\n", null, 4096);
+		require(three.getK() == 3, "k: 3 is read");
+		require(three.toText().contains("\nk: 3\n"), "the design's text names its k");
+		require(StudyDesign.parse(three.toText(), null, 4096).getK() == 3, "k survives the text round trip");
+		for (String outside : new String[] {"2", "101"})
+		{
+			boolean refused = false;
+			try
+			{
+				StudyDesign.parse(base + "k: " + outside + "\n", null, 4096);
+			}
+			catch (java.io.IOException expected)
+			{
+				refused = expected.getMessage().contains("k must be between 3 and 100");
+			}
+			require(refused, "k = " + outside + " is refused (the Targets page's range is 3 to 100)");
+		}
 	}
 
 	private static void checkStatistics()
@@ -192,7 +220,7 @@ public final class NodeLabAnalysisSelfTest
 					ClusterSettings.defaults().withSeed(77L));
 			Scenario scenario = Scenario.parse("name: My unsaved drill\nat 20% pause node 2\nat 70% resume node 2\n");
 			StudyDesign design = new StudyDesign("Round trip", null, Arrays.asList(Integer.valueOf(ControllerAgent.COS_SIM)),
-					3, RecommendationSchedulerPlan.Mode.SCORING_SAFE,
+					3, 5, RecommendationSchedulerPlan.Mode.SCORING_SAFE,
 					Arrays.asList(SchedulerLabEngine.SchedulingPolicy.ORIGINAL_DSMP,
 							SchedulerLabEngine.SchedulingPolicy.WORK_STEALING),
 					SchedulerLabEngine.SchedulingPolicy.ORIGINAL_DSMP, Arrays.asList(custom),
@@ -202,6 +230,7 @@ public final class NodeLabAnalysisSelfTest
 			StudyResult loaded = StudyResult.load(directory, 4096);
 			StudyDesign again = loaded.getDesign();
 			require(again.cells().size() == design.cells().size(), "same cells after the round trip");
+			require(again.getK() == 5 && again.getTargets() == 3, "the study directory keeps its targets and k");
 			require(again.getClusters().get(0).getNodeCount() == 2
 					&& again.getClusters().get(0).getProfiles().get(0).getNetworkDelayMs() == 3
 					&& again.getClusters().get(0).getSettings().getSeed() == 77L,

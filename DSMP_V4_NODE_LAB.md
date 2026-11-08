@@ -453,6 +453,7 @@ name: Policies on a heterogeneous trio
 dataset: Dataset/Retail.txt
 algorithms: SIMILARITY, KMEANS
 targets: 4
+k: 10
 mode: emulated
 policies: original dsmp, capacity-weighted, work stealing, queue-length
 baseline: original dsmp
@@ -462,6 +463,17 @@ repetitions: 5
 warmup: 1
 seed: 42
 ```
+
+Every run of a study sets its own run options; the Simulator's Targets page
+does not apply:
+
+- **Targets.** The first `targets` users of the simulator's user list. Every
+  cell gets the same set, so comparisons stay paired. This is not a stratified
+  sample.
+- **List length k.** 3 to 100, the Targets page's range. A design without `k`
+  uses 10, which is what every study used before k became a setting. On the
+  Studies page it is the "List length k" field.
+- **Fixed options.** Tweet delays and graph output are off.
 
 Design principles:
 
