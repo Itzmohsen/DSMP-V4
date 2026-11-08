@@ -136,25 +136,34 @@ final class EvidenceCorpus
 		return users.length;
 	}
 
-	/** The corpus of a file, indexed once and kept for the next explanations. */
+	/**
+	 * The corpus of a file, indexed once and kept for the next explanations.
+	 * One corpus is read at a time: callers that arrive while it is being read
+	 * wait for it instead of reading the same large file again in parallel.
+	 */
 	static EvidenceCorpus of(File file) throws IOException
 	{
 		String key = file.getAbsolutePath() + ":" + file.length() + ":" + file.lastModified();
-		synchronized (CACHE)
+		synchronized (LOADING)
 		{
-			EvidenceCorpus cached = CACHE.get(key);
-			if (cached != null)
+			synchronized (CACHE)
 			{
-				return cached;
+				EvidenceCorpus cached = CACHE.get(key);
+				if (cached != null)
+				{
+					return cached;
+				}
 			}
+			EvidenceCorpus corpus = read(file);
+			synchronized (CACHE)
+			{
+				CACHE.put(key, corpus);
+			}
+			return corpus;
 		}
-		EvidenceCorpus corpus = read(file);
-		synchronized (CACHE)
-		{
-			CACHE.put(key, corpus);
-		}
-		return corpus;
 	}
+
+	private static final Object LOADING = new Object();
 
 	private static EvidenceCorpus read(File file) throws IOException
 	{

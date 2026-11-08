@@ -22,3 +22,7 @@ test-classpath.txt
 # JVM crash dumps
 hs_err_pid*.log
 replay_pid*.log
+
+# Generated benchmark data, too large for the repository; regenerate it with
+# Dataset/Benchmarks/build_synthetic_communities.py (see its README)
+Dataset/Benchmarks/Synthetic-Communities-1500-Users-8.6M.txt
