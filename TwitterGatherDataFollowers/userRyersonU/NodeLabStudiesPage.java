@@ -57,6 +57,8 @@ final class NodeLabStudiesPage extends NodeLabPanel.Page
 	private File datasetFile;
 	private final NodeLabUi.ToggleGroup algorithms = new NodeLabUi.ToggleGroup();
 	private final NodeLabUi.Stepper targets = new NodeLabUi.Stepper(4, 1, 1000);
+	private final NodeLabUi.Stepper listLength = new NodeLabUi.Stepper(StudyDesign.DEFAULT_K, StudyDesign.MIN_K,
+			StudyDesign.MAX_K);
 	private final NodeLabUi.Segmented mode = new NodeLabUi.Segmented(
 			new String[] {"Emulated", "Emulated with faults"}, null, 0);
 	private final NodeLabUi.ToggleGroup clusters = new NodeLabUi.ToggleGroup();
@@ -221,7 +223,12 @@ final class NodeLabStudiesPage extends NodeLabPanel.Page
 				NodeLabUi.labeled("Name", name),
 				NodeLabUi.labeled("Dataset", NodeLabUi.stack(6, datasetSource, datasetLabel)),
 				NodeLabUi.labeled("Algorithms", algorithms),
-				NodeLabUi.spread(NodeLabUi.labeled("Target users per run", targets), NodeLabUi.labeled("Mode", mode)));
+				NodeLabUi.stack(6,
+						NodeLabUi.spread(NodeLabUi.labeled("Target users per run", targets),
+								NodeLabUi.labeled("List length k", listLength)),
+						NodeLabUi.note("Every run recommends for the first n users of the Simulator's user list and"
+								+ " cuts every list and metric at k; the Targets page's own choices do not apply.")),
+				NodeLabUi.labeled("Mode", mode));
 		JPanel numbers = NodeLabUi.grid(110, 3, 12);
 		numbers.add(NodeLabUi.labeled("Repetitions", repetitions));
 		numbers.add(NodeLabUi.labeled("Warm-up runs", warmup));
@@ -336,7 +343,7 @@ final class NodeLabStudiesPage extends NodeLabPanel.Page
 			return null;
 		}
 		return new StudyDesign(name.getText(), datasetSource.getSelected() == 1 ? datasetFile : null,
-				chosenAlgorithms, targets.getValue(), mode.getSelected() == 1
+				chosenAlgorithms, targets.getValue(), listLength.getValue(), mode.getSelected() == 1
 						? RecommendationSchedulerPlan.Mode.SCHEDULING_EXPERIMENT : RecommendationSchedulerPlan.Mode.SCORING_SAFE,
 				chosenPolicies, base, chosenClusters, chosenScenarios, repetitions.getValue(), warmup.getValue(),
 				JsonText.parseLong(seed.getText(), 42L));
@@ -481,6 +488,7 @@ final class NodeLabStudiesPage extends NodeLabPanel.Page
 			chip.setSelectedQuietly(design.getAlgorithms().contains(chip.getValue()));
 		}
 		targets.setValueQuietly(design.getTargets());
+		listLength.setValueQuietly(design.getK());
 		mode.setSelectedQuietly(design.getMode() == RecommendationSchedulerPlan.Mode.SCHEDULING_EXPERIMENT ? 1 : 0);
 		ArrayList<String> clusterNames = new ArrayList<String>();
 		for (ClusterConfig cluster : design.getClusters())

@@ -25,13 +25,17 @@ import java.util.Locale;
  * changes results); the report checks it.
  *
  * Text format (one key per line; lists are comma separated, clusters and
- * scenarios are separated by "|"):
+ * scenarios are separated by "|"). Every run recommends for the first
+ * {@code targets} users of the simulator's user list and cuts every list and
+ * metric at {@code k} (3 to 100, default 10), whatever the Simulator's
+ * Targets page is set to:
  *
  * <pre>
  * name: Policies on a heterogeneous trio
  * dataset: Dataset/Retail.txt
  * algorithms: SIMILARITY, KMEANS
  * targets: 4
+ * k: 10
  * mode: emulated
  * policies: original dsmp, capacity-weighted, work stealing, queue-length
  * baseline: original dsmp
@@ -44,6 +48,12 @@ import java.util.Locale;
  */
 final class StudyDesign
 {
+	/** List length when a design names none (what every study used before k was a setting). */
+	static final int DEFAULT_K = 10;
+	/** The range of the Simulator's Targets page. */
+	static final int MIN_K = 3;
+	static final int MAX_K = 100;
+
 	/** One combination of factor levels. */
 	static final class Cell
 	{
@@ -102,6 +112,7 @@ final class StudyDesign
 	private final File dataset;
 	private final List<Integer> algorithms;
 	private final int targets;
+	private final int k;
 	private final RecommendationSchedulerPlan.Mode mode;
 	private final List<SchedulerLabEngine.SchedulingPolicy> policies;
 	private final SchedulerLabEngine.SchedulingPolicy baseline;
@@ -111,7 +122,7 @@ final class StudyDesign
 	private final int warmup;
 	private final long seed;
 
-	StudyDesign(String name, File dataset, List<Integer> algorithms, int targets,
+	StudyDesign(String name, File dataset, List<Integer> algorithms, int targets, int k,
 			RecommendationSchedulerPlan.Mode mode, List<SchedulerLabEngine.SchedulingPolicy> policies,
 			SchedulerLabEngine.SchedulingPolicy baseline, List<ClusterConfig> clusters,
 			List<Scenario> scenarios, int repetitions, int warmup, long seed)
@@ -121,6 +132,7 @@ final class StudyDesign
 		this.algorithms = Collections.unmodifiableList(new ArrayList<Integer>(
 				algorithms == null ? Collections.<Integer>emptyList() : algorithms));
 		this.targets = Math.max(1, targets);
+		this.k = Math.max(MIN_K, Math.min(MAX_K, k));
 		this.mode = mode == null || mode == RecommendationSchedulerPlan.Mode.DSMP_DEFAULT
 				? RecommendationSchedulerPlan.Mode.SCORING_SAFE : mode;
 		this.policies = Collections.unmodifiableList(new ArrayList<SchedulerLabEngine.SchedulingPolicy>(
@@ -159,6 +171,12 @@ final class StudyDesign
 	int getTargets()
 	{
 		return targets;
+	}
+
+	/** The list length k of every run. */
+	int getK()
+	{
+		return k;
 	}
 
 	RecommendationSchedulerPlan.Mode getMode()
@@ -301,6 +319,7 @@ final class StudyDesign
 		}
 		text.append('\n');
 		text.append("targets: ").append(targets).append('\n');
+		text.append("k: ").append(k).append('\n');
 		text.append("mode: ").append(mode == RecommendationSchedulerPlan.Mode.SCHEDULING_EXPERIMENT
 				? "faults" : "emulated").append('\n');
 		text.append("policies: ");
@@ -338,6 +357,7 @@ final class StudyDesign
 		File dataset = null;
 		ArrayList<Integer> algorithms = new ArrayList<Integer>();
 		int targets = 4;
+		int k = DEFAULT_K;
 		RecommendationSchedulerPlan.Mode mode = RecommendationSchedulerPlan.Mode.SCORING_SAFE;
 		ArrayList<SchedulerLabEngine.SchedulingPolicy> policies = new ArrayList<SchedulerLabEngine.SchedulingPolicy>();
 		SchedulerLabEngine.SchedulingPolicy baseline = null;
@@ -381,6 +401,15 @@ final class StudyDesign
 				else if (key.equals("targets"))
 				{
 					targets = Integer.parseInt(value);
+				}
+				else if (key.equals("k"))
+				{
+					k = Integer.parseInt(value);
+					if (k < MIN_K || k > MAX_K)
+					{
+						throw new IllegalArgumentException("k must be between " + MIN_K + " and " + MAX_K
+								+ " (the Targets page's range); it is " + k + ".");
+					}
 				}
 				else if (key.equals("mode"))
 				{
@@ -443,7 +472,7 @@ final class StudyDesign
 		{
 			throw new IOException("A study needs at least one algorithm, one policy and one cluster.");
 		}
-		return new StudyDesign(name, dataset, algorithms, targets, mode, policies, baseline, clusters,
+		return new StudyDesign(name, dataset, algorithms, targets, k, mode, policies, baseline, clusters,
 				scenarios, repetitions, warmup, seed);
 	}
 

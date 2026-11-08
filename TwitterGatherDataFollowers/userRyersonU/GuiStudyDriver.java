@@ -11,6 +11,10 @@ import javax.swing.SwingUtilities;
  * as a person would: load the dataset, set the run options, initialize the
  * agents, start the simulation and wait for it to end. Works with the window
  * shown or hidden ({@code -Ddsmp.gui.hidden=true}).
+ *
+ * The run options come from the design, not from the Simulator's pages: the
+ * algorithm, the node count, the first {@code targets} users of the user list
+ * as targets, the list length k, and tweet delays and graph output off.
  */
 final class GuiStudyDriver implements StudyRunner.Driver
 {
@@ -76,7 +80,7 @@ final class GuiStudyDriver implements StudyRunner.Driver
 				false,
 				false,
 				Math.max(1, slot.repetition),
-				10,
+				design.getK(),
 				heapMb,
 				"",
 				"");
