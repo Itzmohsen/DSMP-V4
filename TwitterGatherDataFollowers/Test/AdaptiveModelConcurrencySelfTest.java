@@ -3,6 +3,7 @@ package TwitterGatherDataFollowers.userRyersonU;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -21,7 +22,211 @@ public final class AdaptiveModelConcurrencySelfTest
 		wideExactSvmPreparationReceivesARealReservation();
 		wideLegacyNeurophMlpReceivesARealReservation();
 		serializesOversizedReservations();
+		admitsACollectiveGroupPastTheParallelLimit();
+		admitsACollectiveGroupPastTheMemoryBudget();
+		keepsOtherStagesWaitingWhileAGroupRunsPastTheLimit();
+		admitsAGroupsFirstNodeByTheUsualRules();
 		System.out.println("AdaptiveModelConcurrencySelfTest passed");
+	}
+
+	/**
+	 * Four nodes of one run take their leases and then meet in a collective
+	 * step, as the exact SVM's corpus gather does. With room for two, nodes
+	 * left waiting would stall the admitted ones forever (the four-node study
+	 * that never opened its SVM phase).
+	 */
+	private static void admitsACollectiveGroupPastTheParallelLimit() throws Exception
+	{
+		RecommendationMemoryCoordinator.configureRequestedParallelism(2);
+		require(runsCollectiveGroup("run-a/exact-svm", 4,
+				96L * RecommendationMemoryCoordinator.MEBIBYTE),
+				"a run's nodes deadlocked at the parallel limit");
+		RecommendationMemoryCoordinator.configureRequestedParallelism(
+				Integer.MAX_VALUE);
+	}
+
+	/** The same at the model budget: three reservations of three quarters of it. */
+	private static void admitsACollectiveGroupPastTheMemoryBudget() throws Exception
+	{
+		long reservation =
+				RecommendationMemoryCoordinator.modelBudgetBytes() * 3L / 4L;
+		require(runsCollectiveGroup("run-b/kmeans", 3, reservation),
+				"a run's nodes deadlocked at the model budget");
+	}
+
+	/** A group past the limit does not open the gate for unrelated stages. */
+	private static void keepsOtherStagesWaitingWhileAGroupRunsPastTheLimit()
+			throws Exception
+	{
+		RecommendationMemoryCoordinator.configureRequestedParallelism(2);
+		long reservation = 96L * RecommendationMemoryCoordinator.MEBIBYTE;
+		CountDownLatch groupEntered = new CountDownLatch(3);
+		CountDownLatch releaseGroup = new CountDownLatch(1);
+		List<Thread> workers = new ArrayList<Thread>();
+		for (int index = 0; index < 3; index++)
+		{
+			workers.add(groupWorker("run-c/kmeans", "group-node-" + index,
+					reservation, groupEntered, releaseGroup));
+		}
+		for (Thread worker : workers)
+		{
+			worker.start();
+		}
+		require(groupEntered.await(10, TimeUnit.SECONDS),
+				"a run's nodes were not admitted together");
+		CountDownLatch otherEntered = new CountDownLatch(1);
+		Thread other = plainWorker("unrelated-stage", reservation,
+				otherEntered, new CountDownLatch(0));
+		other.start();
+		require(!otherEntered.await(150L, TimeUnit.MILLISECONDS),
+				"an unrelated stage was admitted past the parallel limit");
+		releaseGroup.countDown();
+		require(otherEntered.await(10, TimeUnit.SECONDS),
+				"an unrelated stage was not admitted once the group finished");
+		workers.add(other);
+		join(workers);
+		RecommendationMemoryCoordinator.configureRequestedParallelism(
+				Integer.MAX_VALUE);
+	}
+
+	/**
+	 * While no node of a group holds a lease, its first node waits like any
+	 * stage; once it is admitted, the rest of the group follows at once.
+	 */
+	private static void admitsAGroupsFirstNodeByTheUsualRules() throws Exception
+	{
+		RecommendationMemoryCoordinator.configureRequestedParallelism(1);
+		long reservation = 96L * RecommendationMemoryCoordinator.MEBIBYTE;
+		CountDownLatch blockerEntered = new CountDownLatch(1);
+		CountDownLatch releaseBlocker = new CountDownLatch(1);
+		Thread blocker = plainWorker("earlier-stage", reservation,
+				blockerEntered, releaseBlocker);
+		blocker.start();
+		require(blockerEntered.await(10, TimeUnit.SECONDS),
+				"the earlier stage was not admitted");
+		CountDownLatch groupEntered = new CountDownLatch(2);
+		CountDownLatch releaseGroup = new CountDownLatch(1);
+		List<Thread> workers = new ArrayList<Thread>();
+		for (int index = 0; index < 2; index++)
+		{
+			workers.add(groupWorker("run-d/exact-svm", "waiting-node-" + index,
+					reservation, groupEntered, releaseGroup));
+		}
+		for (Thread worker : workers)
+		{
+			worker.start();
+		}
+		require(!groupEntered.await(150L, TimeUnit.MILLISECONDS),
+				"a group's first node skipped the parallel limit");
+		releaseBlocker.countDown();
+		require(groupEntered.await(10, TimeUnit.SECONDS),
+				"the group was not admitted together once the gate opened");
+		releaseGroup.countDown();
+		workers.add(blocker);
+		join(workers);
+		RecommendationMemoryCoordinator.configureRequestedParallelism(
+				Integer.MAX_VALUE);
+	}
+
+	/**
+	 * Runs {@code nodes} threads that each take a lease of {@code group} and
+	 * then meet at a barrier while holding it; true if every node got through.
+	 */
+	private static boolean runsCollectiveGroup(
+			final String group,
+			int nodes,
+			final long reservation) throws Exception
+	{
+		final CyclicBarrier collective = new CyclicBarrier(nodes);
+		final AtomicInteger met = new AtomicInteger();
+		List<Thread> workers = new ArrayList<Thread>();
+		for (int index = 0; index < nodes; index++)
+		{
+			final int node = index + 1;
+			Thread thread = new Thread(new Runnable()
+			{
+				public void run()
+				{
+					try (RecommendationMemoryCoordinator.Lease ignored =
+							RecommendationMemoryCoordinator.acquireTogether(
+									group,
+									"collective-node-" + node,
+									"collective stage",
+									RecommendationMemoryCoordinator.Workload.SVM,
+									reservation))
+					{
+						collective.await(10L, TimeUnit.SECONDS);
+						met.incrementAndGet();
+					}
+					catch (Exception brokenOrTimedOut)
+					{
+						//A node never reached the collective step.
+					}
+				}
+			});
+			thread.setDaemon(true);
+			workers.add(thread);
+			thread.start();
+		}
+		for (Thread worker : workers)
+		{
+			worker.join(30000L);
+		}
+		return met.get() == nodes;
+	}
+
+	private static Thread groupWorker(
+			final String group,
+			final String owner,
+			final long reservation,
+			final CountDownLatch entered,
+			final CountDownLatch release)
+	{
+		Thread thread = new Thread(new Runnable()
+		{
+			public void run()
+			{
+				try (RecommendationMemoryCoordinator.Lease ignored =
+						RecommendationMemoryCoordinator.acquireTogether(
+								group,
+								owner,
+								"group stage",
+								RecommendationMemoryCoordinator.Workload.KMEANS,
+								reservation))
+				{
+					entered.countDown();
+					await(release);
+				}
+			}
+		});
+		thread.setDaemon(true);
+		return thread;
+	}
+
+	private static Thread plainWorker(
+			final String owner,
+			final long reservation,
+			final CountDownLatch entered,
+			final CountDownLatch release)
+	{
+		Thread thread = new Thread(new Runnable()
+		{
+			public void run()
+			{
+				try (RecommendationMemoryCoordinator.Lease ignored =
+						RecommendationMemoryCoordinator.acquire(
+								owner,
+								"plain stage",
+								RecommendationMemoryCoordinator.Workload.SVM,
+								reservation))
+				{
+					entered.countDown();
+					await(release);
+				}
+			}
+		});
+		thread.setDaemon(true);
+		return thread;
 	}
 
 	private static void allowsSafeParallelModelStages() throws Exception
