@@ -571,9 +571,9 @@ A study directory (`Results/Studies/<stamp>_<name>/`) contains:
 
 ## 11. Platform fixes
 
-Live runs exposed three defects below DSMP, in libraries it ships, plus one
-teardown defect in DSMP itself. Each is fixed with a small compatibility class
-in `TwitterGatherDataFollowers/compat/`. These classes are compiled before the
+Live runs exposed three defects below DSMP, in libraries it ships, and two in
+DSMP itself. Each library defect is fixed with a small compatibility class in
+`TwitterGatherDataFollowers/compat/`. These classes are compiled before the
 jars on the class path and shadow the originals. Each class documents the
 defect and keeps everything else as in the original.
 
@@ -583,10 +583,13 @@ defect and keeps everything else as in the original.
 | JADE `LADT` (local agent table) | `put` and `remove` changed an unsynchronized hash map outside the lock under which `acquire` and `release` read it | A row lock leaked during agent creation under traffic; later deliveries to that agent blocked (initialization stalls) and killing it hung | Every map access holds the map's lock; the lock order is unchanged |
 | JADE `TimerDispatcher` | Timers are kept in a set ordered by expiry millisecond alone, and `remove(t)` deleted whichever timer held t's millisecond, even after t had fired | When a fired timer was removed late, another agent's new timer for the freed millisecond was deleted instead; that agent's ticker never woke and the run never finished (MLP with tweet delays off: 1–2 of 218 user agents froze in 8 of 8 harness runs) | `remove` deletes a timer only if that very timer is pending; with the fix the same configuration passed 3 of 3 harness runs (27 of 27 runs identical) |
 | Controller teardown (DSMP) | Re-created agents and containers could collide with late death notices of the previous run's agents | Occasional hangs between runs | A uniquely named work container per initialization; the controller waits until the platform has forgotten the old agents; container kills have a watchdog |
+| Model memory gate (DSMP, `RecommendationMemoryCoordinator`) | Each node's Exact SVM or K-Means stage was admitted on its own, up to the model budget (65% of the heap) or the parallel limit (the host's cores). The admitted nodes then waited in a collective step for a node still waiting at the gate, holding the leases it needed | The run stalled before its work phase opened ("No unit phase yet") whenever a run's nodes did not all fit: Exact SVM on `Retail.txt` with four nodes at the default 1,424 MB heap, or any run with more nodes than cores | A run's nodes are admitted to these stages together: once one node holds its lease, the others follow, past the budget or the limit if need be, and the console names the limit passed. The same four-node study completes with identical recommendations |
 
 `JadeTimerDispatcherSelfTest` reproduces the timer race deterministically
 through JADE's public timer API. It fails against `jade.jar` and passes with
-the fix.
+the fix. `AdaptiveModelConcurrencySelfTest` holds a run's nodes at a barrier
+while they hold their leases, past the parallel limit and past the model
+budget; it fails if the nodes are admitted one by one.
 
 ## 12. Limitations
 
@@ -614,4 +617,9 @@ the fix.
   480 by default). Per-user agents deliver to their planned node.
 - **Memory.** Memory admission applies to units that declare memory. The
   heavy model memory lives in worker processes, which the worker memory
-  coordinator admits against the machine.
+  coordinator admits against the machine. Exact SVM's feature preparation and
+  K-Means keep their state in the simulator's own JVM, and every node of a
+  run holds it at once. When the nodes' reservations together exceed the
+  model budget, the console says so (`admitted with the rest of its run past
+  the ... model budget`). Raise the heap (Run › Memory) if such a run then
+  runs short of memory.

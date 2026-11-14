@@ -1811,8 +1811,12 @@ public class RecommenderAgent extends Agent
 
 				if (algorithmRec == SVM && exactSvmDiskBackedWaves)
 				{
+					//Every node of the run keeps this lease until its model stage ends and
+					//meets the other nodes in collective steps (the corpus gather), so the
+					//nodes are admitted together: a node left waiting would stall them all.
 					activeSvmLease =
-							RecommendationMemoryCoordinator.acquire(
+							RecommendationMemoryCoordinator.acquireTogether(
+									runLifecycle.getActiveRunId() + "/exact-svm",
 									getLocalName(),
 									"Exact SVM disk-backed corpus wave and model execution",
 									RecommendationMemoryCoordinator.Workload.SVM,
@@ -1825,8 +1829,10 @@ public class RecommenderAgent extends Agent
 				{
 					//The exact SVM's targets share one corpus-wide feature space.
 					boolean targetSpecificPreparation = false;
+					//Admitted together with the run's other nodes, as above.
 					activeSvmLease =
-							RecommendationMemoryCoordinator.acquire(
+							RecommendationMemoryCoordinator.acquireTogether(
+									runLifecycle.getActiveRunId() + "/exact-svm",
 									getLocalName(),
 									"Exact SVM feature preparation and isolated Weka worker",
 									RecommendationMemoryCoordinator.Workload.SVM,
@@ -1849,8 +1855,10 @@ public class RecommenderAgent extends Agent
 				{
 					if (activeKMeansLease == null)
 					{
+						//The nodes meet in K-Means' collective rounds: admitted together.
 						activeKMeansLease =
-								RecommendationMemoryCoordinator.acquire(
+								RecommendationMemoryCoordinator.acquireTogether(
+										runLifecycle.getActiveRunId() + "/kmeans",
 										getLocalName(),
 										algorithmRec == K_MEANS
 												? "K-Means features and clustering"

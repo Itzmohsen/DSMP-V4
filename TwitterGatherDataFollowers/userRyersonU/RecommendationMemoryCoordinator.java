@@ -2,12 +2,16 @@ package TwitterGatherDataFollowers.userRyersonU;
 
 import java.io.File;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Admits independent model stages in parallel while reserving shared JVM heap.
+ *
+ * Stages that every node of a run executes together, because they meet in
+ * collective steps, are admitted as a group: see {@link #acquireTogether}.
  */
 final class RecommendationMemoryCoordinator
 {
@@ -44,6 +48,9 @@ final class RecommendationMemoryCoordinator
 	private static final Condition CAPACITY_CHANGED = LOCK.newCondition();
 	private static final Map<Workload,Integer> ACTIVE_BY_WORKLOAD =
 			new EnumMap<Workload,Integer>(Workload.class);
+	/** Active leases per group of {@link #acquireTogether}. */
+	private static final Map<String,Integer> ACTIVE_BY_GROUP =
+			new HashMap<String,Integer>();
 
 	private static long reservedBytes;
 	private static int activeLeases;
@@ -79,9 +86,50 @@ final class RecommendationMemoryCoordinator
 			Workload workload,
 			long estimatedBytes)
 	{
+		return acquire(null, owner, stage, workload, estimatedBytes);
+	}
+
+	/**
+	 * Admits one node's part of a stage that every node of a run executes
+	 * together. Such a stage meets in collective steps (the exact SVM's corpus
+	 * gather, K-Means' rounds), and each node keeps its lease until its stage
+	 * ends. A node that waited for a lease would therefore wait forever: the
+	 * nodes already admitted cannot finish without it. So the first node of
+	 * the group is admitted by the usual rules, and once any node of the group
+	 * holds a lease the others are admitted at once, past the model budget or
+	 * the parallel limit if need be (the log says so).
+	 *
+	 * @param group the same text on every node of one run's stage, for
+	 *              example the run id and the stage
+	 */
+	static Lease acquireTogether(
+			String group,
+			String owner,
+			String stage,
+			Workload workload,
+			long estimatedBytes)
+	{
+		if (group == null)
+		{
+			throw new IllegalArgumentException("A group lease needs a group.");
+		}
+		return acquire(group, owner, stage, workload, estimatedBytes);
+	}
+
+	private static Lease acquire(
+			String group,
+			String owner,
+			String stage,
+			Workload workload,
+			long estimatedBytes)
+	{
 		long reservation = normalizeReservation(estimatedBytes);
 		long waitStart = System.nanoTime();
 		boolean interrupted = false;
+		boolean pastLimits = false;
+		String note = "";
+		long active;
+		long reserved;
 
 		LOCK.lock();
 		try
@@ -89,6 +137,11 @@ final class RecommendationMemoryCoordinator
 			boolean waitingRegistered = false;
 			while (!canAdmit(workload, reservation))
 			{
+				if (group != null && ACTIVE_BY_GROUP.containsKey(group))
+				{
+					pastLimits = true;
+					break;
+				}
 				if (!waitingRegistered)
 				{
 					waitingLeases++;
@@ -115,6 +168,20 @@ final class RecommendationMemoryCoordinator
 			ACTIVE_BY_WORKLOAD.put(
 					workload,
 					Integer.valueOf(ACTIVE_BY_WORKLOAD.get(workload).intValue() + 1));
+			if (group != null)
+			{
+				Integer groupLeases = ACTIVE_BY_GROUP.get(group);
+				ACTIVE_BY_GROUP.put(group, Integer.valueOf(
+						groupLeases == null ? 1 : groupLeases.intValue() + 1));
+				//The group's other nodes may be waiting: they are admitted now.
+				CAPACITY_CHANGED.signalAll();
+			}
+			active = activeLeases;
+			reserved = reservedBytes;
+			if (pastLimits)
+			{
+				note = pastLimitsNoteLocked();
+			}
 			NodeExecutionMonitor.memoryStageActive(
 					owner, stage, toMegabytes(reservation));
 			publishStatusLocked();
@@ -134,10 +201,40 @@ final class RecommendationMemoryCoordinator
 				owner+" entered memory-intensive stage: "+stage
 				+" workload="+workload
 				+" reservation="+toMegabytes(reservation)+" MB"
-				+" active="+activeLeaseCount()
-				+" reserved="+toMegabytes(reservedByteCount())+" MB"
-				+" waited="+waitedMs+" ms");
-		return new Lease(owner, stage, workload, reservation);
+				+" active="+active
+				+" reserved="+toMegabytes(reserved)+" MB"
+				+" waited="+waitedMs+" ms"
+				+note);
+		return new Lease(group, owner, stage, workload, reservation);
+	}
+
+	/**
+	 * Why a group lease was admitted past the gate, after it was counted:
+	 * names each limit it passed.
+	 */
+	private static String pastLimitsNoteLocked()
+	{
+		StringBuilder limits = new StringBuilder();
+		boolean memory = false;
+		if (reservedBytes > MODEL_BUDGET_BYTES)
+		{
+			limits.append("the ").append(toMegabytes(MODEL_BUDGET_BYTES))
+					.append(" MB model budget");
+			memory = true;
+		}
+		if (activeLeases > effectiveParallelLimit())
+		{
+			limits.append(limits.length() == 0 ? "" : " and ")
+					.append("the parallel limit of ").append(effectiveParallelLimit());
+		}
+		if (limits.length() == 0)
+		{
+			limits.append("the free-heap margin");
+			memory = true;
+		}
+		return " (admitted with the rest of its run past " + limits
+				+ ": the nodes meet in collective steps, so none can finish without the others"
+				+ (memory ? "; raise the heap if the run runs short of memory)" : ")");
 	}
 
 	static long estimateSvmBytes(
@@ -620,6 +717,7 @@ final class RecommendationMemoryCoordinator
 
 	static final class Lease implements AutoCloseable
 	{
+		private final String group;
 		private final String owner;
 		private final String stage;
 		private final Workload workload;
@@ -627,11 +725,13 @@ final class RecommendationMemoryCoordinator
 		private boolean closed;
 
 		private Lease(
+				String group,
 				String owner,
 				String stage,
 				Workload workload,
 				long reservation)
 		{
+			this.group = group;
 			this.owner = owner;
 			this.stage = stage;
 			this.workload = workload;
@@ -654,6 +754,18 @@ final class RecommendationMemoryCoordinator
 						workload,
 						Integer.valueOf(
 								ACTIVE_BY_WORKLOAD.get(workload).intValue() - 1));
+				if (group != null)
+				{
+					int groupLeases = ACTIVE_BY_GROUP.get(group).intValue() - 1;
+					if (groupLeases <= 0)
+					{
+						ACTIVE_BY_GROUP.remove(group);
+					}
+					else
+					{
+						ACTIVE_BY_GROUP.put(group, Integer.valueOf(groupLeases));
+					}
+				}
 				CAPACITY_CHANGED.signalAll();
 				publishStatusLocked();
 			}
