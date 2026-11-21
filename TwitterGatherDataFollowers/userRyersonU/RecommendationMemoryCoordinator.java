@@ -400,6 +400,63 @@ final class RecommendationMemoryCoordinator
 		return clampAndAlign(estimate, 96L * MEBIBYTE, 384L * MEBIBYTE);
 	}
 
+	/**
+	 * One node's share of a federated MLP stage ({@link FederatedMlpStage}).
+	 * Three things exist once for the whole run and are divided among the
+	 * nodes: the sparse rows of the plan; every fold's global, best and next
+	 * model; and the round's updates, which wait on their nodes until the
+	 * aggregation. A fold's updates hold at most one model per client, and no
+	 * more first-layer values than the corpus has feature values times the
+	 * hidden neurons. Each lane adds the client it is training: its private
+	 * first-layer rows and its update, at most one model each.
+	 */
+	static long estimateFederatedMlpNodeBytes(
+			int featureCount,
+			int hiddenNeuronCount,
+			int hiddenLayerCount,
+			int outputCount,
+			long nonZeroFeatureCount,
+			int sparseRowCount,
+			int foldCount,
+			int clientCount,
+			int laneCount,
+			int nodeCount)
+	{
+		int hiddenLayers = Math.max(1, hiddenLayerCount);
+		long inputWeights = saturatingMultiply(
+				Math.max(1, featureCount), Math.max(1, hiddenNeuronCount));
+		long hiddenWeights = saturatingMultiply(
+				Math.max(0, hiddenLayers - 1),
+				saturatingMultiply(
+						Math.max(1, hiddenNeuronCount),
+						Math.max(1, hiddenNeuronCount)));
+		long outputWeights = saturatingMultiply(
+				Math.max(1, hiddenNeuronCount), Math.max(1, outputCount));
+		long model = saturatingMultiply(
+				saturatingAdd(saturatingAdd(inputWeights, hiddenWeights), outputWeights),
+				8L);
+		long rows = saturatingAdd(
+				saturatingMultiply(Math.max(1L, nonZeroFeatureCount), 12L),
+				saturatingMultiply(Math.max(1, sparseRowCount), 64L));
+		long firstLayerUpdates = Math.min(
+				saturatingMultiply(Math.max(1, clientCount), saturatingMultiply(inputWeights, 8L)),
+				saturatingMultiply(
+						saturatingMultiply(Math.max(1L, nonZeroFeatureCount), Math.max(1, hiddenNeuronCount)),
+						8L));
+		long upperLayerUpdates = saturatingMultiply(
+				Math.max(1, clientCount),
+				saturatingMultiply(saturatingAdd(hiddenWeights, outputWeights), 8L));
+		long perFold = saturatingAdd(
+				saturatingMultiply(3L, model),
+				saturatingAdd(firstLayerUpdates, upperLayerUpdates));
+		long shared = saturatingAdd(rows, saturatingMultiply(Math.max(1, foldCount), perFold));
+		long estimate = 16L * MEBIBYTE;
+		estimate = saturatingAdd(estimate, shared / Math.max(1, nodeCount));
+		estimate = saturatingAdd(estimate,
+				saturatingMultiply(saturatingMultiply(Math.max(1, laneCount), 2L), model));
+		return clampAndAlign(estimate, 32L * MEBIBYTE, 512L * MEBIBYTE);
+	}
+
 	static long estimateMlpModelBytes(File modelFile, int multiplier)
 	{
 		long fileBytes = modelFile != null && modelFile.isFile()

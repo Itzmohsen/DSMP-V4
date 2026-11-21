@@ -159,7 +159,8 @@ final class SimulatorModelPage extends SimulatorPanel.Page
 			case RecommendationModeSupport.SCALABLE_SVM:
 				return "A linear model learned online with Passive-Aggressive (PA-I) hinge-loss updates.";
 			case RecommendationModeSupport.MLP:
-				return "A softmax network trained with cross-entropy and early stopping (or the V3 Neuroph net).";
+				return "A softmax network trained with cross-entropy and early stopping, as one model or by"
+						+ " federated averaging (or the V3 Neuroph net).";
 			default:
 				return "";
 		}

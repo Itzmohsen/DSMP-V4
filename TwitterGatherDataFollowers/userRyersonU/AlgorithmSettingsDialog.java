@@ -55,6 +55,10 @@ final class AlgorithmSettingsDialog extends JDialog
 			"Neuroph MLP (V3, sigmoid outputs)";
 	private static final String MLP_ENGINE_SPARSE_LABEL =
 			"Softmax MLP (cross-entropy, early stopping)";
+	private static final String MLP_TRAINING_CENTRAL_LABEL = "Central";
+	private static final String MLP_TRAINING_FEDERATED_LABEL = "Federated averaging";
+	private static final String MLP_PARTITION_IID_LABEL = "IID";
+	private static final String MLP_PARTITION_DIRICHLET_LABEL = "Label-skewed";
 	private static final String[] CN_VARIANTS = {
 			AlgorithmParameterSettings.CN_COMMON_NEIGHBOURS,
 			AlgorithmParameterSettings.CN_JACCARD,
@@ -88,6 +92,17 @@ final class AlgorithmSettingsDialog extends JDialog
 	private JSpinner mlpSparseEpochsSpinner;
 	private JSpinner mlpSparseL2Spinner;
 	private JSpinner mlpFedProxMuSpinner;
+	private JComboBox<String> mlpTrainingCombo;
+	private JSpinner mlpFederatedClientsSpinner;
+	private JSpinner mlpFederatedRoundsSpinner;
+	private JSpinner mlpFederatedLocalEpochsSpinner;
+	private JSpinner mlpFederatedFractionSpinner;
+	private JComboBox<String> mlpFederatedPartitionCombo;
+	private JSpinner mlpFederatedAlphaSpinner;
+	private JSpinner mlpFederatedPatienceSpinner;
+	private JSpinner mlpFederatedSeedSpinner;
+	/** Controls that only matter when the MLP trains by federated averaging. */
+	private final List<JComponent> mlpFederatedControls = new java.util.ArrayList<JComponent>();
 	private JSpinner doc2VecDmSpinner;
 	private JSpinner doc2VecDbowWordsSpinner;
 	private JSpinner doc2VecMinCountSpinner;
@@ -396,10 +411,88 @@ final class AlgorithmSettingsDialog extends JDialog
 								+ " loss has not improved for " + AlgorithmParameterSettings.MLP_EARLY_STOPPING_PATIENCE
 								+ " epochs, and keeps the best epoch's weights.",
 						mlpSparseEpochsSpinner);
-				addRow(grid, row,
+				row = addRow(grid, row,
 						"L2 (Softmax)",
 						"Weight decay of the softmax engine; 0 disables it.",
 						mlpSparseL2Spinner);
+				mlpTrainingCombo = new JComboBox<String>(new String[] {
+						MLP_TRAINING_CENTRAL_LABEL,
+						MLP_TRAINING_FEDERATED_LABEL
+				});
+				styleCombo(mlpTrainingCombo);
+				mlpTrainingCombo.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent event)
+					{
+						refreshState();
+					}
+				});
+				mlpFederatedClientsSpinner = intSpinner(1, 256, 1);
+				mlpFederatedRoundsSpinner = intSpinner(1, 1000, 1);
+				mlpFederatedLocalEpochsSpinner = intSpinner(1, 100, 1);
+				mlpFederatedFractionSpinner = doubleSpinner(0.01, 1.0, 0.05);
+				mlpFederatedPartitionCombo = new JComboBox<String>(new String[] {
+						MLP_PARTITION_IID_LABEL,
+						MLP_PARTITION_DIRICHLET_LABEL
+				});
+				styleCombo(mlpFederatedPartitionCombo);
+				mlpFederatedAlphaSpinner = doubleSpinner(0.01, 1000.0, 0.1);
+				mlpFederatedPatienceSpinner = intSpinner(0, 1000, 1);
+				mlpFederatedSeedSpinner = longSpinner(0L, Long.MAX_VALUE, 1L);
+				row = addRow(grid, row,
+						"Training",
+						"Central: one model, one unit. Federated: client units in rounds (FedAvg).",
+						mlpTrainingCombo);
+				row = addRow(grid, row,
+						"Clients (federated)",
+						"Clients per fold; a round schedules one unit per training client. Default is "
+								+ AlgorithmParameterSettings.DEFAULT_MLP_FEDERATED_CLIENTS + ".",
+						mlpFederatedClientsSpinner);
+				row = addRow(grid, row,
+						"Rounds (federated)",
+						"Most rounds per fold. Default is "
+								+ AlgorithmParameterSettings.DEFAULT_MLP_FEDERATED_ROUNDS + ".",
+						mlpFederatedRoundsSpinner);
+				row = addRow(grid, row,
+						"Local epochs (federated)",
+						"Passes over a client's users in each round. Default is "
+								+ AlgorithmParameterSettings.DEFAULT_MLP_FEDERATED_LOCAL_EPOCHS + ".",
+						mlpFederatedLocalEpochsSpinner);
+				row = addRow(grid, row,
+						"Clients per round",
+						"Share of the clients that train in a round, drawn by the seed. 1 is all of them.",
+						mlpFederatedFractionSpinner);
+				row = addRow(grid, row,
+						"Client data",
+						"IID shares every class evenly. Label-skewed gives each client a few classes.",
+						mlpFederatedPartitionCombo);
+				row = addRow(grid, row,
+						"Dirichlet alpha",
+						"Skew of label-skewed clients: smaller is more skewed. Default is "
+								+ AlgorithmParameterSettings.formatDouble(
+										AlgorithmParameterSettings.DEFAULT_MLP_FEDERATED_DIRICHLET_ALPHA) + ".",
+						mlpFederatedAlphaSpinner);
+				row = addRow(grid, row,
+						"Proximal term mu",
+						"FedProx: keeps each client near the global model. 0 is plain FedAvg.",
+						mlpFedProxMuSpinner);
+				row = addRow(grid, row,
+						"Patience (rounds)",
+						"Rounds without a better validation loss before a fold stops. 0 runs every round.",
+						mlpFederatedPatienceSpinner);
+				addRow(grid, row,
+						"Federation seed",
+						"Decides the clients, the sampling and the order of local training. Default is "
+								+ AlgorithmParameterSettings.DEFAULT_MLP_FEDERATED_SEED + ".",
+						mlpFederatedSeedSpinner);
+				mlpFederatedControls.add(mlpFederatedClientsSpinner);
+				mlpFederatedControls.add(mlpFederatedRoundsSpinner);
+				mlpFederatedControls.add(mlpFederatedLocalEpochsSpinner);
+				mlpFederatedControls.add(mlpFederatedFractionSpinner);
+				mlpFederatedControls.add(mlpFederatedPartitionCombo);
+				mlpFederatedControls.add(mlpFederatedAlphaSpinner);
+				mlpFederatedControls.add(mlpFedProxMuSpinner);
+				mlpFederatedControls.add(mlpFederatedPatienceSpinner);
+				mlpFederatedControls.add(mlpFederatedSeedSpinner);
 				break;
 			case RecommendationModeSupport.DOC2VEC:
 				doc2VecDmSpinner = intSpinner(0, 1, 1);
@@ -603,6 +696,15 @@ final class AlgorithmSettingsDialog extends JDialog
 		return spinner;
 	}
 
+	/** A spinner over whole numbers beyond the int range, so any seed a run was given survives the dialog. */
+	private JSpinner longSpinner(long minimum, long maximum, long step)
+	{
+		JSpinner spinner = new JSpinner(new SpinnerNumberModel(
+				Long.valueOf(minimum), Long.valueOf(minimum), Long.valueOf(maximum), Long.valueOf(step)));
+		styleSpinner(spinner);
+		return spinner;
+	}
+
 	private JSpinner doubleSpinner(double minimum, double maximum, double step)
 	{
 		JSpinner spinner = new JSpinner(
@@ -707,6 +809,19 @@ final class AlgorithmSettingsDialog extends JDialog
 			mlpSparseEpochsSpinner.setValue(settings.getMlpSparseEpochs());
 			mlpSparseL2Spinner.setValue(settings.getMlpSparseL2());
 			mlpFedProxMuSpinner.setValue(settings.getMlpFedProxMu());
+			mlpTrainingCombo.setSelectedItem(settings.isFederatedMlpTrainingEnabled()
+					? MLP_TRAINING_FEDERATED_LABEL : MLP_TRAINING_CENTRAL_LABEL);
+			mlpFederatedClientsSpinner.setValue(settings.getMlpFederatedClients());
+			mlpFederatedRoundsSpinner.setValue(settings.getMlpFederatedRounds());
+			mlpFederatedLocalEpochsSpinner.setValue(settings.getMlpFederatedLocalEpochs());
+			mlpFederatedFractionSpinner.setValue(settings.getMlpFederatedClientFraction());
+			mlpFederatedPartitionCombo.setSelectedItem(
+					AlgorithmParameterSettings.MLP_FEDERATED_PARTITION_DIRICHLET.equals(
+							settings.getMlpFederatedPartition())
+							? MLP_PARTITION_DIRICHLET_LABEL : MLP_PARTITION_IID_LABEL);
+			mlpFederatedAlphaSpinner.setValue(settings.getMlpFederatedDirichletAlpha());
+			mlpFederatedPatienceSpinner.setValue(settings.getMlpFederatedPatience());
+			mlpFederatedSeedSpinner.setValue(Long.valueOf(Math.max(0L, settings.getMlpFederatedSeed())));
 		}
 		if (doc2VecDmSpinner != null)
 		{
@@ -734,6 +849,16 @@ final class AlgorithmSettingsDialog extends JDialog
 				? draft.summaryForAlgorithm(algorithm)
 				: "Using the exact parameters currently built into the program.");
 		setChildrenEnabled(parameterGrid, custom);
+		if (mlpTrainingCombo != null)
+		{
+			//The federation's controls follow the training they belong to.
+			boolean federated = custom
+					&& MLP_TRAINING_FEDERATED_LABEL.equals(mlpTrainingCombo.getSelectedItem());
+			for (JComponent control : mlpFederatedControls)
+			{
+				setChildrenEnabled(control, federated);
+			}
+		}
 		if (parameterGrid != null)
 		{
 			parameterGrid.setDimmed(!custom);
@@ -830,6 +955,21 @@ final class AlgorithmSettingsDialog extends JDialog
 			settings.setMlpSparseEpochs(intValue(mlpSparseEpochsSpinner));
 			settings.setMlpSparseL2(doubleValue(mlpSparseL2Spinner));
 			settings.setMlpFedProxMu(doubleValue(mlpFedProxMuSpinner));
+			settings.setMlpTraining(MLP_TRAINING_FEDERATED_LABEL.equals(
+					mlpTrainingCombo.getSelectedItem())
+					? AlgorithmParameterSettings.MLP_TRAINING_FEDERATED
+					: AlgorithmParameterSettings.MLP_TRAINING_CENTRAL);
+			settings.setMlpFederatedClients(intValue(mlpFederatedClientsSpinner));
+			settings.setMlpFederatedRounds(intValue(mlpFederatedRoundsSpinner));
+			settings.setMlpFederatedLocalEpochs(intValue(mlpFederatedLocalEpochsSpinner));
+			settings.setMlpFederatedClientFraction(doubleValue(mlpFederatedFractionSpinner));
+			settings.setMlpFederatedPartition(MLP_PARTITION_DIRICHLET_LABEL.equals(
+					mlpFederatedPartitionCombo.getSelectedItem())
+					? AlgorithmParameterSettings.MLP_FEDERATED_PARTITION_DIRICHLET
+					: AlgorithmParameterSettings.MLP_FEDERATED_PARTITION_IID);
+			settings.setMlpFederatedDirichletAlpha(doubleValue(mlpFederatedAlphaSpinner));
+			settings.setMlpFederatedPatience(intValue(mlpFederatedPatienceSpinner));
+			settings.setMlpFederatedSeed(longValue(mlpFederatedSeedSpinner));
 		}
 		if (doc2VecDmSpinner != null)
 		{
@@ -848,6 +988,11 @@ final class AlgorithmSettingsDialog extends JDialog
 	private int intValue(JSpinner spinner)
 	{
 		return ((Number)spinner.getValue()).intValue();
+	}
+
+	private long longValue(JSpinner spinner)
+	{
+		return ((Number)spinner.getValue()).longValue();
 	}
 
 	private double doubleValue(JSpinner spinner)

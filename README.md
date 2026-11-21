@@ -331,6 +331,28 @@ recommendation experiment as a guided flow:
   MostPop baselines, paired tests, the top-1 view with a confusion matrix,
   and every target's numbers.
 
+## Federated MLP
+
+The MLP normally trains one central model in a single work unit. It can
+instead train by federated averaging (FedAvg): the training users are dealt
+to fixed clients, each round schedules one work unit per client on the
+cluster, and the coordinator averages the clients' updates into the next
+global model. The clients are decided by the data and a seed, never by the
+nodes, so the recommendations stay identical bit for bit on every cluster,
+policy and fault pattern, as for every other algorithm.
+
+Federated training is off by default. To use it, open **Simulator › 2 Model ›
+Edit parameters** with MLP selected, switch on the custom profile and set
+**Training** to **Federated averaging**. The rows below it set the clients,
+rounds, local epochs, the share of clients per round, IID or label-skewed
+client data, the FedProx term, the patience and the seed. A run records the
+federation's settings in its manifest and its rounds in
+`federated-mlp/report.json` and `federated-mlp/rounds.csv`.
+
+See `DSMP_V4_FEDERATED_MLP.md` for the algorithm, the exactness argument, the
+settings (including how a study without the window selects it), the
+validation and the limitations.
+
 ## Recommendation Quality
 
 Every run is evaluated against the followee each user already has in the

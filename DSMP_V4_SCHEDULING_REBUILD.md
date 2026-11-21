@@ -101,7 +101,8 @@ idle nodes steal (Work stealing).
 candidate shards (1 + non-zero terms) x targets x 5e-5 ms; SVM target models
 400 ms (worker start) + 1e-3 ms x corpus non-zeros x classes; MLP training the
 worst case of the epoch limit at 8e-6 ms per weight update (measured on the
-legacy engine); Doc2Vec shards and temporal-graph targets are equal-sized
+legacy engine); a federated MLP client by its users, their features and the
+network's size; Doc2Vec shards and temporal-graph targets are equal-sized
 units. Estimates only steer placement; they never affect results.
 
 **Input delivery.** How input reaches the nodes (per-user agents, or the
@@ -175,6 +176,7 @@ run.
 | Temporal Graph Foundation | The model (features from the run corpus, the three graphs, the cross-fitted learners and their stack) is fitted once from the whole run by one node and shared through the collective; each target is a unit scored and explained against every candidate and account; its rows are published by the committing node. |
 | Exact SVM (every mode) | One Weka SMO model per target (a unit), trained on the stratified split of every other labelled user of the whole run, corpus-wide vocabulary as attributes and every followee as a class. |
 | MLP (legacy and sparse) | One training unit on the controller's central split of the whole run, every target held out; the committing node scores every target and publishes once. |
+| MLP, federated averaging (optional) | The fitting users of the same split are dealt to fixed clients by the data and a seed, never by the nodes. Each round is a phase with one unit per client; the coordinator averages the committed updates in client order and validates the result; a final unit scores every target. See `DSMP_V4_FEDERATED_MLP.md`. |
 | Scalable SVM | One shared model for the whole run (its coordinator, unchanged). |
 
 ### Decisions that change outputs relative to V3/earlier V4
@@ -189,7 +191,9 @@ These are deliberate corrections, not side effects:
    model. Reported classifier accuracies are therefore honest held-out values.
 2. **One model, not an average.** The MLP no longer averages per-node models
    (FedAvg), whose result depended on the partition; the population sweep's SVM
-   is leave-target-out as well.
+   is leave-target-out as well. Federated averaging has since returned as an
+   optional training whose clients are fixed by the data, so its result does
+   not depend on the partition either (`DSMP_V4_FEDERATED_MLP.md`).
 3. **Reproducible legacy MLP.** Neuroph drew initial weights from an unseeded
    generator, so two runs never trained the same network; weights now come from
    a fixed seed, and an epoch limit ends training when the maximum error cannot

@@ -33,6 +33,11 @@ final class AlgorithmParameterSettings implements Serializable
 	static final int DEFAULT_SCALABLE_SVM_EPOCHS = 10;
 	static final double DEFAULT_SCALABLE_SVM_AGGRESSIVENESS = 0.1;
 	static final String MLP_ENGINE_LEGACY_NEUROPH = "legacy-neuroph";
+	/**
+	 * The softmax engine. Its identifier predates the softmax engine's current
+	 * design and is kept because stored settings and scripts use it; it does not
+	 * mean federated training, which is {@link #MLP_TRAINING_FEDERATED}.
+	 */
 	static final String MLP_ENGINE_SPARSE_FEDERATED = "sparse-federated";
 	/** The softmax MLP (cross-entropy, early stopping) is the default; Neuroph is kept for V3 comparisons. */
 	static final String DEFAULT_MLP_ENGINE = MLP_ENGINE_SPARSE_FEDERATED;
@@ -46,6 +51,24 @@ final class AlgorithmParameterSettings implements Serializable
 	static final int MLP_EARLY_STOPPING_PATIENCE = 15;
 	static final double DEFAULT_MLP_SPARSE_L2 = 0.0001;
 	static final double DEFAULT_MLP_FEDPROX_MU = 0.0;
+	/** One model trained in one unit on the whole run (the default). */
+	static final String MLP_TRAINING_CENTRAL = "central";
+	/** Federated averaging: rounds of client units and a server aggregation ({@link FederatedMlp}). */
+	static final String MLP_TRAINING_FEDERATED = "federated";
+	static final String DEFAULT_MLP_TRAINING = MLP_TRAINING_CENTRAL;
+	/** Clients share every class evenly. */
+	static final String MLP_FEDERATED_PARTITION_IID = "iid";
+	/** Clients get each class in Dirichlet proportions (label skew). */
+	static final String MLP_FEDERATED_PARTITION_DIRICHLET = "dirichlet";
+	static final String DEFAULT_MLP_FEDERATED_PARTITION = MLP_FEDERATED_PARTITION_IID;
+	static final int DEFAULT_MLP_FEDERATED_CLIENTS = 8;
+	static final int DEFAULT_MLP_FEDERATED_ROUNDS = 40;
+	static final int DEFAULT_MLP_FEDERATED_LOCAL_EPOCHS = 5;
+	static final double DEFAULT_MLP_FEDERATED_CLIENT_FRACTION = 1.0;
+	static final double DEFAULT_MLP_FEDERATED_DIRICHLET_ALPHA = 0.5;
+	/** Rounds without a better validation cross-entropy before a federated fold stops; 0 runs every round. */
+	static final int DEFAULT_MLP_FEDERATED_PATIENCE = 5;
+	static final long DEFAULT_MLP_FEDERATED_SEED = 1L;
 	static final int DEFAULT_DOC2VEC_DM = 0;
 	static final int DEFAULT_DOC2VEC_DBOW_WORDS = 1;
 	static final int DEFAULT_DOC2VEC_MIN_COUNT = 4;
@@ -75,6 +98,15 @@ final class AlgorithmParameterSettings implements Serializable
 	private int mlpSparseEpochs;
 	private double mlpSparseL2;
 	private double mlpFedProxMu;
+	private String mlpTraining;
+	private int mlpFederatedClients;
+	private int mlpFederatedRounds;
+	private int mlpFederatedLocalEpochs;
+	private double mlpFederatedClientFraction;
+	private String mlpFederatedPartition;
+	private double mlpFederatedDirichletAlpha;
+	private int mlpFederatedPatience;
+	private long mlpFederatedSeed;
 	private int doc2VecDm;
 	private int doc2VecDbowWords;
 	private int doc2VecMinCount;
@@ -103,6 +135,20 @@ final class AlgorithmParameterSettings implements Serializable
 			return defaults();
 		}
 		return settings.copy();
+	}
+
+	/**
+	 * The settings a session starts with and returns to on Reset: the default
+	 * profile, unless the launcher passed custom settings as system properties
+	 * (-Ddsmp.algorithm.custom=true and the dsmp.* values to change). Headless
+	 * studies and test harnesses have no settings dialog; this is how they
+	 * choose, for example, federated MLP training. An ordinary launch sets none
+	 * of these properties and starts with the defaults.
+	 */
+	static AlgorithmParameterSettings startupSettings()
+	{
+		AlgorithmParameterSettings settings = fromSystemProperties();
+		return settings.isCustomEnabled() ? settings : defaults();
 	}
 
 	static AlgorithmParameterSettings fromSystemProperties()
@@ -149,6 +195,25 @@ final class AlgorithmParameterSettings implements Serializable
 				"dsmp.mlp.sparseL2", DEFAULT_MLP_SPARSE_L2);
 		settings.mlpFedProxMu = doubleProperty(
 				"dsmp.mlp.fedProxMu", DEFAULT_MLP_FEDPROX_MU);
+		String training = System.getProperty("dsmp.mlp.training");
+		settings.mlpTraining = isValidMlpTraining(training) ? training.trim() : DEFAULT_MLP_TRAINING;
+		settings.mlpFederatedClients = intProperty(
+				"dsmp.mlp.federated.clients", DEFAULT_MLP_FEDERATED_CLIENTS);
+		settings.mlpFederatedRounds = intProperty(
+				"dsmp.mlp.federated.rounds", DEFAULT_MLP_FEDERATED_ROUNDS);
+		settings.mlpFederatedLocalEpochs = intProperty(
+				"dsmp.mlp.federated.localEpochs", DEFAULT_MLP_FEDERATED_LOCAL_EPOCHS);
+		settings.mlpFederatedClientFraction = doubleProperty(
+				"dsmp.mlp.federated.clientFraction", DEFAULT_MLP_FEDERATED_CLIENT_FRACTION);
+		String partition = System.getProperty("dsmp.mlp.federated.partition");
+		settings.mlpFederatedPartition = isValidMlpFederatedPartition(partition)
+				? partition.trim() : DEFAULT_MLP_FEDERATED_PARTITION;
+		settings.mlpFederatedDirichletAlpha = doubleProperty(
+				"dsmp.mlp.federated.dirichletAlpha", DEFAULT_MLP_FEDERATED_DIRICHLET_ALPHA);
+		settings.mlpFederatedPatience = intProperty(
+				"dsmp.mlp.federated.patience", DEFAULT_MLP_FEDERATED_PATIENCE);
+		settings.mlpFederatedSeed = longProperty(
+				"dsmp.mlp.federated.seed", DEFAULT_MLP_FEDERATED_SEED);
 		settings.doc2VecDm = intProperty(
 				"dsmp.doc2vec.dm", DEFAULT_DOC2VEC_DM);
 		settings.doc2VecDbowWords = intProperty(
@@ -254,6 +319,15 @@ final class AlgorithmParameterSettings implements Serializable
 		copy.mlpSparseEpochs = mlpSparseEpochs;
 		copy.mlpSparseL2 = mlpSparseL2;
 		copy.mlpFedProxMu = mlpFedProxMu;
+		copy.mlpTraining = mlpTraining;
+		copy.mlpFederatedClients = mlpFederatedClients;
+		copy.mlpFederatedRounds = mlpFederatedRounds;
+		copy.mlpFederatedLocalEpochs = mlpFederatedLocalEpochs;
+		copy.mlpFederatedClientFraction = mlpFederatedClientFraction;
+		copy.mlpFederatedPartition = mlpFederatedPartition;
+		copy.mlpFederatedDirichletAlpha = mlpFederatedDirichletAlpha;
+		copy.mlpFederatedPatience = mlpFederatedPatience;
+		copy.mlpFederatedSeed = mlpFederatedSeed;
 		copy.doc2VecDm = doc2VecDm;
 		copy.doc2VecDbowWords = doc2VecDbowWords;
 		copy.doc2VecMinCount = doc2VecMinCount;
@@ -287,6 +361,15 @@ final class AlgorithmParameterSettings implements Serializable
 		mlpSparseEpochs = DEFAULT_MLP_SPARSE_EPOCHS;
 		mlpSparseL2 = DEFAULT_MLP_SPARSE_L2;
 		mlpFedProxMu = DEFAULT_MLP_FEDPROX_MU;
+		mlpTraining = DEFAULT_MLP_TRAINING;
+		mlpFederatedClients = DEFAULT_MLP_FEDERATED_CLIENTS;
+		mlpFederatedRounds = DEFAULT_MLP_FEDERATED_ROUNDS;
+		mlpFederatedLocalEpochs = DEFAULT_MLP_FEDERATED_LOCAL_EPOCHS;
+		mlpFederatedClientFraction = DEFAULT_MLP_FEDERATED_CLIENT_FRACTION;
+		mlpFederatedPartition = DEFAULT_MLP_FEDERATED_PARTITION;
+		mlpFederatedDirichletAlpha = DEFAULT_MLP_FEDERATED_DIRICHLET_ALPHA;
+		mlpFederatedPatience = DEFAULT_MLP_FEDERATED_PATIENCE;
+		mlpFederatedSeed = DEFAULT_MLP_FEDERATED_SEED;
 		doc2VecDm = DEFAULT_DOC2VEC_DM;
 		doc2VecDbowWords = DEFAULT_DOC2VEC_DBOW_WORDS;
 		doc2VecMinCount = DEFAULT_DOC2VEC_MIN_COUNT;
@@ -374,6 +457,38 @@ final class AlgorithmParameterSettings implements Serializable
 						mlpSparseL2, 0.0, 1.0);
 				validateDouble(errors, "FedProx mu",
 						mlpFedProxMu, 0.0, 10.0);
+				if (!isValidMlpTraining(mlpTraining))
+				{
+					errors.add("MLP training must be central or federated averaging.");
+				}
+				if (MLP_TRAINING_FEDERATED.equals(mlpTraining))
+				{
+					if (!MLP_ENGINE_SPARSE_FEDERATED.equals(mlpEngine))
+					{
+						errors.add("Federated averaging needs the softmax MLP engine; "
+								+ "the Neuroph engine trains centrally.");
+					}
+					validateInt(errors, "Federated clients",
+							mlpFederatedClients, 1, 256);
+					validateInt(errors, "Federated rounds",
+							mlpFederatedRounds, 1, 1000);
+					validateInt(errors, "Federated local epochs",
+							mlpFederatedLocalEpochs, 1, 100);
+					validateDouble(errors, "Federated clients per round",
+							mlpFederatedClientFraction, 0.01, 1.0);
+					if (!isValidMlpFederatedPartition(mlpFederatedPartition))
+					{
+						errors.add("Federated client data must be IID or label-skewed.");
+					}
+					validateDouble(errors, "Dirichlet alpha",
+							mlpFederatedDirichletAlpha, 0.01, 1000.0);
+					validateInt(errors, "Federated patience",
+							mlpFederatedPatience, 0, 1000);
+					if (mlpFederatedSeed < 0L)
+					{
+						errors.add("Federated seed must be zero or greater.");
+					}
+				}
 				break;
 			case RecommendationModeSupport.DOC2VEC:
 				validateBinary(errors, "Doc2Vec dm", doc2VecDm);
@@ -432,6 +547,27 @@ final class AlgorithmParameterSettings implements Serializable
 		}
 	}
 
+	static boolean isValidMlpTraining(String value)
+	{
+		if (value == null)
+		{
+			return false;
+		}
+		String trimmed = value.trim();
+		return MLP_TRAINING_CENTRAL.equals(trimmed) || MLP_TRAINING_FEDERATED.equals(trimmed);
+	}
+
+	static boolean isValidMlpFederatedPartition(String value)
+	{
+		if (value == null)
+		{
+			return false;
+		}
+		String trimmed = value.trim();
+		return MLP_FEDERATED_PARTITION_IID.equals(trimmed)
+				|| MLP_FEDERATED_PARTITION_DIRICHLET.equals(trimmed);
+	}
+
 	static boolean isValidMlpEngine(String value)
 	{
 		if (value == null)
@@ -482,6 +618,18 @@ final class AlgorithmParameterSettings implements Serializable
 				return effective.getScalableSvmEpochs() + " epochs, aggressiveness "
 						+ formatDouble(effective.getScalableSvmAggressiveness());
 			case RecommendationModeSupport.MLP:
+				if (effective.isFederatedMlpTrainingEnabled())
+				{
+					return effective.getMlpEngineLabel() + ", "
+							+ effective.getMlpHiddenLayers() + " hidden layer"
+							+ (effective.getMlpHiddenLayers() == 1 ? "" : "s")
+							+ ", " + effective.getMlpHiddenNeurons()
+							+ " neurons/layer, rate "
+							+ formatDouble(effective.getMlpLearningRate())
+							+ ", L2 " + formatDouble(effective.getMlpSparseL2())
+							+ "; federated averaging: "
+							+ FederatedMlp.Config.from(effective).describe();
+				}
 				return effective.getMlpEngineLabel() + ", "
 						+ effective.getMlpHiddenLayers() + " hidden layer"
 						+ (effective.getMlpHiddenLayers() == 1 ? "" : "s")
@@ -549,6 +697,23 @@ final class AlgorithmParameterSettings implements Serializable
 				+ effective.getMlpSparseEpochs());
 		command.add("-Ddsmp.mlp.sparseL2=" + effective.getMlpSparseL2());
 		command.add("-Ddsmp.mlp.fedProxMu=" + effective.getMlpFedProxMu());
+		command.add("-Ddsmp.mlp.training=" + effective.getMlpTraining());
+		command.add("-Ddsmp.mlp.federated.clients="
+				+ effective.getMlpFederatedClients());
+		command.add("-Ddsmp.mlp.federated.rounds="
+				+ effective.getMlpFederatedRounds());
+		command.add("-Ddsmp.mlp.federated.localEpochs="
+				+ effective.getMlpFederatedLocalEpochs());
+		command.add("-Ddsmp.mlp.federated.clientFraction="
+				+ effective.getMlpFederatedClientFraction());
+		command.add("-Ddsmp.mlp.federated.partition="
+				+ effective.getMlpFederatedPartition());
+		command.add("-Ddsmp.mlp.federated.dirichletAlpha="
+				+ effective.getMlpFederatedDirichletAlpha());
+		command.add("-Ddsmp.mlp.federated.patience="
+				+ effective.getMlpFederatedPatience());
+		command.add("-Ddsmp.mlp.federated.seed="
+				+ effective.getMlpFederatedSeed());
 		addDoc2VecJavaSystemProperties(command, effective);
 	}
 
@@ -744,6 +909,63 @@ final class AlgorithmParameterSettings implements Serializable
 		return customEnabled ? mlpFedProxMu : DEFAULT_MLP_FEDPROX_MU;
 	}
 
+	String getMlpTraining()
+	{
+		return customEnabled && isValidMlpTraining(mlpTraining)
+				? mlpTraining : DEFAULT_MLP_TRAINING;
+	}
+
+	/** Whether the MLP trains by federated averaging instead of as one central model. */
+	boolean isFederatedMlpTrainingEnabled()
+	{
+		return MLP_TRAINING_FEDERATED.equals(getMlpTraining());
+	}
+
+	int getMlpFederatedClients()
+	{
+		return customEnabled ? mlpFederatedClients : DEFAULT_MLP_FEDERATED_CLIENTS;
+	}
+
+	int getMlpFederatedRounds()
+	{
+		return customEnabled ? mlpFederatedRounds : DEFAULT_MLP_FEDERATED_ROUNDS;
+	}
+
+	int getMlpFederatedLocalEpochs()
+	{
+		return customEnabled ? mlpFederatedLocalEpochs
+				: DEFAULT_MLP_FEDERATED_LOCAL_EPOCHS;
+	}
+
+	double getMlpFederatedClientFraction()
+	{
+		return customEnabled ? mlpFederatedClientFraction
+				: DEFAULT_MLP_FEDERATED_CLIENT_FRACTION;
+	}
+
+	String getMlpFederatedPartition()
+	{
+		return customEnabled && isValidMlpFederatedPartition(mlpFederatedPartition)
+				? mlpFederatedPartition : DEFAULT_MLP_FEDERATED_PARTITION;
+	}
+
+	double getMlpFederatedDirichletAlpha()
+	{
+		return customEnabled ? mlpFederatedDirichletAlpha
+				: DEFAULT_MLP_FEDERATED_DIRICHLET_ALPHA;
+	}
+
+	int getMlpFederatedPatience()
+	{
+		return customEnabled ? mlpFederatedPatience
+				: DEFAULT_MLP_FEDERATED_PATIENCE;
+	}
+
+	long getMlpFederatedSeed()
+	{
+		return customEnabled ? mlpFederatedSeed : DEFAULT_MLP_FEDERATED_SEED;
+	}
+
 	int getDoc2VecDm()
 	{
 		return customEnabled ? doc2VecDm : DEFAULT_DOC2VEC_DM;
@@ -874,6 +1096,51 @@ final class AlgorithmParameterSettings implements Serializable
 		mlpFedProxMu = value;
 	}
 
+	void setMlpTraining(String value)
+	{
+		mlpTraining = value;
+	}
+
+	void setMlpFederatedClients(int value)
+	{
+		mlpFederatedClients = value;
+	}
+
+	void setMlpFederatedRounds(int value)
+	{
+		mlpFederatedRounds = value;
+	}
+
+	void setMlpFederatedLocalEpochs(int value)
+	{
+		mlpFederatedLocalEpochs = value;
+	}
+
+	void setMlpFederatedClientFraction(double value)
+	{
+		mlpFederatedClientFraction = value;
+	}
+
+	void setMlpFederatedPartition(String value)
+	{
+		mlpFederatedPartition = value;
+	}
+
+	void setMlpFederatedDirichletAlpha(double value)
+	{
+		mlpFederatedDirichletAlpha = value;
+	}
+
+	void setMlpFederatedPatience(int value)
+	{
+		mlpFederatedPatience = value;
+	}
+
+	void setMlpFederatedSeed(long value)
+	{
+		mlpFederatedSeed = value;
+	}
+
 	void setDoc2VecDm(int value)
 	{
 		doc2VecDm = value;
@@ -951,6 +1218,18 @@ final class AlgorithmParameterSettings implements Serializable
 				&& mlpSparseEpochs == other.mlpSparseEpochs
 				&& Double.compare(mlpSparseL2, other.mlpSparseL2) == 0
 				&& Double.compare(mlpFedProxMu, other.mlpFedProxMu) == 0
+				&& String.valueOf(mlpTraining).equals(String.valueOf(other.mlpTraining))
+				&& mlpFederatedClients == other.mlpFederatedClients
+				&& mlpFederatedRounds == other.mlpFederatedRounds
+				&& mlpFederatedLocalEpochs == other.mlpFederatedLocalEpochs
+				&& Double.compare(mlpFederatedClientFraction,
+						other.mlpFederatedClientFraction) == 0
+				&& String.valueOf(mlpFederatedPartition).equals(
+						String.valueOf(other.mlpFederatedPartition))
+				&& Double.compare(mlpFederatedDirichletAlpha,
+						other.mlpFederatedDirichletAlpha) == 0
+				&& mlpFederatedPatience == other.mlpFederatedPatience
+				&& mlpFederatedSeed == other.mlpFederatedSeed
 				&& doc2VecDm == other.doc2VecDm
 				&& doc2VecDbowWords == other.doc2VecDbowWords
 				&& doc2VecMinCount == other.doc2VecMinCount
@@ -989,6 +1268,17 @@ final class AlgorithmParameterSettings implements Serializable
 		result = 31 * result + (int)(bits ^ (bits >>> 32));
 		bits = Double.doubleToLongBits(mlpFedProxMu);
 		result = 31 * result + (int)(bits ^ (bits >>> 32));
+		result = 31 * result + String.valueOf(mlpTraining).hashCode();
+		result = 31 * result + mlpFederatedClients;
+		result = 31 * result + mlpFederatedRounds;
+		result = 31 * result + mlpFederatedLocalEpochs;
+		bits = Double.doubleToLongBits(mlpFederatedClientFraction);
+		result = 31 * result + (int)(bits ^ (bits >>> 32));
+		result = 31 * result + String.valueOf(mlpFederatedPartition).hashCode();
+		bits = Double.doubleToLongBits(mlpFederatedDirichletAlpha);
+		result = 31 * result + (int)(bits ^ (bits >>> 32));
+		result = 31 * result + mlpFederatedPatience;
+		result = 31 * result + (int)(mlpFederatedSeed ^ (mlpFederatedSeed >>> 32));
 		result = 31 * result + doc2VecDm;
 		result = 31 * result + doc2VecDbowWords;
 		result = 31 * result + doc2VecMinCount;

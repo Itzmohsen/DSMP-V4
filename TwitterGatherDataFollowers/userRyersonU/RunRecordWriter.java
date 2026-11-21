@@ -41,6 +41,8 @@ import java.util.Map;
  * phase-joins.csv   when each node joined each phase (for replay)
  * replay.csv        each phase replayed with its live policy (model check)
  * counterfactuals.csv  the main phase replayed under every policy
+ * federated-mlp/    a federated MLP's settings, folds and rounds
+ *                   ({@link FederatedMlpReport}); only when the run trained one
  * </pre>
  *
  * The results hash is the SHA-256 of the merged recommendations (every
@@ -103,6 +105,7 @@ final class RunRecordWriter
 			RecommendationQualityEvaluator.Report quality = writeQuality(directory, context.getRunId());
 			RunGraphAnalysis graph = writeGraph(directory, context);
 			writeTemporalGraphFoundation(directory, context);
+			writeFederatedMlp(directory, context);
 			appendIndex(name, context, metrics, resultsHash, quality, graph);
 			return directory;
 		}
@@ -615,6 +618,24 @@ final class RunRecordWriter
 		catch (IOException | RuntimeException failure)
 		{
 			System.err.println("Could not write the TGF report of " + context.getRunId() + ": " + failure);
+		}
+	}
+
+	/** Writes the federated MLP's report into the record's federated-mlp folder when this run trained one. */
+	private static void writeFederatedMlp(File directory, SchedulingRunContext context)
+	{
+		FederatedMlpReport report = FederatedMlpReport.of(context.getRunId());
+		if (report == null)
+		{
+			return;
+		}
+		try
+		{
+			report.write(directory);
+		}
+		catch (IOException | RuntimeException failure)
+		{
+			System.err.println("Could not write the federated MLP report of " + context.getRunId() + ": " + failure);
 		}
 	}
 

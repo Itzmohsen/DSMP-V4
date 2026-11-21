@@ -21,6 +21,15 @@ final class RecommendationWorkQueueRegistry
 	static final String CANDIDATES = "candidate-shards";
 	static final String SVM_TARGETS = "svm-targets";
 	static final String MLP_TRAINING = "mlp-training";
+	/** Federated MLP: one phase per round ({@link #mlpFederatedRound}) and one that scores. */
+	static final String MLP_FEDERATED = "mlp-federated";
+	static final String MLP_FEDERATED_SCORING = "mlp-federated-scoring";
+
+	/** The phase of federated round {@code round} (from 1): mlp-federated-r001, mlp-federated-r002, ... */
+	static String mlpFederatedRound(int round)
+	{
+		return String.format(java.util.Locale.ROOT, "%s-r%03d", MLP_FEDERATED, Integer.valueOf(round));
+	}
 
 	static final class QueueEvent
 	{
