@@ -15,6 +15,8 @@ public final class AlgorithmParameterSettingsSelfTest
 		validationRejectsUnsafeValues();
 		doc2VecArgumentsFollowValidatedOrder();
 		systemPropertiesRoundTrip();
+		federatedMlpIsOptInAndValidated();
+		federatedMlpSettingsRoundTrip();
 		System.out.println("AlgorithmParameterSettingsSelfTest passed");
 	}
 
@@ -171,6 +173,127 @@ public final class AlgorithmParameterSettingsSelfTest
 		{
 			clearDsmpProperties(command);
 		}
+	}
+
+	/** Federated training changes results, so only an explicit custom choice may turn it on. */
+	private static void federatedMlpIsOptInAndValidated()
+	{
+		AlgorithmParameterSettings defaults = AlgorithmParameterSettings.defaults();
+		require(AlgorithmParameterSettings.MLP_TRAINING_CENTRAL.equals(defaults.getMlpTraining())
+				&& !defaults.isFederatedMlpTrainingEnabled(),
+				"the MLP must train centrally by default");
+		require(defaults.getMlpFederatedClients() == 8 && defaults.getMlpFederatedRounds() == 40
+				&& defaults.getMlpFederatedLocalEpochs() == 5 && defaults.getMlpFederatedPatience() == 5
+				&& defaults.getMlpFederatedSeed() == 1L,
+				"the federated MLP's default clients, rounds, local epochs, patience or seed changed");
+		requireClose(defaults.getMlpFederatedClientFraction(), 1.0,
+				"the federated MLP's default client fraction changed");
+		requireClose(defaults.getMlpFederatedDirichletAlpha(), 0.5,
+				"the federated MLP's default Dirichlet alpha changed");
+		require(AlgorithmParameterSettings.MLP_FEDERATED_PARTITION_IID.equals(defaults.getMlpFederatedPartition()),
+				"federated clients must be IID by default");
+		require(AlgorithmParameterSettings.startupSettings().equals(defaults),
+				"a session without settings properties must start with the defaults");
+
+		AlgorithmParameterSettings settings = AlgorithmParameterSettings.defaults();
+		settings.setMlpTraining(AlgorithmParameterSettings.MLP_TRAINING_FEDERATED);
+		settings.setMlpFederatedClients(3);
+		require(!settings.isFederatedMlpTrainingEnabled() && settings.getMlpFederatedClients() == 8,
+				"the default profile must ignore a stored federated choice");
+		require(!AlgorithmParameterSettings.effective(settings).isFederatedMlpTrainingEnabled(),
+				"the effective default profile must train centrally");
+		require(settings.summaryForAlgorithm(RecommendationModeSupport.MLP).indexOf("federated") < 0,
+				"the default profile's summary must not mention federated training");
+
+		settings.setCustomEnabled(true);
+		require(settings.isFederatedMlpTrainingEnabled() && settings.getMlpFederatedClients() == 3,
+				"a custom profile must apply the federated choice");
+		require(settings.validateForAlgorithm(RecommendationModeSupport.MLP).isEmpty(),
+				"valid federated settings were rejected: "
+						+ settings.validateForAlgorithm(RecommendationModeSupport.MLP));
+		require(settings.summaryForAlgorithm(RecommendationModeSupport.MLP).indexOf("federated averaging: 3 clients") >= 0,
+				"the summary must describe the federation: "
+						+ settings.summaryForAlgorithm(RecommendationModeSupport.MLP));
+		FederatedMlp.Config config = FederatedMlp.Config.from(settings);
+		require(config.clients == 3 && config.rounds == 40 && config.localEpochs == 5 && !config.labelSkew
+				&& config.patience == 5 && config.seed == 1L && config.hiddenNeurons == 10,
+				"the federation's configuration must follow the settings");
+		require(settings.copy().equals(settings) && settings.copy().hashCode() == settings.hashCode(),
+				"a copy must equal its original");
+		AlgorithmParameterSettings other = settings.copy();
+		other.setMlpFederatedRounds(41);
+		require(!other.equals(settings), "federated settings must take part in equality");
+
+		settings.setMlpEngine(AlgorithmParameterSettings.MLP_ENGINE_LEGACY_NEUROPH);
+		require(!settings.validateForAlgorithm(RecommendationModeSupport.MLP).isEmpty(),
+				"federated averaging with the Neuroph engine was accepted");
+		settings.setMlpEngine(AlgorithmParameterSettings.MLP_ENGINE_SPARSE_FEDERATED);
+		settings.setMlpFederatedClients(0);
+		settings.setMlpFederatedRounds(0);
+		settings.setMlpFederatedLocalEpochs(0);
+		settings.setMlpFederatedClientFraction(0.0);
+		settings.setMlpFederatedPartition("by-node");
+		settings.setMlpFederatedDirichletAlpha(0.0);
+		settings.setMlpFederatedPatience(-1);
+		settings.setMlpFederatedSeed(-1L);
+		require(settings.validateForAlgorithm(RecommendationModeSupport.MLP).size() == 8,
+				"each invalid federated value must be reported: "
+						+ settings.validateForAlgorithm(RecommendationModeSupport.MLP));
+		require(AlgorithmParameterSettings.MLP_FEDERATED_PARTITION_IID.equals(settings.getMlpFederatedPartition()),
+				"an unknown partition must fall back to IID");
+		settings.setMlpTraining("per-node");
+		require(!settings.isFederatedMlpTrainingEnabled()
+				&& !settings.validateForAlgorithm(RecommendationModeSupport.MLP).isEmpty(),
+				"an unknown training must be reported and must not train a federation");
+		//Central training does not care about the federation's values.
+		settings.setMlpTraining(AlgorithmParameterSettings.MLP_TRAINING_CENTRAL);
+		require(settings.validateForAlgorithm(RecommendationModeSupport.MLP).isEmpty(),
+				"central training must not validate the federation's values");
+	}
+
+	private static void federatedMlpSettingsRoundTrip()
+	{
+		AlgorithmParameterSettings settings = AlgorithmParameterSettings.defaults();
+		settings.setCustomEnabled(true);
+		settings.setMlpTraining(AlgorithmParameterSettings.MLP_TRAINING_FEDERATED);
+		settings.setMlpFederatedClients(12);
+		settings.setMlpFederatedRounds(77);
+		settings.setMlpFederatedLocalEpochs(3);
+		settings.setMlpFederatedClientFraction(0.25);
+		settings.setMlpFederatedPartition(AlgorithmParameterSettings.MLP_FEDERATED_PARTITION_DIRICHLET);
+		settings.setMlpFederatedDirichletAlpha(0.05);
+		settings.setMlpFederatedPatience(0);
+		settings.setMlpFederatedSeed(123456789012L);
+		settings.setMlpFedProxMu(0.01);
+		ArrayList<String> command = new ArrayList<String>();
+		settings.addJavaSystemProperties(command);
+		applyProperties(command);
+		try
+		{
+			AlgorithmParameterSettings loaded = AlgorithmParameterSettings.fromSystemProperties();
+			require(loaded.equals(settings), "federated MLP settings did not round-trip");
+			require(loaded.isFederatedMlpTrainingEnabled() && loaded.getMlpFederatedClients() == 12
+					&& loaded.getMlpFederatedRounds() == 77 && loaded.getMlpFederatedLocalEpochs() == 3
+					&& loaded.getMlpFederatedPatience() == 0 && loaded.getMlpFederatedSeed() == 123456789012L,
+					"a federated MLP value did not round-trip");
+			requireClose(loaded.getMlpFederatedClientFraction(), 0.25, "the client fraction did not round-trip");
+			requireClose(loaded.getMlpFederatedDirichletAlpha(), 0.05, "the Dirichlet alpha did not round-trip");
+			require(AlgorithmParameterSettings.MLP_FEDERATED_PARTITION_DIRICHLET.equals(
+					loaded.getMlpFederatedPartition()), "the partition did not round-trip");
+			//A launcher's properties are what a headless session starts with.
+			require(AlgorithmParameterSettings.startupSettings().equals(settings),
+					"a session launched with custom settings properties must start with them");
+			FederatedMlp.Config config = FederatedMlp.Config.from(loaded);
+			require(config.labelSkew && config.clients == 12 && config.patience == 0,
+					"the federation's configuration must follow the loaded settings");
+			requireClose(config.proximalMu, 0.01, "the proximal term did not reach the federation");
+		}
+		finally
+		{
+			clearDsmpProperties(command);
+		}
+		require(AlgorithmParameterSettings.startupSettings().equals(AlgorithmParameterSettings.defaults()),
+				"clearing the properties must restore the default start");
 	}
 
 	private static void applyProperties(List<String> command)

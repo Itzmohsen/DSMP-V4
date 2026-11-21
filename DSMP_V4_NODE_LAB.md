@@ -307,7 +307,9 @@ Scenario syntax:
   running at that moment), delivered input (`at <p>% of input`), and a phase
   opening (`when <phase> opens [+ <time>]`).
 - Phases: `candidates`, `doc2vec`, `tgf`, `svm`, `mlp`, `population`, or a
-  phase key.
+  phase key. A federated MLP has one phase per round, `mlp-federated-r001`,
+  `mlp-federated-r002`, ..., and `mlp-federated-scoring`; `mlp` names the
+  central MLP's phase only.
 - Built-in library: Pause and resume, Drain mid-phase, Drain and return, Crash
   and recover, Rolling slowdown, Switch to work stealing, Input-time pause.
 - Saving: the Plan page saves scenarios to `Scenarios/`.
@@ -337,6 +339,7 @@ milliseconds.
 | `counterfactuals.csv` | the main phase replayed under every policy |
 | `recommendations.csv` | the merged ranked lists: target, its followee, rank, candidate, its followee, score, relevant |
 | `quality.json`, `quality-targets.csv` | the run's ranking quality (`DSMP_V4_EVALUATION.md`): every metric with its interval, chance and MostPop baselines and tests; each target's own figures |
+| `federated-mlp/report.json`, `federated-mlp/rounds.csv` | a federated MLP's settings, folds and rounds (`DSMP_V4_FEDERATED_MLP.md`); written only when the run trained one |
 
 `runs-index.csv` also carries the run's headline quality (k, scored targets,
 hit rate, P@k, R@k, NDCG@k, MRR, MAP@k, NDCG chance level, lift and p-value,
@@ -611,6 +614,16 @@ budget; it fails if the nodes are admitted one by one.
   identical recommendations.
 - **K-Means** runs as synchronized collective steps rather than queue units,
   so its live controls act at phase boundaries and through node speed.
+- **Replays start with idle links.** A phase's replay does not carry over
+  traffic that was still on a link when the phase opened, such as the result
+  of the collective before it. This matters on clusters whose links differ: a
+  node with a fast link opens the next phase while a slow link is still busy,
+  and the replay predicts that phase too short by the time the link still
+  needed. A federated MLP shows it in every round after the first, because
+  each round follows the delivery of a new model. The live times are right.
+- **Many short phases.** The main-phase measures describe the phase with the
+  most units. For a run with many unit phases, such as a federated MLP's
+  rounds, compare the model stage or the makespan instead.
 - **Scalable SVM** keeps its shared coordinator and is not split into units.
 - **Input routing.** Input routing controls act on input delivered by the
   corpus streamer (datasets above `dsmp.max.direct.text.user.agents` users,
@@ -619,7 +632,8 @@ budget; it fails if the nodes are admitted one by one.
   heavy model memory lives in worker processes, which the worker memory
   coordinator admits against the machine. Exact SVM's feature preparation and
   K-Means keep their state in the simulator's own JVM, and every node of a
-  run holds it at once. When the nodes' reservations together exceed the
-  model budget, the console says so (`admitted with the rest of its run past
-  the ... model budget`). Raise the heap (Run › Memory) if such a run then
-  runs short of memory.
+  run holds it at once. A federated MLP also trains in the simulator's JVM
+  and holds one lease per node for its whole stage. When the nodes'
+  reservations together exceed the model budget, the console says so
+  (`admitted with the rest of its run past the ... model budget`). Raise the
+  heap (Run › Memory) if such a run then runs short of memory.

@@ -238,7 +238,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private BadgeLabel algorithmSettingsProfileLabel;
 	private JLabel algorithmSettingsSummaryLabel;
 	private AlgorithmParameterSettings algorithmParameterSettings =
-			AlgorithmParameterSettings.defaults();
+			AlgorithmParameterSettings.startupSettings();
 	private JLabel runtimeMemoryLabel;
 	private JLabel runtimeSchedulerLabel;
 	private JLabel nodeCapacitySummaryLabel;
@@ -7087,7 +7087,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		mapperChoice = FEATURE_EXTRACTION;
 			numArtificialTweets = DEFAULT_NUM_ARTIFICIAL_TWEETS;
 			userGenerationSeed = null;
-			algorithmParameterSettings = AlgorithmParameterSettings.defaults();
+			algorithmParameterSettings = AlgorithmParameterSettings.startupSettings();
 			numFollowersToGrab = 0;
 		referenceUser = DEFAULT_DATASET;
 		beginDate = BEGIN_DATE;
@@ -7889,7 +7889,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 		if (currentRunAccuracyAlgorithm == MLP)
 		{
-			return "<html>Mirrors the exact MLP accuracy log line. Legacy Neuroph MLP and Sparse Federated MLP both measure argmax(predicted output) against the test label, then report correct/test*100 for this run.</html>";
+			return "<html>Mirrors the exact MLP accuracy log line. The softmax and Neuroph engines, trained centrally or by federated averaging, all measure argmax(predicted output) against the test label, then report correct/test*100 for this run.</html>";
 		}
 		return "<html>" + algorithmName
 				+ " currently has no classifier test-accuracy calculation in the code path. The panel is cleared at each run start, so old accuracy lines are not reused.</html>";
@@ -7954,7 +7954,9 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 		if (algorithm == MLP)
 		{
-			return lower.indexOf("legacy neuroph mlp accuracy") >= 0
+			//The line both trainings print: "MLP held-out accuracy (test split, ...): 85.00% (17/20)".
+			return lower.indexOf("mlp held-out accuracy") >= 0
+					|| lower.indexOf("legacy neuroph mlp accuracy") >= 0
 					|| lower.indexOf("sparse federated mlp accuracy") >= 0;
 		}
 		return false;

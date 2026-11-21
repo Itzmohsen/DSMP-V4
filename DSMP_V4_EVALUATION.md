@@ -81,7 +81,7 @@ window and tweet limit.
 | Temporal Graph Foundation | users and followee accounts | Cross-fitted Super Learner over text, graph and temporal learners, stacked into calibrated community probabilities (see below) | yes, never the targets |
 | SVM | followee accounts | Exact Weka SMO with calibrated probabilities; one model per target, trained on every other labelled user | yes, never the targets |
 | Scalable Linear SVM | followee accounts | One-vs-rest linear model learned online with Passive-Aggressive PA-I hinge-loss updates (Crammer et al. 2006) | yes, never the targets |
-| MLP | followee accounts | Softmax network trained with cross-entropy and early stopping (default), or the V3 Neuroph network | yes, never the targets |
+| MLP | followee accounts | Softmax network trained with cross-entropy and early stopping (default), optionally by federated averaging, or the V3 Neuroph network | yes, never the targets |
 
 Every algorithm produces scores where higher is better. The target itself is
 never a candidate. A candidate with no positive score carries no evidence,
@@ -168,6 +168,12 @@ Initialize, not after the input stage.
   neuron now has its own sigmoid; previously one shared instance mixed every
   prediction with the previous input's values. Outputs are normalised to sum
   to 1.
+- *Federated averaging (optional, softmax engine)*: the same folds, splits
+  and first weights, but the fitting users are dealt to fixed clients that
+  train in rounds; a server averages their updates and keeps the round with
+  the best validation loss. It is off by default and held to the same rule:
+  no target is in any client of the model that scores it. See
+  `DSMP_V4_FEDERATED_MLP.md`.
 
 ## 4. Targets
 

@@ -4508,6 +4508,13 @@ public class RecommenderAgent extends Agent
 				final GlobalCorpus corpus = GlobalCorpus.gather(
 						context.collectives(), phaseKey + "/corpus", node, ownedCorpusContribution());
 				final AlgorithmParameterSettings settings = algorithmSettings();
+				//One decision for the whole run: the first node's setting wins, so no
+				//node trains centrally while the others wait for it in a federation.
+				if (context.agree("mlp-federated-training",
+						settings.isFederatedMlpTrainingEnabled() ? 1 : 0) == 1)
+				{
+					return runFederatedMlp(context, node, corpus, settings);
+				}
 				//Estimated milliseconds of the worst case: every epoch up to the limit
 				//updates each weight once per training row (~8e-6 ms per update,
 				//measured on the legacy engine).
@@ -4572,6 +4579,60 @@ public class RecommenderAgent extends Agent
 					}
 				}
 				return committed[0].scores;
+			}
+
+			/**
+			 * Federated MLP: the softmax network trained by federated averaging
+			 * over fixed clients ({@link FederatedMlp}) on the same corpus, splits
+			 * and held-out targets as the central MLP. Every round is a work phase
+			 * of client units followed by the coordinator's aggregation
+			 * ({@link FederatedMlpStage}); the node that commits the final scoring
+			 * unit publishes the scores once, as the central MLP's unit does.
+			 */
+			private TreeMap<String,TreeMap<String,Double>> runFederatedMlp(
+					SchedulingRunContext context,
+					int node,
+					GlobalCorpus corpus,
+					AlgorithmParameterSettings settings) throws Exception
+			{
+				if (!settings.isSparseFederatedMlpEnabled())
+				{
+					throw new IllegalStateException("Federated averaging needs the softmax MLP engine; "
+							+ "the Neuroph engine trains centrally.");
+				}
+				TreeSet<String> vocabulary = centralUniqueDocTerms != null && !centralUniqueDocTerms.isEmpty()
+						? centralUniqueDocTerms : new TreeSet<String>(corpus.terms());
+				FederatedMlp.Inputs inputs = new FederatedMlp.Inputs(
+						corpus,
+						distinctTargets(),
+						centralTrainSetUsers,
+						centralTestSetUsers,
+						(datasetFollowees == null
+								? Collections.<String>emptyList() : datasetFollowees).toArray(new String[0]),
+						vocabulary,
+						FederatedMlp.Config.from(settings));
+				FederatedMlpStage.NodeResult result =
+						FederatedMlpStage.run(context, node, getLocalName(), inputs);
+				completionTimeTrain = result.trainNanos;
+				completionTimeTest = result.testNanos;
+				if (result.outcome == null)
+				{
+					System.out.println(getLocalName() + " federated MLP was scored on another node; "
+							+ "that node publishes the scores.");
+					return new TreeMap<String,TreeMap<String,Double>>();
+				}
+				//Kept for the run's record (federated-mlp/report.json).
+				FederatedMlpReport.remember(context.getRunId(), result.outcome);
+				for (String line : result.outcome.report)
+				{
+					String message = getLocalName() + " " + line;
+					System.out.println(message);
+					if (myGui != null)
+					{
+						myGui.appendResult(message);
+					}
+				}
+				return result.outcome.scores;
 			}
 
 			private MlpOutcome trainExactMlp(
